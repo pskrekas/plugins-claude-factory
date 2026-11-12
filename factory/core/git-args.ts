@@ -16,13 +16,18 @@ export type GitCall =
   | { do: 'push'; jobId: string }
   | { do: 'merge-base'; base: string }
   | { do: 'abort-merge' }
-  | { do: 'changed'; base: string }
+  | { do: 'changed'; base: string; at?: string }
   | { do: 'uncommitted' }
+  | { do: 'add-clean'; path: string; sha: string }
   | { do: 'head' }
 
 // An absolute path with no `..` in it and no control character.
 const isPlainPath = (path: string) =>
   path.startsWith('/') && !path.split('/').includes('..') && !/[\u0000-\u001f\u007f]/.test(path)
+
+// A commit named by its full id: 40 hex characters, or 64 in a SHA-256 repo.
+// Never a name (`HEAD`, a branch), which can move between two calls.
+export const isCommitId = (text: string): boolean => /^([0-9a-f]{40}|[0-9a-f]{64})$/.test(text)
 
 // The argument list of a call, or null when one of its values breaks a rule:
 // a job id that is not one, a base that is not a branch name, a path that is
@@ -32,6 +37,8 @@ export function gitArgs(call: GitCall): string[] | null {
   if (hasBase && !isBranchName(call.base)) return null
   if ('jobId' in call && !isJobId(call.jobId)) return null
   if ('path' in call && !isPlainPath(call.path)) return null
+  if ('sha' in call && !isCommitId(call.sha)) return null
+  if ('at' in call && call.at !== undefined && !isCommitId(call.at)) return null
 
   switch (call.do) {
     case 'fetch':
@@ -52,7 +59,10 @@ export function gitArgs(call: GitCall): string[] | null {
     case 'changed':
       // No rename detection: a moved file is listed under both its names, so
       // a protected path that was moved away is still seen.
-      return ['git', 'diff', '--name-only', '--no-renames', '-z', `origin/${call.base}...HEAD`]
+      return ['git', 'diff', '--name-only', '--no-renames', '-z', `origin/${call.base}...${call.at ?? 'HEAD'}`]
+    case 'add-clean':
+      // A second working tree at one commit, on no branch: what the gate runs in.
+      return ['git', 'worktree', 'add', '--detach', call.path, call.sha]
     case 'uncommitted':
       // Run in the job's worktree: what it holds that its branch does not.
       return ['git', 'status', '--porcelain', '--no-renames', '--untracked-files=all', '-z']

@@ -2,11 +2,24 @@ import { expect, test } from 'claude-code/testing'
 
 import { branchOf, gitArgs } from '../core/git-args'
 import { stateFolderOf } from '../core/state-path'
-import { addWorktree, changedFiles, pushBranch, removeWorktree, syncBase, uncommittedFiles, worktreePath } from '../hooks/worktrees'
+import {
+  addCleanCopy,
+  addWorktree,
+  changedFiles,
+  headOf,
+  pushBranch,
+  removeCleanCopy,
+  removeWorktree,
+  syncBase,
+  uncommittedFiles,
+  worktreePath,
+} from '../hooks/worktrees'
 import { fakeIo } from './kit'
 
 const ID = '12-add-dark-mode'
 const WT = '/state/' + stateFolderOf('/r') + '/worktrees/' + ID
+const CLEAN = '/state/' + stateFolderOf('/r') + '/gate/' + ID
+const SHA = '0123456789abcdef0123456789abcdef01234567'
 const line = (call: Parameters<typeof gitArgs>[0]) => gitArgs(call)?.join(' ') ?? null
 
 test('every git call of the factory, word for word', async () => {
@@ -25,6 +38,41 @@ test('every git call of the factory, word for word', async () => {
   expect(line({ do: 'changed', base: 'main' })).toBe('git diff --name-only --no-renames -z origin/main...HEAD')
   expect(line({ do: 'uncommitted' })).toBe('git status --porcelain --no-renames --untracked-files=all -z')
   expect(line({ do: 'head' })).toBe('git rev-parse HEAD')
+  // The gate's own copy of one commit, and the files of that same commit.
+  expect(line({ do: 'add-clean', path: CLEAN, sha: SHA })).toBe(`git worktree add --detach ${CLEAN} ${SHA}`)
+  expect(line({ do: 'changed', base: 'main', at: SHA })).toBe(`git diff --name-only --no-renames -z origin/main...${SHA}`)
+})
+
+test('a commit is named by its full id only', async () => {
+  for (const sha of ['HEAD', 'main', 'abc123', '--upload-pack=x', SHA + ' x', SHA.toUpperCase(), '']) {
+    expect(gitArgs({ do: 'add-clean', path: CLEAN, sha })).toBe(null)
+    expect(gitArgs({ do: 'changed', base: 'main', at: sha })).toBe(null)
+  }
+  expect(gitArgs({ do: 'add-clean', path: '../x', sha: SHA })).toBe(null)
+})
+
+test("the gate's clean copy: made at one commit, in the state folder, and removed", async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  io.answer = git({ 'git rev-parse HEAD': { exitCode: 0, stdout: SHA + '\n' }, 'git worktree': { exitCode: 0 }, 'git diff': { exitCode: 0, stdout: 'a.ts\0' } })
+  expect(await headOf(io, '/r', ID)).toBe(SHA)
+  expect(io.cwds[0]).toBe(WT)
+  expect(await changedFiles(io, '/r', ID, 'main', SHA)).toEqual(['a.ts'])
+  expect(await addCleanCopy(io, '/r', ID, SHA)).toEqual({ ok: true, path: CLEAN })
+  expect(await removeCleanCopy(io, '/r', ID)).toEqual({ ok: true })
+  expect(io.ran.slice(1)).toEqual([
+    `git diff --name-only --no-renames -z origin/main...${SHA}`,
+    // A copy that an earlier run left is removed first.
+    `git worktree remove --force ${CLEAN}`,
+    `git worktree add --detach ${CLEAN} ${SHA}`,
+    `git worktree remove --force ${CLEAN}`,
+  ])
+  expect(io.cwds.slice(2)).toEqual(['/r', '/r', '/r'])
+
+  const odd = fakeIo({ files: { '/r/x': '' } })
+  odd.answer = git({ 'git rev-parse HEAD': { exitCode: 0, stdout: 'not a commit\n' }, 'git worktree add': { exitCode: 128, stderr: 'fatal: no' } })
+  expect(await headOf(odd, '/r', ID)).toBe(null)
+  expect(await addCleanCopy(odd, '/r', ID, SHA)).toEqual({ ok: false, why: 'git: fatal: no' })
+  expect(await addCleanCopy(odd, '/r', ID, 'HEAD')).toEqual({ ok: false, why: 'not a job id or a branch name' })
 })
 
 test('a value that breaks a rule gives no call at all', async () => {
@@ -51,6 +99,8 @@ test('the factory cannot force, merge into the base, or push another branch', as
     gitArgs({ do: 'changed', base: 'main' }),
     gitArgs({ do: 'uncommitted' }),
     gitArgs({ do: 'head' }),
+    gitArgs({ do: 'add-clean', path: CLEAN, sha: SHA }),
+    gitArgs({ do: 'changed', base: 'main', at: SHA }),
   ].map(list => list ?? [])
   const banned = ['-f', '--force-with-lease', '--mirror', '--all', '--delete', '--tags', 'reset', 'rebase', 'checkout', 'commit', 'clean']
   for (const list of all) {

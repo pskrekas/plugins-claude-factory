@@ -1,7 +1,7 @@
 // A worktree and a branch per job. The worktree is in the state folder, not in
 // the repo. Every git call comes from core/git-args.ts.
 import { failureText } from '../core/comment'
-import { branchOf, gitArgs } from '../core/git-args'
+import { branchOf, gitArgs, isCommitId } from '../core/git-args'
 import type { GitCall } from '../core/git-args'
 import type { RunResult } from '../core/run'
 import type { Io } from './io'
@@ -73,13 +73,60 @@ export async function syncBase(io: Io, root: string, jobId: string, base: string
   return { ok: false, why: `conflict with ${base}` }
 }
 
-// The files the job's branch changed against the base, or null when git cannot say.
-export async function changedFiles(io: Io, root: string, jobId: string, base: string): Promise<string[] | null> {
+// The files the job's branch changed against the base, or null when git cannot
+// say. With `at`, the files of that one commit and not of wherever HEAD is now.
+export async function changedFiles(
+  io: Io,
+  root: string,
+  jobId: string,
+  base: string,
+  at?: string,
+): Promise<string[] | null> {
   const path = await worktreePath(io, root, jobId)
-  const result = path === null ? null : await git(io, path, { do: 'changed', base })
+  const result = path === null ? null : await git(io, path, { do: 'changed', base, at })
   if (result === null || 'failed' in result || result.exitCode !== 0) return null
 
   return result.stdout.split('\0').filter(name => name !== '')
+}
+
+// The last commit of a job's branch, by its full id. Null when git cannot say.
+export async function headOf(io: Io, root: string, jobId: string): Promise<string | null> {
+  const path = await worktreePath(io, root, jobId)
+  const result = path === null ? null : await git(io, path, { do: 'head' })
+  if (result === null || 'failed' in result || result.exitCode !== 0) return null
+  const sha = result.stdout.trim()
+
+  return isCommitId(sha) ? sha : null
+}
+
+// The gate's own copy of a job's commit: a second working tree in the state
+// folder, `gate/<job id>`. It holds what the commit holds and nothing else:
+// no file the builder left in its folder, no file git was told to overlook.
+const cleanPath = async (io: Io, root: string, jobId: string) => {
+  const dir = await stateDirOf(io, root)
+
+  return dir === null || gitArgs({ do: 'push', jobId }) === null ? null : `${dir}/gate/${jobId}`
+}
+
+export async function addCleanCopy(
+  io: Io,
+  root: string,
+  jobId: string,
+  sha: string,
+): Promise<{ ok: true; path: string } | { ok: false; why: string }> {
+  const path = await cleanPath(io, root, jobId)
+  if (path === null || gitArgs({ do: 'add-clean', path, sha }) === null) return { ok: false, why: BAD }
+  // A copy that an earlier run left (a crash) goes first. No copy is the usual case.
+  await git(io, root, { do: 'remove', path })
+  const made = done(await git(io, root, { do: 'add-clean', path, sha }))
+
+  return made.ok ? { ok: true, path } : { ok: false, why: made.why ?? 'git failed' }
+}
+
+export async function removeCleanCopy(io: Io, root: string, jobId: string): Promise<Done> {
+  const path = await cleanPath(io, root, jobId)
+
+  return path === null ? { ok: false, why: BAD } : done(await git(io, root, { do: 'remove', path }))
 }
 
 // The files of a job's worktree that are changed or new and not committed
