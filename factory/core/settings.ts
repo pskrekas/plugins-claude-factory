@@ -261,12 +261,17 @@ function gate(v: unknown): Parsed<Settings['gate']> {
   return { ok: { fast: lists[0] ?? [], full: lists[1] ?? [] } }
 }
 
+// A name that can only be read as a branch, never as an option.
+export function isBranchName(name: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(name)
+}
+
 // The base branch is handed to `git` as an argument. It must look like a
 // branch name, so it can never be read as an option.
 function branchName(v: unknown): Parsed<string> {
   if (!isText(v)) return { no: WRONG }
 
-  return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(v) ? { ok: v } : { no: NOT_BRANCH }
+  return isBranchName(v) ? { ok: v } : { no: NOT_BRANCH }
 }
 const prHost = (v: unknown): Parsed<Settings['prHost']> =>
   isText(v) && PR_HOSTS.includes(v) ? { ok: v as Settings['prHost'] } : { no: WRONG }
