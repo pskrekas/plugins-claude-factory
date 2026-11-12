@@ -1,8 +1,8 @@
 // A factory job: one tracker item on its way through the line (design 5.3).
 // Pure. The store (hooks/jobs.ts) is the only code that writes a job to disk,
 // and `move` is the only way a job changes its stage.
-import { RISKS } from './factory-settings'
-import type { Risk } from './factory-settings'
+import { RISKS, ROLES } from './factory-settings'
+import type { Risk, Role } from './factory-settings'
 import { isObject } from './rules'
 
 export type Stage =
@@ -19,7 +19,11 @@ export type Stage =
   | 'rejected'
 
 // Who stopped a job to ask: a station, or a limit of the line.
-export type Asker = 'intake' | 'gate' | 'review' | 'approve' | 'limit'
+// `fence`: the same command was refused twice. `station`: an agent failed twice, or is stuck.
+export type Asker = 'intake' | 'gate' | 'review' | 'approve' | 'limit' | 'fence' | 'station'
+
+// An agent that works on the job now. `focus` says which reviewer (`code`, `ui`, …); '' for the other roles.
+export type Work = { agentId: string; role: Role; focus: string; startedAt: number }
 
 export type SentBack = { by: 'gate' | 'review' | 'approve' | 'you'; why: string }
 
@@ -55,6 +59,9 @@ export type Job = {
   asker: Asker | null // who stopped the job, while it waits
   refusals: number // commands the fence refused
   feedback: number // how many feedback files the job has
+  work: Work[] // the agents of the station that runs now; empty between stations
+  refused: string[] // the newest refused commands, to see the same one twice
+  tries: number // how often the station that runs now failed
   history: { at: number; from: Stage | null; to: Stage; reason: string }[]
 }
 
@@ -102,7 +109,11 @@ const MAX_NAMES = 10
 const MAX_SPEND = 60
 // Where a job that asks can go back to (design 5.3).
 const RESUMES: readonly Stage[] = ['intake', 'spec', 'build', 'gate', 'review', 'approve']
-const ASKERS: readonly string[] = ['intake', 'gate', 'review', 'approve', 'limit']
+const ASKERS: readonly string[] = ['intake', 'gate', 'review', 'approve', 'limit', 'fence', 'station']
+const MAX_WORK = 8
+const MAX_REFUSED = 10
+const MAX_COMMAND = 200
+const FOCUS = /^[a-z0-9-]{1,20}$/
 
 export class IllegalMove extends Error {}
 
@@ -150,6 +161,9 @@ export function newJob(item: { id: string; title: string }, now: number): Job {
     asker: null,
     refusals: 0,
     feedback: 0,
+    work: [],
+    refused: [],
+    tries: 0,
     history: [{ at: now, from: null, to: 'intake', reason: 'started' }],
   }
 }
@@ -184,6 +198,9 @@ export function move(
     ...job,
     stage: to,
     round: isLoop ? job.round + 1 : job.round,
+    // Every move starts clean: no agent of the last station, no failed try.
+    work: [],
+    tries: 0,
     updatedAt: now,
     history: [...job.history, { at: now, from, to, reason: reason.slice(0, MAX.reason) }].slice(-MAX_HISTORY),
   }
@@ -239,6 +256,35 @@ export function resume(job: Job, reason: string, now: number): Job {
 // Drops a job, from any stage it is alive in.
 export function reject(job: Job, reason: string, now: number): Job {
   return move(job, 'rejected', reason, now)
+}
+
+// An agent starts on the job. A job holds at most eight; one more is not added.
+export function startWork(job: Job, work: Work, now: number): Job {
+  return job.work.length >= MAX_WORK ? job : { ...job, work: [...job.work, work], updatedAt: now }
+}
+
+// An agent of the job ended.
+export function endWork(job: Job, agentId: string, now: number): Job {
+  return { ...job, work: job.work.filter(work => work.agentId !== agentId), updatedAt: now }
+}
+
+export function clearWork(job: Job, now: number): Job {
+  return { ...job, work: [], updatedAt: now }
+}
+
+// The station that runs now failed once more.
+export function failStation(job: Job, now: number): Job {
+  return { ...job, tries: job.tries + 1, updatedAt: now }
+}
+
+// The fence refused a command of the job's agent. `isRepeat`: the same
+// command was refused before (design 8.1: twice stops the job).
+export function noteRefusal(job: Job, command: string, now: number): { job: Job; isRepeat: boolean } {
+  const text = command.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').slice(0, MAX_COMMAND)
+  const isRepeat = job.refused.includes(text)
+  const refused = isRepeat ? job.refused : [...job.refused, text].slice(-MAX_REFUSED)
+
+  return { job: { ...job, refusals: job.refusals + 1, refused, updatedAt: now }, isRepeat }
 }
 
 // Adds to what the person allowed on top of the limits.
@@ -367,6 +413,17 @@ export function parseJob(text: string, folder: string): Job | null {
 
   // Fields a file of the first line version does not have read as their defaults.
   const { branch = null, itemUrl = null, asker = null, refusals = 0, feedback = 0 } = raw
+  const { work = [], refused = [], tries = 0 } = raw
+  if (!Array.isArray(work) || work.length > MAX_WORK || !Array.isArray(refused)) return null
+  const inFlight: Work[] = []
+  for (const entry of work) {
+    if (!isObject(entry) || typeof entry.agentId !== 'string' || !/^[\x21-\x7e]{1,100}$/.test(entry.agentId)) return null
+    if (!ROLES.includes(entry.role as Role) || !isCount(entry.startedAt)) return null
+    if (typeof entry.focus !== 'string' || (entry.focus !== '' && !FOCUS.test(entry.focus))) return null
+    inFlight.push({ agentId: entry.agentId, role: entry.role as Role, focus: entry.focus, startedAt: entry.startedAt })
+  }
+  if (!refused.every(text => typeof text === 'string')) return null
+  if (!isCount(tries) || !Number.isInteger(tries)) return null
   if (branch !== null && branch !== `factory/${id}`) return null
   if (itemUrl !== null && typeof itemUrl !== 'string') return null
   if (asker !== null && !ASKERS.includes(asker as string)) return null
@@ -398,6 +455,9 @@ export function parseJob(text: string, folder: string): Job | null {
     asker: asker as Asker | null,
     refusals,
     feedback,
+    work: inFlight,
+    refused: (refused as string[]).slice(-MAX_REFUSED).map(text => cut(text, MAX_COMMAND)),
+    tries,
     history,
   }
 }

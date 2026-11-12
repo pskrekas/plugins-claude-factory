@@ -95,3 +95,27 @@ test('the settings file itself is always a protected path', async () => {
   expect(paths(['tests/known.txt'])).toEqual(['.claude/factory.json', 'tests/known.txt'])
   expect(paths(['.claude/factory.json', 'x'])).toEqual(['.claude/factory.json', 'x'])
 })
+
+test('prices per model and the time one station may take', async () => {
+  expect([FACTORY_DEFAULTS.prices, FACTORY_DEFAULTS.stationTimeoutMin]).toEqual([{}, 30])
+  const price = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+  const ok = parseSettings(JSON.stringify({ factory: { prices: { 'model-a': price }, stationTimeoutMin: 45 } }))
+  expect([ok.error, ok.settings.factory.prices, ok.settings.factory.stationTimeoutMin]).toEqual([null, { 'model-a': price }, 45])
+  const bad = [
+    { prices: { m: { ...price, input: -1 } } },
+    { prices: { m: { ...price, output: 1001 } } },
+    { prices: { m: { input: 3 } } },
+    { prices: { 'a\u0007b': price } },
+    { prices: { ['m'.repeat(81)]: price } },
+    { prices: Object.fromEntries(Array.from({ length: 21 }, (_, i) => [`m${i}`, price])) },
+    { prices: [price] },
+    { stationTimeoutMin: 4 },
+    { stationTimeoutMin: 241 },
+    { stationTimeoutMin: 7.5 },
+  ]
+  for (const factory of bad) {
+    const { settings, error } = parseSettings(JSON.stringify({ factory }))
+    expect(error).not.toBe(null)
+    expect(settings.factory).toEqual(FACTORY_DEFAULTS)
+  }
+})
