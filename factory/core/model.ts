@@ -1,0 +1,31 @@
+// The model's types live in the state contract (types/index.d.ts).
+import type { PanelModel } from '../types'
+
+export type {
+  AgentRow,
+  CheckState,
+  Consent,
+  PanelModel,
+  PortState,
+  PrState,
+  ProgressState,
+  TaskState,
+  WorktreeRow,
+} from '../types'
+
+export function emptyModel(): PanelModel {
+  return {
+    consent: 'none',
+    pendingCommands: [],
+    settingsError: null,
+    task: null,
+    progress: [],
+    agents: [],
+    checks: [],
+    ports: [],
+    worktrees: [],
+    owed: null,
+    notes: [],
+    readAt: null,
+  }
+}

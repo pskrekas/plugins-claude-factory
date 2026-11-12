@@ -1,0 +1,17 @@
+{
+  "name": "plugins-claude-factory",
+  "metadata": {
+    "description": "Factory: a work panel and a software factory for Claude Code."
+  },
+  "owner": {
+    "name": "pskrekas",
+    "url": "https://github.com/pskrekas"
+  },
+  "plugins": [
+    {
+      "name": "factory",
+      "source": "./factory",
+      "description": "A docked panel that shows the state of your work: the task, progress, agents, checks, ports and worktrees."
+    }
+  ]
+}
