@@ -76,6 +76,11 @@ ruling: **further "one more spelling" findings are not fixed.** A builder that s
 out to get around a text check can (a script it writes and runs is not read at
 all). The README's "Before you run the line" says so.
 
+The fix that would end this class is not more rules: it is to run the builder where
+it cannot reach the person's files and logins (a container, a virtual machine, or a
+shell sandbox when an agent type can require one). That is a decision for a later
+phase.
+
 Known gaps that were reported and not fixed:
 
 - A command substitution inside a word (`a$(b)c`); the git folder joined to a short
@@ -84,6 +89,12 @@ Known gaps that were reported and not fixed:
   `..` to the worktree too. It starts each shell call at the worktree: if the engine
   keeps the shell's folder between calls, a relative path is judged from the wrong
   place (toward refusing, not toward allowing).
+- Reported after the pull request was opened, and not fixed (the same class):
+  options of archive and download tools that place files elsewhere (`tar -P`,
+  `tar --transform`, `curl -K`, `wget -e`); a link inside the worktree that leads
+  out, used in a shell path (the file tools are judged by real path, a shell command
+  is judged as text); a long git option cut short (`--upl` for `--upload-pack`) and
+  one-letter flags joined together.
 - The shell can read any file the person can.
 - A script, a `Makefile` target or an `npm` script that the builder writes runs
   unread.
