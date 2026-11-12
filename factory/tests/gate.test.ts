@@ -116,7 +116,7 @@ test('the end of what a command printed: both streams, and a word when the start
 const SETTINGS = JSON.stringify({ gate: { fast: [['npm', 'run', 'lint'], ['npm', 'test']], full: [['npm', 'run', 'build']] } })
 const APPROVED = ['[gate] npm run build', '[gate] npm run lint', '[gate] npm test']
 const job = { ...newJob({ id: '12', title: 'Add dark mode' }, 1000), stage: 'gate' as const, branch: 'factory/12-add-dark-mode' }
-const DIR = '/state/' + stateFolderOf('/r')
+const DIR = '/state/' + stateFolderOf('/r/.git')
 const WT = `${DIR}/worktrees/${job.id}`
 // The gate's commands run in a fresh copy of the branch's last commit.
 const CLEAN = `${DIR}/gate/${job.id}`
@@ -124,12 +124,15 @@ const SHA = '0123456789abcdef0123456789abcdef01234567'
 const BASE = 'f'.repeat(40)
 const HEAD_CALL = `git rev-parse --verify refs/heads/factory/${job.id}^{commit}`
 const BASE_CALL = 'git rev-parse --verify refs/remotes/origin/main^{commit}'
+const STATUS_CALL = `git --git-dir=/r/.git/worktrees/${job.id} --work-tree=${WT} -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain --no-renames --untracked-files=all -z`
 
 type Answer = { exitCode: number; stdout?: string; stderr?: string; isCut?: boolean }
 // Every git call answers well (one file changed, nothing left to commit) unless the test says otherwise.
 function gateIo(answers: Record<string, Answer>, approved = APPROVED, settings = SETTINGS) {
-  const io = fakeIo({ files: { '/r/x': '' } })
-  io.store.set(storeKey('/r'), approved)
+  // The job's worktree, linked as git links it.
+  const gitDir = `/r/.git/worktrees/${job.id}`
+  const io = fakeIo({ files: { '/r/.git/HEAD': 'x', [`${gitDir}/gitdir`]: `${WT}/.git\n`, [`${WT}/.git`]: `gitdir: ${gitDir}\n` } })
+  io.store.set(storeKey('/r/.git'), approved)
   const all: Record<string, Answer> = {
     ...answers,
     'git fetch': answers['git fetch'] ?? { exitCode: 0 },
@@ -137,7 +140,7 @@ function gateIo(answers: Record<string, Answer>, approved = APPROVED, settings =
     'git show': answers['git show'] ?? { exitCode: 0, stdout: settings },
     [HEAD_CALL]: answers[HEAD_CALL] ?? { exitCode: 0, stdout: SHA + '\n' },
     'git diff': answers['git diff'] ?? { exitCode: 0, stdout: 'src/a.ts\0' },
-    'git status': answers['git status'] ?? { exitCode: 0, stdout: '' },
+    [STATUS_CALL]: answers['git status'] ?? { exitCode: 0, stdout: '' },
     'git worktree add': answers['git worktree add'] ?? { exitCode: 0 },
     'git worktree remove': answers['git worktree remove'] ?? { exitCode: 0 },
   }
@@ -167,7 +170,7 @@ test('a gate that passes: one base commit and one job commit are read, and the c
     `git show ${BASE}:.claude/factory.json`,
     HEAD_CALL,
     `git diff --name-only --no-renames -z ${BASE}...${SHA}`,
-    'git status --porcelain --no-renames --untracked-files=all -z',
+    STATUS_CALL,
     `git worktree remove --force ${CLEAN}`,
     `git worktree add --detach ${CLEAN} ${SHA}`,
     'npm run lint',
@@ -175,11 +178,9 @@ test('a gate that passes: one base commit and one job commit are read, and the c
     `git worktree remove --force ${CLEAN}`,
   ])
   const at = (start: string) => io.ran.findIndex(line => line.startsWith(start))
-  // The commands run in the clean copy. Only the note about files that are
-  // not committed is read in the builder's folder; the rest is read in the repo.
+  // The commands run in the clean copy. Nothing at all runs in the builder's folder.
   expect([io.cwds[at('npm run lint')], io.cwds[at('npm test')]]).toEqual([CLEAN, CLEAN])
-  expect(io.cwds.filter(cwd => cwd === WT).length).toBe(1)
-  expect(io.cwds[at('git status')]).toBe(WT)
+  expect(io.cwds.includes(WT)).toBe(false)
   expect([io.cwds[at(HEAD_CALL)], io.cwds[at('git diff')], io.cwds[at('git show')]]).toEqual(['/r', '/r', '/r'])
   // A command has ten minutes.
   expect(io.timeouts[at('npm test')]).toBe(600_000)
@@ -240,6 +241,14 @@ test('files that are not committed do not stop the gate: they are a note, and th
   // A status that cannot be read is no reason to stop either.
   const blind = gateIo({ 'git status': { exitCode: 128 }, 'npm': { exitCode: 0 } })
   expect((await runGate(blind, '/r', job, 'main', 'fast')).pass).toBe(true)
+})
+
+test('a branch with no change fails the gate, and runs no command', async () => {
+  const io = gateIo({ 'git diff': { exitCode: 0, stdout: '' }, 'npm': { exitCode: 0 } })
+
+  expect(await runGate(io, '/r', job, 'main', 'fast')).toEqual({ pass: false, why: 'the branch has no change', needsPerson: false, sha: SHA })
+  expect(io.ran.some(line => line.startsWith('npm') || line.startsWith('git worktree'))).toBe(false)
+  expect(reportOf(io)).toContain('failed: the branch has no change.')
 })
 
 test('gate commands that are not approved run nothing and need a person', async () => {

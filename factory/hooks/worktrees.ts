@@ -6,9 +6,12 @@ import type { GitCall } from '../core/git-args'
 import type { RunResult } from '../core/run'
 import type { Io } from './io'
 import { stateDirOf } from './jobs'
+import { consentKeyOf } from './readers/repo'
 
 const GIT_TIMEOUT_MS = 120_000
 const BAD = 'not a job id or a branch name'
+const NOT_GITS = 'the worktree is not the one git made'
+const MAX_POINTER = 4096
 
 type Done = { ok: boolean; why?: string }
 
@@ -57,24 +60,74 @@ export async function removeWorktree(io: Io, root: string, jobId: string): Promi
   return path === null ? { ok: false, why: 'no state folder' } : done(await git(io, root, { do: 'remove', path }))
 }
 
-export async function pushBranch(io: Io, root: string, jobId: string): Promise<Done> {
-  if (gitArgs({ do: 'push', jobId }) === null) return { ok: false, why: BAD }
-  const path = await worktreePath(io, root, jobId)
+// The first line of a small file that is not a link, or null.
+async function pointer(io: Io, path: string): Promise<string | null> {
+  if (await io.isLink(path)) return null
+  const info = await io.stat(path)
+  if (info === null || info.kind !== 'file' || info.size > MAX_POINTER) return null
 
-  return path === null ? { ok: false, why: 'no state folder' } : done(await git(io, path, { do: 'push', jobId }))
+  return ((await io.readFile(path)) ?? '').split('\n')[0]?.trim() ?? null
 }
 
-// Brings the base branch into the job's branch. A conflict is undone, and named.
-export async function syncBase(io: Io, root: string, jobId: string, base: string): Promise<Done> {
-  if (gitArgs({ do: 'add', path: '/x', jobId, base }) === null) return { ok: false, why: BAD }
-  const path = await worktreePath(io, root, jobId)
-  if (path === null) return { ok: false, why: 'no state folder' }
-  const fetched = done(await git(io, path, { do: 'fetch', base }))
-  if (!fetched.ok) return fetched
-  if (done(await git(io, path, { do: 'merge-base', base })).ok) return { ok: true }
-  await git(io, path, { do: 'abort-merge' })
+// A job's worktree, named for a git call that runs in the repo: the folder of
+// the repo's own git folder that belongs to it, and the worktree itself.
+//
+// An agent can write to the worktree, so its `.git` file is only a claim. It
+// is believed when it is a plain file (not a link, not a folder) that names a
+// folder directly under `<the repo's git folder>/worktrees/`, and that folder
+// names the file back. Null for anything else: then no call is made.
+export async function worktreeGitDir(
+  io: Io,
+  root: string,
+  jobId: string,
+): Promise<{ gitDir: string; workTree: string } | null> {
+  const workTree = await worktreePath(io, root, jobId)
+  if (workTree === null || gitArgs({ do: 'head', jobId }) === null) return null
+  const dot = `${workTree}/.git`
+  const line = await pointer(io, dot)
+  const gitDir = line?.startsWith('gitdir:') ? line.slice('gitdir:'.length).trim() : ''
+  if (!gitDir.startsWith('/') || gitDir.split('/').includes('..')) return null
+  // The repo's own git folder: `<root>/.git`, or the main checkout's when
+  // `root` is itself a worktree (checked both ways by `consentKeyOf`).
+  const common = await consentKeyOf(io, root)
+  const [there, home] = await Promise.all([io.stat(gitDir), io.stat(`${common}/worktrees`)])
+  if (!common.endsWith('/.git') || there === null || home === null || there.kind !== 'dir') return null
+  if (there.realPath.slice(0, there.realPath.lastIndexOf('/')) !== home.realPath) return null
+  const back = await pointer(io, `${gitDir}/gitdir`)
+  const [named, own] = await Promise.all([back === null || back === '' ? null : io.stat(back), io.stat(dot)])
+  if (named === null || own === null || named.realPath !== own.realPath) return null
 
-  return { ok: false, why: `conflict with ${base}` }
+  return { gitDir, workTree }
+}
+
+// Sends one commit to the job's own branch on the remote. Run in the repo.
+export async function pushCommit(io: Io, root: string, jobId: string, sha: string): Promise<Done> {
+  if (gitArgs({ do: 'push-commit', jobId, sha }) === null) return { ok: false, why: BAD }
+
+  return done(await git(io, root, { do: 'push-commit', jobId, sha }))
+}
+
+// Brings the base branch's last commit into the job's branch, in the job's
+// worktree. A conflict is undone, and named. Answers the branch's new last
+// commit: the one to gate and to push.
+export async function syncBase(io: Io, root: string, jobId: string, base: string): Promise<Done & { sha?: string }> {
+  if (gitArgs({ do: 'add', path: '/x', jobId, base }) === null) return { ok: false, why: BAD }
+  const tree = await worktreeGitDir(io, root, jobId)
+  if (tree === null) return { ok: false, why: NOT_GITS }
+  const fetched = await fetchBase(io, root, base)
+  if (!fetched.ok) return fetched
+  const baseSha = await baseHeadOf(io, root, base)
+  if (baseSha === null) return { ok: false, why: `no branch origin/${base}` }
+  const merged = await git(io, root, { do: 'merge-base', ...tree, baseSha })
+  if (merged !== null && passed(merged)) {
+    const sha = await headOf(io, root, jobId)
+
+    return sha === null ? { ok: false, why: 'the merged commit could not be read' } : { ok: true, sha }
+  }
+  await git(io, root, { do: 'abort-merge', ...tree })
+  const said = merged === null || 'failed' in merged ? '' : merged.stdout + merged.stderr
+
+  return { ok: false, why: said.includes('CONFLICT') ? `conflict with ${base}` : (done(merged).why ?? 'git failed') }
 }
 
 // Brings the base branch's ref up to date with the remote.
@@ -119,7 +172,7 @@ export async function headOf(io: Io, root: string, jobId: string): Promise<strin
 const cleanPath = async (io: Io, root: string, jobId: string) => {
   const dir = await stateDirOf(io, root)
 
-  return dir === null || gitArgs({ do: 'push', jobId }) === null ? null : `${dir}/gate/${jobId}`
+  return dir === null || gitArgs({ do: 'head', jobId }) === null ? null : `${dir}/gate/${jobId}`
 }
 
 export async function addCleanCopy(
@@ -146,8 +199,8 @@ export async function removeCleanCopy(io: Io, root: string, jobId: string): Prom
 // The files of a job's worktree that are changed or new and not committed
 // (ignored files are not listed). Null when git could not say.
 export async function uncommittedFiles(io: Io, root: string, jobId: string): Promise<string[] | null> {
-  const path = await worktreePath(io, root, jobId)
-  const result = path === null ? null : await git(io, path, { do: 'uncommitted' })
+  const tree = await worktreeGitDir(io, root, jobId)
+  const result = tree === null ? null : await git(io, root, { do: 'uncommitted', ...tree })
   if (result === null || 'failed' in result || result.exitCode !== 0) return null
 
   // Each entry is two state letters, a space, then the name.
@@ -155,4 +208,19 @@ export async function uncommittedFiles(io: Io, root: string, jobId: string): Pro
     .split('\0')
     .filter(entry => entry.length > 3)
     .map(entry => entry.slice(3))
+}
+
+// The text of what commit `to` changed since it left the line of `from`, for
+// a reader with no shell. Cut at `max` characters.
+export async function diffText(
+  io: Io,
+  root: string,
+  from: string,
+  to: string,
+  max = 400_000,
+): Promise<{ text: string; isCut: boolean } | null> {
+  const result = await git(io, root, { do: 'diff-text', from, to })
+  if (result === null || 'failed' in result || result.exitCode !== 0) return null
+
+  return { text: result.stdout.slice(0, max), isCut: result.stdout.length > max || result.isCut === true }
 }

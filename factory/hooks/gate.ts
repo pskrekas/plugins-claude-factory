@@ -97,7 +97,9 @@ export async function runGate(
   // not run at all: its own code would be what runs.
   const hits = protectedHits(changed, gate.protectedPaths)
   const runs: CheckRun[] = []
-  if (hits.length === 0) {
+  // A branch that changed no file would pass on the base's own content.
+  const isEmpty = changed.length === 0
+  if (hits.length === 0 && !isEmpty) {
     const copy = await addCleanCopy(io, root, job.id, sha)
     if (!copy.ok) return stop('the clean copy could not be made')
     try {
@@ -127,6 +129,7 @@ export async function runGate(
     protectedHits: hits,
     testFiles: testFilesOf(changed),
     uncommitted: [...uncommitted].sort(),
+    isEmpty,
   })
   const name = which === 'fast' ? 'checks.md' : 'merge-checks.md'
   await writeJobFile(io, root, job.id, `round-${job.round}/${name}`, report.markdown)

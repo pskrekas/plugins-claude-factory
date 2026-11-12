@@ -112,7 +112,7 @@ Only for a repo whose settings say `"tracker": { "kind": "github" }` and whose r
 - **Labels.** It makes two labels, `<mark>:in-progress` and `<mark>:needs-human`, and sets or removes them on an item. The mark itself (`factory` by default) is yours: only you put it on an item.
 - **Comments.** On the item and on the pull request. The text goes to `gh` on standard input, never as an argument. A comment that holds one of `factory.forbiddenCommentWords` is not sent.
 - **Pull requests.** It opens a draft pull request from the job's branch `factory/<job>`, marks it ready, comments on it, or closes it. **It never merges one.** A rejected item is closed as not planned.
-- **Branches.** It pushes only a job's own branch to itself. It never forces a push, never pushes to the base branch, and never rewrites history.
+- **Branches.** It pushes one commit, by its id, to the job's own branch `factory/<job>`. It never forces a push, never pushes to the base branch, and never rewrites history.
 
 A job's worktree is in the state folder (`worktrees/<job>`), not in the repo.
 
@@ -188,14 +188,15 @@ git fetch origin <base>
 git worktree add <state>/worktrees/<job> -b factory/<job> refs/remotes/origin/<base>
 git worktree add --detach <state>/gate/<job> <commit>
 git worktree remove --force <state>/worktrees/<job>      (or <state>/gate/<job>)
-git push -u origin factory/<job>:factory/<job>
-git merge --no-edit refs/remotes/origin/<base>           (in the job's worktree)
-git merge --abort
+git push origin <commit>:refs/heads/factory/<job>
+git … merge --no-edit <commit>                           (the job's worktree, see below)
+git … merge --abort
 git rev-parse --verify refs/remotes/origin/<base>^{commit}
 git rev-parse --verify refs/heads/factory/<job>^{commit}
 git show <commit>:.claude/factory.json
 git diff --name-only --no-renames -z <commit>...<commit>
-git status --porcelain --no-renames --untracked-files=all -z
+git … status --porcelain --no-renames --untracked-files=all -z
+git diff --no-renames --no-ext-diff --no-textconv <commit>...<commit>
 
 gh label create <mark>:in-progress --force --description …
 gh label create <mark>:needs-human --force --description …
@@ -209,7 +210,7 @@ gh pr comment <n> --body-file -
 gh pr close <n>
 ```
 
-Each `gh` call of the second list ends with `-R <owner>/<name>`. The line's `git` calls run with `GIT_NO_REPLACE_OBJECTS=1`.
+Each `gh` call of the second list ends with `-R <owner>/<name>`. The line's `git` calls run with `GIT_NO_REPLACE_OBJECTS=1`, and all of them run in your repository's folder. `git …` stands for `git --git-dir=<repo's git folder>/worktrees/<job> --work-tree=<state>/worktrees/<job> -c core.fsmonitor=false -c core.hooksPath=/dev/null`: a call that needs a job's worktree names it, so git reads no setting from a folder that an agent can write to.
 
 In this version only `/factory answer` and `/factory reject` make calls of the second list (the label, comment and close calls, and the removal of a worktree). The others wait for the line.
 
