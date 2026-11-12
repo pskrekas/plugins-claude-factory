@@ -8,12 +8,18 @@ import type { Job } from '../../core/job'
 import { todayOf } from '../../core/limits'
 import { countsFor } from '../../core/line'
 import type { FactoryView, JobView } from '../../core/model'
-import { readJobs } from '../jobs'
+import { isStopped, lockInfo, readJobs } from '../jobs'
 import type { Reader } from '../refresh'
 
 const MAX_JOBS = 20
 const MAX_WAITING = 10
+const MAX_CLAIMED = 10
 const GH_TIMEOUT_MS = 15_000
+
+// What is known of the line besides its jobs. `claimed` are the ids the
+// tracker says are in progress, with or without a job here.
+export type LineInfo = Pick<FactoryView, 'lock' | 'holder' | 'isStopped' | 'claimed'>
+const NOBODY: LineInfo = { lock: 'free', holder: null, isStopped: false, claimed: [] }
 
 const viewOfJob = (job: Job, f: FactorySettings): JobView => ({
   itemId: job.itemId,
@@ -38,8 +44,12 @@ export function viewOf(
   queue: number | null,
   note: string | null,
   now: number,
+  line: LineInfo = NOBODY,
 ): FactoryView | null {
-  if (jobs.length === 0 && queue === null && note === null) return null
+  // An item that has a job here is that job, whatever the tracker says.
+  const here = new Set(jobs.map(job => job.itemId))
+  const claimed = line.claimed.filter(id => !here.has(id)).slice(0, MAX_CLAIMED)
+  if (jobs.length === 0 && queue === null && note === null && claimed.length === 0) return null
   const newest = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
   const running = newest.filter(isActive)
   const waiting = newest.filter(isWaiting)
@@ -51,15 +61,20 @@ export function viewOf(
   return {
     jobs: [...running.slice(0, showRunning), ...waiting.slice(0, showWaiting)].map(job => viewOfJob(job, f)),
     // The numbers are of all jobs, so the line is right also when some are not shown.
-    counts: countsFor(jobs, queue),
+    // A claimed item with no job waits for the person, at the last station.
+    counts: countsFor(jobs, queue).map((count, at, all) => (at === all.length - 1 ? count + claimed.length : count)),
     running: running.length,
-    waiting: waiting.length,
+    waiting: waiting.length + claimed.length,
     moreRunning: running.length - showRunning,
     moreWaiting: waiting.length - showWaiting,
     queue,
     slots: f.slots,
     today: todayOf(jobs, now),
     note,
+    lock: line.lock,
+    holder: line.lock === 'theirs' ? line.holder : null,
+    isStopped: line.isStopped,
+    claimed,
   }
 }
 
@@ -69,15 +84,19 @@ export const factoryReader: Reader = {
     const { jobs, note } = await readJobs(io, ctx.root)
     const tracker = ctx.settings.tracker
     let queue: number | null = null
+    let claimed: string[] = []
     // The quick read at session start asks no tracker.
     if (!ctx.isLight && tracker?.kind === 'github') {
-      const { items } = await listIssues(
+      const listed = await listIssues(
         argv => io.run(argv, { cwd: ctx.root, timeoutMs: GH_TIMEOUT_MS }),
         tracker.mark,
       )
-      queue = items === null ? null : items.length
+      queue = listed.items === null ? null : listed.items.length
+      claimed = listed.claimed.map(item => item.id)
     }
+    const lock = await lockInfo(io, ctx.root, ctx.now)
+    const line = { lock: lock.state, holder: lock.holder, isStopped: await isStopped(io, ctx.root), claimed }
 
-    return { factory: viewOf(jobs, ctx.settings.factory, queue, note, ctx.now) }
+    return { factory: viewOf(jobs, ctx.settings.factory, queue, note, ctx.now, line) }
   },
 }

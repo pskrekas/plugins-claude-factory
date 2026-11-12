@@ -90,6 +90,47 @@ test('answer with text sends a ready job back to Build; with no text it changes 
   expect([now?.stage, now?.round, now?.sentBack]).toEqual(['build', 2, { by: 'you', why: 'Make the button blue.' }])
 })
 
+test('what sent a ready job back is the start of what the person said', async ($, on) => {
+  const ready = { ...walk('10', ['spec', 'build', 'gate', 'review', 'approve', 'ready']), pr: { number: 21, url: 'u' } }
+  const w = world(on, [ready])
+  await $.session.start(START)
+  const long = 'Make it blue. '.repeat(60)
+
+  await $.command.run(cmd(`answer 10 ${long}`))
+  expect(readJob(w, ready)?.sentBack?.why.length).toBe(300)
+  expect(w.files[`${STATE}/jobs/${ready.id}/files/feedback-1.md`]).toBe(long.trim())
+})
+
+test('reject of an item the tracker says is claimed, with no job here, writes to the tracker only', async ($, on) => {
+  const issues = JSON.stringify([
+    { number: 31, title: 'Lost', state: 'OPEN', labels: [{ name: 'factory' }, { name: 'factory:in-progress' }] },
+    { number: 4, title: 'Fonts', state: 'OPEN', labels: [{ name: 'factory' }] },
+  ])
+  const answer = tools()
+  const files = { '/r/.claude/factory.json': SETTINGS }
+  const w = engine(on, {
+    files,
+    remote: 'git@github.com:a/b.git',
+    run: argv => (argv.join(' ').startsWith('gh issue list') ? { exitCode: 0, stdout: issues } : answer(argv)),
+    now: NOW,
+  })
+  await $.session.start(START)
+
+  // An item in the queue, or one the tracker does not know, has nothing to reject.
+  expect((await $.command.run(cmd('reject 4 no'))).text).toBe('No job for 4.')
+  expect((await $.command.run(cmd('reject 99 no'))).text).toBe('No job for 99.')
+  expect(factoryRuns(w)).toEqual([])
+
+  expect((await $.command.run(cmd('reject 31 Its folder is lost.'))).text).toBe('31 is rejected. The reason is on the item.')
+  expect(factoryRuns(w)).toEqual([
+    'gh issue comment 31 --body-file -',
+    'gh issue edit 31 --remove-label factory:in-progress --remove-label factory:needs-human',
+    'gh issue close 31 --reason not planned',
+  ])
+  expect(w.stdins[w.ran.indexOf('gh issue comment 31 --body-file -')]).toBe('The factory dropped this: Its folder is lost.')
+  expect(Object.keys(w.files).some(name => name.includes('/jobs/') || name.includes('/retired/'))).toBe(false)
+})
+
 test('answer on a job that runs, or on no job, says so and changes nothing', async ($, on) => {
   const running = walk('7', ['spec'])
   const w = world(on, [running])

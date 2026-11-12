@@ -1,7 +1,7 @@
 // The person's commands on the line and on a job: stop, answer, reject.
 // Each takes the lock first, so two sessions never change one job.
 import { closePr, readPrByNumber } from '../adapters/github-pr'
-import { githubIssues } from '../adapters/github-issues'
+import { githubIssues, listIssues } from '../adapters/github-issues'
 import type { Run, Tracker } from '../adapters/tracker'
 import { failureText } from '../core/comment'
 import type { FactorySettings } from '../core/factory-settings'
@@ -36,6 +36,7 @@ type Ctx = {
   run: Run
   // The tracker and the pull request host are GitHub, or there is none here.
   tracker: Tracker | null
+  mark: string | null
 }
 
 async function context(io: Io): Promise<Ctx> {
@@ -50,6 +51,7 @@ async function context(io: Io): Promise<Ctx> {
     f: settings.factory,
     run,
     tracker: isGitHub && settings.tracker ? githubIssues(run, settings.tracker.mark, settings.factory.forbiddenCommentWords) : null,
+    mark: isGitHub && settings.tracker ? settings.tracker.mark : null,
   }
 }
 
@@ -132,6 +134,27 @@ export async function answerJob(io: Io, itemId: string, text: string): Promise<s
   })
 }
 
+// An item the tracker says is in progress, with no job here (a lost state
+// folder): the person drops it on the tracker. There is nothing here to change.
+async function rejectClaimed(ctx: Ctx, itemId: string, said: string): Promise<string> {
+  if (ctx.tracker === null || ctx.mark === null || !ITEM_ID.test(itemId)) return none(itemId)
+  const { claimed } = await listIssues(ctx.run, ctx.mark)
+  if (!claimed.some(item => item.id === itemId)) return none(itemId)
+  const steps: [string, () => Promise<void>][] = [
+    ['comment on the item', async () => ctx.tracker?.comment(itemId, `The factory dropped this: ${said}`)],
+    ['set the tracker state', async () => ctx.tracker?.setState(itemId, 'rejected')],
+  ]
+  for (const [name, step] of steps) {
+    try {
+      await step()
+    } catch (error) {
+      return `${itemId} was not rejected: ${name} failed (${why(error)}). Run the command again.`
+    }
+  }
+
+  return `${itemId} is rejected. The reason is on the item.`
+}
+
 export async function rejectJob(io: Io, itemId: string, reason: string): Promise<string> {
   const said = reason.trim().slice(0, MAX_TEXT)
   if (said === '') return 'A reason is needed: /factory reject <id> <reason>'
@@ -139,7 +162,7 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
 
   return locked(io, ctx, async () => {
     const job = await jobOf(io, ctx, itemId)
-    if (job === null) return none(itemId)
+    if (job === null) return rejectClaimed(ctx, itemId, said)
 
     // In this order; the first step that fails stops the rest, and the job is
     // written only at the end, so a failed reject leaves it as it was. Every

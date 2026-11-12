@@ -22,6 +22,10 @@ const EMPTY: FactoryView = {
   slots: 2,
   today: { done: 0, minutes: 0, costUsd: null, firstRound: 0, finished: 0 },
   note: null,
+  lock: 'free',
+  holder: null,
+  isStopped: false,
+  claimed: [],
 }
 
 test('the stations and their counts', async () => {
@@ -205,6 +209,40 @@ test('with more jobs than the view holds, the counts are of all jobs', async () 
   // Each "more" line sits under the list it cuts.
   expect(text.indexOf('+ 6 more running|')).toBe(text.indexOf('NEEDS YOU (22)|') - 1)
   expect(text.indexOf('+ 20 more wait|')).toBe(text.indexOf('PROJ-10  PR 51 is ready. You merge.|') + 1)
+})
+
+test('the head row says who runs the line, and that it is stopped', async () => {
+  const head = (over: Partial<FactoryView>) => {
+    const row = factoryRows({ ...VIEW, ...over }, 80)[0]
+
+    return `${row?.left}|${row?.right}`
+  }
+  expect(head({ lock: 'mine' })).toBe('FACTORY|2 of 2 slots busy')
+  expect(head({ lock: 'theirs', holder: '/somewhere/else' })).toBe('FACTORY|another session runs the line')
+  expect(head({ lock: 'free' })).toBe('FACTORY|no session runs the line')
+  // With no job at a station nobody needs to run the line.
+  expect(head({ lock: 'free', running: 0, jobs: VIEW.jobs.slice(2) })).toBe('FACTORY|')
+  expect(head({ lock: 'mine', isStopped: true })).toBe('FACTORY|2 of 2 slots busy · stopped')
+  expect(head({ lock: 'theirs', isStopped: true })).toBe('FACTORY|another session runs the line · stopped')
+  expect(head({ lock: 'free', running: 0, jobs: VIEW.jobs.slice(2), isStopped: true })).toBe('FACTORY|stopped')
+})
+
+test('an item the tracker says is claimed, with no job here, is a row under NEEDS YOU', async () => {
+  const view = { ...VIEW, claimed: ['31', '32\u001b[2J'], waiting: 4, counts: [4, 0, 0, 1, 0, 1, 0, 4] }
+  const text = factoryRows(view, 120).map(row => (row.cells ? textOf(row) : row.left))
+  const at = text.indexOf('NEEDS YOU (4)')
+  expect(at).toBeGreaterThan(0)
+  expect(text.slice(at + 1, at + 5)).toEqual([
+    'PROJ-14  Which default font?',
+    'PROJ-10  PR 51 is ready. You merge.',
+    '31  claimed in the tracker, no job here. /factory reject 31 <reason>, or run it again.',
+    '32[2J  claimed in the tracker, no job here. /factory reject 32[2J <reason>, or run it again.',
+  ])
+  expect(lineRows(view, 80)[1]?.cells?.at(-1)?.text.trim()).toBe('4')
+  // Only claimed items: the section still shows.
+  const only = factoryRows({ ...EMPTY, claimed: ['31'], waiting: 1, counts: [0, 0, 0, 0, 0, 0, 0, 1] }, 120).map(row => row.left)
+  expect(only[0]).toBe('FACTORY')
+  expect(only).toContain('NEEDS YOU (1)')
 })
 
 test('the width of text on screen', async () => {

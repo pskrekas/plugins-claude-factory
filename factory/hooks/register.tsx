@@ -20,7 +20,7 @@ import { PANE, TITLE } from './state'
 // Change the tag when PanelModel's fields change: it declines what an earlier
 // version stored, which outlives a reload.
 const panel = atom({ plugin: 'factory', key: 'panel' } as const, emptyModel(), {
-  shape: 'panel-2',
+  shape: 'panel-3',
 })
 
 const MINIMUM = [2, 1, 322] as const
