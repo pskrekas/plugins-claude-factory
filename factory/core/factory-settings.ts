@@ -6,6 +6,9 @@ import { CONTROL_CHAR, isInside, isObject, isText } from './rules'
 export type Risk = 'low' | 'medium' | 'high'
 export type Role = 'intake' | 'spec' | 'builder' | 'reviewer' | 'approver'
 export type Tier = 'strongest' | 'strong' | 'fast'
+// Where the builder's commands and the gate's commands run: in a container
+// of this image, which sees only the job's folder (design 8.3).
+export type ContainerSpec = { image: string; network: 'on' | 'none'; memory: string; cpus: number }
 // US dollars per million tokens of one model.
 export type Price = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
@@ -24,6 +27,9 @@ export type FactorySettings = {
   prices: Record<string, Price>
   // How long one agent may work at a station before the station counts as failed.
   stationTimeoutMin: number
+  // The container; `false`: the person chose that commands run on this machine;
+  // null: not set, and then the line does not run.
+  container: ContainerSpec | false | null
   reviewers: { low: string[]; medium: string[]; high: string[]; ui: string[]; security: string[] }
 }
 
@@ -39,6 +45,7 @@ export const FACTORY_DEFAULTS: FactorySettings = {
   forbiddenCommentWords: [],
   prices: {},
   stationTimeoutMin: 30,
+  container: null,
   models: { intake: 'strongest', spec: 'strong', builder: 'strong', reviewer: 'strong', approver: 'strong' },
   reviewers: { low: ['code'], medium: ['code'], high: ['code'], ui: ['ux', 'ui'], security: ['security'] },
 }
@@ -88,6 +95,31 @@ function pair(
   }
 
   return out
+}
+
+// An image name is an argument of `docker`: it can never be read as an option.
+export const isImage = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,199}$/.test(v)
+const isMemory = (v: unknown): v is string => typeof v === 'string' && /^[1-9][0-9]{0,5}[mg]$/.test(v)
+
+function containerOf(v: unknown): ContainerSpec | Refused {
+  if (!isObject(v) || !isImage(v.image)) return no('container: an image is needed')
+  const network = v.network ?? 'on'
+  const memory = v.memory ?? '4g'
+  const cpus = v.cpus ?? 2
+  if (network !== 'on' && network !== 'none') return no('container: network is on or none')
+  if (!isMemory(memory)) return no('container: memory is a number and m or g')
+  if (typeof cpus !== 'number' || !(cpus >= 0.5 && cpus <= 16)) return no('container: cpus is 0.5 to 16')
+
+  return { image: v.image, network, memory, cpus }
+}
+
+// The container as the line a person approves, or null when none is set.
+// Another image, network or limit is another line, so it asks again.
+export function containerLine(container: ContainerSpec | false | null): string | null {
+  if (container === null) return null
+  if (container === false) return '[container] none: the builder and the gate run on this machine'
+
+  return `[container] ${container.image} · network ${container.network} · memory ${container.memory} · cpus ${container.cpus}`
 }
 
 export function parseFactory(v: unknown): { ok: FactorySettings } | Refused {
@@ -168,6 +200,12 @@ export function parseFactory(v: unknown): { ok: FactorySettings } | Refused {
       prices[model] = { input, output, cacheRead, cacheWrite }
     }
     f.prices = prices
+  }
+
+  if (v.container !== undefined) {
+    const container = v.container === false ? false : containerOf(v.container)
+    if (container !== false && 'no' in container) return container
+    f.container = container
   }
 
   if (v.models !== undefined) {
