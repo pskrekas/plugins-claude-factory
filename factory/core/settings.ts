@@ -167,11 +167,20 @@ export function parseSettings(source: string | null): { settings: Settings; erro
   return { settings, error }
 }
 
+const PLAIN_ARG = /^[A-Za-z0-9_./:=@%+,-]+$/
+
+// One command as one line a person can read and approve. An argument that is
+// not plain (a space, a quote, a control character) is shown as a JSON string,
+// so two different commands never give the same line and nothing is hidden.
+export function lineOf(argv: string[]): string {
+  return argv.map(arg => (PLAIN_ARG.test(arg) ? arg : JSON.stringify(arg))).join(' ')
+}
+
 // Every command the settings file can make the plugin run, one line each.
 export function commandsOf(settings: Settings): string[] {
   const lines = new Set<string>()
-  for (const check of settings.checks) if (check.run) lines.add(check.run.join(' '))
-  for (const argv of [...settings.gate.fast, ...settings.gate.full]) lines.add(argv.join(' '))
+  for (const check of settings.checks) if (check.run) lines.add(lineOf(check.run))
+  for (const argv of [...settings.gate.fast, ...settings.gate.full]) lines.add(lineOf(argv))
 
   return [...lines].sort()
 }

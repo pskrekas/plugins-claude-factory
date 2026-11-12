@@ -8,6 +8,23 @@ export type Row = { left: string; right: string; tone: Tone; rightTone: Tone }
 
 const MAX_AGENTS = 6
 
+// Text from a settings file, a tracker or a command's output can hold terminal
+// control sequences. No C0 or C1 control character reaches a row.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
+
+export function clean(text: string): string {
+  return text.replace(CONTROL, '')
+}
+
+// Splits `text` into pieces of at most `columns`, losing nothing.
+export function wrap(text: string, columns: number): string[] {
+  const width = Math.max(1, columns)
+  const pieces: string[] = []
+  for (let i = 0; i < text.length; i += width) pieces.push(text.slice(i, i + width))
+
+  return pieces.length > 0 ? pieces : ['']
+}
+
 // Cuts `left` (then `right`) so that `left + ' ' + right` fits in `columns`.
 export function fit(left: string, right: string, columns: number): { left: string; right: string } {
   const cut = (text: string, room: number): string => {
@@ -29,7 +46,7 @@ function plural(n: number, word: string): string {
 export function rowsOf(model: PanelModel, columns: number, now: number): Row[] {
   const rows: Row[] = []
   const add = (left: string, right = '', tone: Tone = 'plain', rightTone: Tone = 'plain') => {
-    rows.push({ ...fit(left, right, columns), tone, rightTone })
+    rows.push({ ...fit(clean(left), clean(right), columns), tone, rightTone })
   }
   const head = (name: string) => add(name, '', 'head')
   // Checks and ports run commands from the settings file: shown only once approved.
@@ -38,7 +55,10 @@ export function rowsOf(model: PanelModel, columns: number, now: number): Row[] {
   if (model.consent === 'none') add('No settings file. Run /factory init.', '', 'dim')
   if (model.consent === 'needed') {
     head('SETTINGS NOT APPROVED')
-    for (const command of model.pendingCommands) add(command, '', 'dim')
+    // The person approves what is shown: a command is wrapped, never cut.
+    for (const command of model.pendingCommands) {
+      for (const piece of wrap(clean(command), columns)) add(piece, '', 'dim')
+    }
     add('Run /factory approve to allow these commands.')
   }
   if (model.settingsError) add(`settings: ${model.settingsError}`, '', 'bad')

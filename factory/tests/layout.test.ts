@@ -90,3 +90,28 @@ test('status text', async () => {
   expect(statusText(FULL)).toBe('PROJ-12 · 50% · 1 check wrong · blocked')
   expect(statusText(emptyModel())).toBe(undefined)
 })
+
+test('a long pending command is wrapped over rows, never cut', async () => {
+  const command = 'sh -c ' + 'x'.repeat(100)
+  const rows = rowsOf({ ...FULL, consent: 'needed', pendingCommands: [command] }, 40, 0)
+  const end = rows.findIndex(r => r.left.startsWith('Run /factory approve'))
+  const shown = rows.slice(1, end)
+  expect(shown.map(r => r.left).join('')).toBe(command)
+  expect(shown.every(r => r.left.length <= 40 && !r.left.includes('…'))).toBe(true)
+})
+
+test('control characters never reach a row', async () => {
+  const model = {
+    ...FULL,
+    task: { ...FULL.task!, title: 'a\u001b[31mb\nc', state: 'o\rpen' },
+    checks: [{ name: 'n\u0007ame', state: 'wrong' as const, got: '\u009b2Jgot' }],
+    notes: ['no\u0000te\u007f'],
+    settingsError: 'bad\u001b]0;x\u0007',
+  }
+  const text = rowsOf(model, 80, 0)
+    .map(r => r.left + r.right)
+    .join('')
+  expect(/[\u0000-\u001f\u007f-\u009f]/.test(text)).toBe(false)
+  expect(text).toContain('PROJ-12 a[31mbc')
+  expect(text).toContain('2Jgot')
+})

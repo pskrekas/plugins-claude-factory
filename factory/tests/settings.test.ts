@@ -84,3 +84,16 @@ test('commands are listed once, sorted, and hashed stably', async () => {
   expect(hashOf(['a'])).not.toBe(hashOf(['b']))
   expect(hashOf(['a'])).toMatch(/^[0-9a-f]{8}$/)
 })
+
+test('an argument with a space or a control character is shown quoted', async () => {
+  const one = parseSettings('{"checks": [{"name": "a", "run": ["sh", "-c", "echo hi\\u001b[2J"]}]}')
+  expect(commandsOf(one.settings)).toEqual(['sh -c "echo hi\\u001b[2J"'])
+})
+
+test('two commands that differ only in how they are split never look or hash the same', async () => {
+  const a = parseSettings('{"checks": [{"name": "a", "run": ["rm", "x y"]}]}').settings
+  const b = parseSettings('{"checks": [{"name": "a", "run": ["rm", "x", "y"]}]}').settings
+  expect(commandsOf(a)).toEqual(['rm "x y"'])
+  expect(commandsOf(b)).toEqual(['rm x y'])
+  expect(hashOf(commandsOf(a))).not.toBe(hashOf(commandsOf(b)))
+})
