@@ -34,6 +34,8 @@ const SETTINGS = "Git settings and refs are not an agent's to change."
 const REF = 'A branch or a tag is not named like a remote ref.'
 const FORBIDDEN = 'This command is forbidden in this repository.'
 const GIT_FOLDER = 'The git folder is not written to.'
+const NOT_PLAIN = 'The command is not plain enough to check. Write the program and its command with no quotes, backslash or variable.'
+const TOO_DEEP = 'A shell inside a shell inside a shell is not run.'
 
 // A path as the tools see it, with `.` and `..` resolved. A relative path is
 // under `base`. Null for a path that cannot be judged.
@@ -78,7 +80,10 @@ function readVerdict(tool: string, input: Record<string, unknown>, who: Who): Ve
     const pattern = text(input.pattern)
     if (pattern === null) return deny(NOT_UNDERSTOOD, '')
     if (pattern.split('/').includes('..') || pattern.startsWith('~')) return deny(OUTSIDE, pattern)
-    if (pattern.startsWith('/') && !inJob(pattern.slice(0, pattern.search(/[*?[{]|$/)))) return deny(OUTSIDE, pattern)
+    // The folder before the first wildcard must be inside the job: a wildcard
+    // in the name of the job's own folder could match its neighbours.
+    const literal = pattern.slice(0, pattern.search(/[*?[{]|$/))
+    if (pattern.startsWith('/') && !inJob(literal.slice(0, literal.lastIndexOf('/')) || '/')) return deny(OUTSIDE, pattern)
   }
 
   return ALLOW
@@ -99,6 +104,9 @@ function writeVerdict(input: Record<string, unknown>, who: Who): Verdict {
 const PREFIXES = ['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'xargs']
 const SHELLS = ['sh', 'bash', 'zsh', 'dash', 'ksh']
 const GIT_SETTINGS = ['config', 'replace', 'update-ref', 'remote', 'worktree', 'symbolic-ref']
+const GIT_SENDS = ['push', 'send-pack', 'http-push']
+const isOdd = (word: string | undefined) => word !== undefined && /['"\\$]/.test(word)
+const namesGitFolder = (word: string) => word === '.git' || word.endsWith('/.git') || word.includes('.git/')
 const GIT_PLACES = ['-c', '-C', '--git-dir', '--work-tree', '--exec-path', '--namespace']
 const WRITERS = ['rm', 'mv', 'cp', 'ln', 'tee', 'chmod', 'chown', 'truncate', 'dd', 'touch', 'mkdir', 'rmdir', 'install', 'rsync']
 const baseName = (word: string) => word.slice(word.lastIndexOf('/') + 1)
@@ -133,7 +141,8 @@ function gitVerdict(words: string[], simple: string): Deny | null {
   }
   const sub = words[at]
   const rest = words.slice(at + 1)
-  if (sub === 'push') return deny(PUSH, simple)
+  if (isOdd(sub)) return deny(NOT_PLAIN, simple)
+  if (sub !== undefined && GIT_SENDS.includes(sub)) return deny(PUSH, simple)
   if (sub !== undefined && GIT_SETTINGS.includes(sub)) return deny(SETTINGS, simple)
   // A new branch or tag whose name could be read in the base's place.
   if ((sub === 'branch' || sub === 'tag') && isRemoteName(rest.find(word => !word.startsWith('-')))) return deny(REF, simple)
@@ -146,17 +155,25 @@ function gitVerdict(words: string[], simple: string): Deny | null {
 }
 
 function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
+  // Git told where to look, or what to run, through the environment.
+  if (simple.trim().split(/\s+/).some(word => /^['"]?GIT_[A-Z0-9_]*=/.test(word))) return deny(SETTINGS, simple)
   const words = wordsOf(simple)
   const program = baseName(words[0] ?? '')
   if (program === '') return null
-  // A shell or `eval` runs the text it is given: that text is judged too.
-  if (depth < 2 && (SHELLS.includes(program) || program === 'eval')) {
-    const from = program === 'eval' ? 1 : words.indexOf('-c') + 1
+  if (isOdd(words[0])) return deny(NOT_PLAIN, simple)
+  // A shell or `eval` runs the text it is given: that text is judged too. The
+  // text follows `-c`, also when the flag is joined with others (`-lc`).
+  if (SHELLS.includes(program) || program === 'eval') {
+    const flag = words.findIndex((word, i) => i > 0 && /^-[A-Za-z]*c[A-Za-z]*$/.test(word))
+    const from = program === 'eval' ? 1 : flag + 1
     if (from > 0) {
+      if (depth >= 2) return deny(TOO_DEEP, simple)
       const inner = commandVerdict(words.slice(from).join(' '), who, depth + 1)
       if (inner !== null) return inner
     }
   }
+  // Into the git folder: what follows would write there with no path to see.
+  if ((program === 'cd' || program === 'pushd') && words.slice(1).some(namesGitFolder)) return deny(GIT_FOLDER, simple)
   if (program === 'git') {
     const refused = gitVerdict(words, simple)
     if (refused !== null) return refused
@@ -166,7 +183,7 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
     const [first = '', ...more] = list
     if (program === baseName(first) && more.every((word, i) => words[i + 1] === word)) return deny(FORBIDDEN, simple)
   }
-  const namesGit = words.some(word => word === '.git' || word.endsWith('/.git') || word.includes('.git/'))
+  const namesGit = words.some(namesGitFolder)
   const writes = simple.includes('>') || WRITERS.includes(program) || (program === 'sed' && words.some(word => word.startsWith('-i')))
 
   return namesGit && writes ? deny(GIT_FOLDER, simple) : null

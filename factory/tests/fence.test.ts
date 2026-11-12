@@ -31,6 +31,26 @@ test('the builder cannot push, merge on the host, or change git settings', async
   expect(bash('npm test && gh pr merge 3')).toEqual({ decision: 'deny', reason: 'The line talks to the host; an agent does not.', command: 'gh pr merge 3' })
 })
 
+test('ways around the words are refused too', async () => {
+  const bad = [
+    // Git told where to look through the environment.
+    'GIT_DIR=/x/.git git status', 'env GIT_WORK_TREE=/x git status', 'export GIT_CONFIG_GLOBAL=/tmp/x', 'GIT_SSH_COMMAND="sh -c x" git fetch',
+    // A shell with its flags joined, and a nest too deep to follow.
+    'bash -lc "git push"', 'sh -ec "gh pr merge 3"', 'bash -c "bash -c \'bash -c \\"git push\\"\'"',
+    // The lower-level ways to send commits.
+    'git send-pack origin HEAD', 'git http-push http://example.com/x',
+    // A program name or a git command that is spelled with quotes, a backslash or a variable.
+    'g\\it push', 'gi""t push', '$GIT push', 'git pu""sh', 'git $CMD origin',
+    // Into the git folder, then a write with no path.
+    'cd .git && echo x > config', 'cd ./.git/hooks; cp /tmp/x pre-commit', `cd ${WT}/.git`, 'pushd .git',
+  ]
+  for (const command of bad) expect([command, bash(command)?.decision]).toEqual([command, 'deny'])
+  expect(bash('GIT_DIR=/x/.git git status')).toEqual({ decision: 'deny', reason: "Git settings and refs are not an agent's to change.", command: 'GIT_DIR=/x/.git git status' })
+  // Ordinary variables and folders are still fine.
+  for (const ok of ['NODE_ENV=test npm test', 'CI=1 npm run build', 'cd src && npm test', 'cd .github && ls', 'bash -c "npm test"', 'bash scripts/build.sh'])
+    expect([ok, bash(ok)]).toEqual([ok, ALLOW])
+})
+
 test("a repo's forbidden commands are refused, with or without what follows them", async () => {
   for (const command of ['npm publish', 'npm publish --tag next', 'cd pkg && npm publish', './node_modules/.bin/terraform apply -auto-approve', 'terraform  apply'])
     expect([command, bash(command)?.decision]).toEqual([command, 'deny'])
@@ -61,6 +81,10 @@ test('a file is read only inside the job: its worktree and its folder', async ()
   expect(fenceOf({ tool: 'Glob', input: { pattern: '/etc/**' } }, reviewer)?.decision).toBe('deny')
   expect(fenceOf({ tool: 'Glob', input: { pattern: '../**/*.md' } }, reviewer)?.decision).toBe('deny')
   expect(fenceOf({ tool: 'Glob', input: { pattern: `${JOB}/files/**` } }, reviewer)).toEqual(ALLOW)
+  // A wildcard in the name of the job's own folder could match its neighbours.
+  expect(fenceOf({ tool: 'Glob', input: { pattern: `${WT}*/secret` } }, reviewer)?.decision).toBe('deny')
+  expect(fenceOf({ tool: 'Glob', input: { pattern: '/s/jobs/1?-a/files/item.md' } }, reviewer)?.decision).toBe('deny')
+  expect(fenceOf({ tool: 'Glob', input: { pattern: `${WT}/src/*.ts` } }, reviewer)).toEqual(ALLOW)
 })
 
 test('a file is written only where the role writes', async () => {
