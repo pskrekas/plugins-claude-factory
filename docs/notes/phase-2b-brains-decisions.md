@@ -78,8 +78,8 @@ all). The README's "Before you run the line" says so.
 
 The fix that would end this class is not more rules: it is to run the builder where
 it cannot reach the person's files and logins (a container, a virtual machine, or a
-shell sandbox when an agent type can require one). That is a decision for a later
-phase.
+shell sandbox when an agent type can require one). **The owner decided this on
+2026-11-12: it is the next plan (2c in the design's order of work), before phase 3.**
 
 Known gaps that were reported and not fixed:
 
