@@ -5,12 +5,18 @@ import { containerName, dockerArgs } from '../core/container-args'
 const ID = '12-add-dark-mode'
 const WT = '/state/r-1/worktrees/' + ID
 const SPEC = { image: 'node:22', network: 'on' as const, memory: '4g', cpus: 2 }
-const NAME = 'factory-12-add-dark-mode'
+const NAME = 'factory-job-12-add-dark-mode.r-1'
+const GATE = 'factory-gate-12-add-dark-mode.r-1'
 const line = (call: Parameters<typeof dockerArgs>[0]) => dockerArgs(call)?.join(' ') ?? null
 const make = { do: 'make' as const, name: NAME, spec: SPEC, folder: WT, user: '501:20', label: 'r-1', hasGitFile: true }
 
 test('every docker call of the factory, word for word', async () => {
-  expect([containerName('job', ID), containerName('gate', ID)]).toEqual([NAME, 'factory-gate-12-add-dark-mode'])
+  expect([containerName('job', ID, 'r-1'), containerName('gate', ID, 'r-1')]).toEqual([NAME, GATE])
+  // A job whose id starts like the other kind, and the same job id in another repository, get other names.
+  expect(containerName('job', 'gate-12-add-dark-mode', 'r-1')).toBe('factory-job-gate-12-add-dark-mode.r-1')
+  expect(containerName('job', ID, 'other-9')).toBe('factory-job-12-add-dark-mode.other-9')
+  expect(containerName('job', '../x', 'r-1')).toBe(null)
+  expect(containerName('job', ID, 'a b')).toBe(null)
   expect(line({ do: 'image', image: 'node:22' })).toBe('docker image inspect --format {{.Id}} node:22')
   expect(line(make)).toBe(
     `docker run -d --name ${NAME} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -v ${WT}/.git:${WT}/.git:ro -w ${WT} node:22 sleep infinity`,
@@ -35,7 +41,12 @@ test('a command of the builder is one argument of the shell inside the container
 test('a value that breaks a rule gives no call at all', async () => {
   const bad = [
     { ...make, name: 'other' },
-    { ...make, name: 'factory-../x' },
+    { ...make, name: 'factory-job-../x.r-1' },
+    { ...make, name: 'factory-12-add-dark-mode' },
+    { ...make, name: 'factory-job-12-add-dark-mode.other' },
+    { ...make, name: 'factory-job-12-add-dark-mode' },
+    { ...make, name: 'factory-job-12-add-dark-mode.' },
+    { ...make, name: 'factory-job-12-add-dark-mode.r 1' },
     { ...make, name: '--privileged' },
     { ...make, folder: 'relative/x' },
     { ...make, folder: '/a/../b' },
@@ -53,6 +64,7 @@ test('a value that breaks a rule gives no call at all', async () => {
   expect(dockerArgs({ do: 'image', image: '-x' })).toBe(null)
   expect(dockerArgs({ do: 'remove', name: 'postgres' })).toBe(null)
   expect(dockerArgs({ do: 'running', name: 'factory-' })).toBe(null)
+  expect(dockerArgs({ do: 'running', name: 'factory-job-.r-1' })).toBe(null)
   expect(dockerArgs({ do: 'argv', name: NAME, cwd: WT, argv: [] })).toBe(null)
   expect(dockerArgs({ do: 'argv', name: NAME, cwd: 'x', argv: ['ls'] })).toBe(null)
   expect(dockerArgs({ do: 'shell', name: 'x', cwd: WT, command: 'ls' })).toBe(null)
@@ -63,7 +75,7 @@ test('a container sees one folder and gets no added right', async () => {
   const every = [
     dockerArgs({ do: 'image', image: 'node:22' }),
     dockerArgs(make),
-    dockerArgs({ ...make, name: 'factory-gate-12-add-dark-mode', hasGitFile: false }),
+    dockerArgs({ ...make, name: GATE, hasGitFile: false }),
     dockerArgs({ do: 'running', name: NAME }),
     dockerArgs({ do: 'shell', name: NAME, cwd: WT, command: 'npm test' }),
     dockerArgs({ do: 'argv', name: NAME, cwd: WT, argv: ['npm', 'test'] }),

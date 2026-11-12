@@ -71,7 +71,7 @@ factory/hooks/line.ts, start.ts    the job's container, the commit, the checks o
 **Files:** Create `factory/core/container-args.ts`. Test: `factory/tests/container-args.test.ts`.
 
 **Interfaces:**
-- `containerName(kind: 'job' | 'gate', jobId): string` = `factory-<jobId>` / `factory-gate-<jobId>`.
+- `containerName(kind: 'job' | 'gate', jobId, label): string | null` = `factory-job-<jobId>.<label>` / `factory-gate-<jobId>.<label>` (the label is the name of the repository's state folder; a job id holds no `.`, so no two jobs, kinds or repositories share a name; ruling in Task 3).
 - `dockerArgs(call): string[] | null` for: `{ do: 'image'; image }` → `docker image inspect --format {{.Id}} <image>`; `{ do: 'make'; name; spec; folder; user; label }` → `docker run -d --name <name> --label factory.state=<label> --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory <m> --cpus <n> --network <bridge|none> --user <uid>:<gid> -e HOME=/tmp -v <folder>:<folder> -w <folder> <image> sleep infinity` (for `kind` job also `-v <folder>/.git:<folder>/.git:ro` when `hasGitFile`); `{ do: 'running'; name }` → `docker inspect --format {{.State.Running}} <name>`; `{ do: 'shell'; name; cwd; command }` → `docker exec -w <cwd> <name> sh -c <command>`; `{ do: 'argv'; name; cwd; argv }` → `docker exec -w <cwd> <name> <argv…>`; `{ do: 'remove'; name }` → `docker rm -f <name>`; `{ do: 'list'; label }` → `docker ps -a --filter label=factory.state=<label> --format {{.Names}}`.
 - Null when a value breaks a rule: a name that is not `factory-…` of a job id, a folder that is not a plain absolute path, an image or spec that Task 1 would refuse, a `user` that is not `digits:digits`, an empty `argv`, a command over 100,000 characters.
 
@@ -123,15 +123,15 @@ factory/hooks/line.ts, start.ts    the job's container, the commit, the checks o
 
 **Interfaces:**
 - `gateCommands` also answers `container: ContainerSpec | false | null` of the base branch, and refuses (`the container settings are not approved`) when its line is not on the approved list.
-- `runGate(io, root, job, base, which)`: with a `ContainerSpec` it makes `factory-gate-<job>` over the clean copy, runs each command with `runArgv`, and removes the container with the copy. With `false` it runs as before. With `null`: `{ pass: false, why: 'no container is set', needsPerson: true }`.
+- `runGate(io, root, job, base, which)`: with a `ContainerSpec` it makes `factory-gate-<job>.<label>` over the clean copy, runs each command with `runArgv`, and removes the container with the copy. With `false` it runs as before. With `null`: `{ pass: false, why: 'no container is set', needsPerson: true }`.
 - `startRun`: refuses with `No container, no factory: set factory.container in the settings file on the base branch (an image, or false to run on this machine).`, with `the container settings are not approved. Approve them with /factory approve.`, or with `dockerState`'s line; then `sweepContainers`.
 - `line.ts`: a new job gets `shell` from the base's container settings and, for `container`, its container (`ensureContainer`) after its worktree; `tidy` removes the job's containers.
 
-- [ ] **Step 1: Failing tests:** the gate's commands are `docker exec … npm test` in `factory-gate-<job>`, never a bare `npm test`; the container is removed after a pass and after a fail; host mode runs as before; the three refusals of `/factory run`; a new job's container is made with the worktree as its one mount; a job that ends has no container; a job's own settings file with another image changes nothing.
+- [ ] **Step 1: Failing tests:** the gate's commands are `docker exec … npm test` in `factory-gate-<job>.<label>`, never a bare `npm test`; the container is removed after a pass and after a fail; host mode runs as before; the three refusals of `/factory run`; a new job's container is made with the worktree as its one mount; a job that ends has no container; a job's own settings file with another image changes nothing.
 - [ ] **Step 2–4.** **Step 5: Commit** — `git commit -m "feat: the gate runs in a container; no container, no factory"`
 
 ### Task 7: README, notes, hand check
 
 - [ ] **Step 1: README:** "Before you run the line" says where commands run now and what the container can and cannot reach; a "The container" part (the settings, how to get the image, network `on` or `none`, host mode and what it means); every `docker` call in the list of calls; troubleshooting for the three docker refusals.
-- [ ] **Step 2: `docs/notes/r1-check.md`:** the hand check uses a container (`node:22`), and adds: `docker ps` shows `factory-<job>` while a job runs and nothing after; the builder's `whoami` and `ls /Users` inside the tool.
+- [ ] **Step 2: `docs/notes/r1-check.md`:** the hand check uses a container (`node:22`), and adds: `docker ps` shows `factory-job-<job>.<label>` while a job runs and nothing after; the builder's `whoami` and `ls /Users` inside the tool.
 - [ ] **Step 3: Run all three commands** — PASS. **Step 4: Commit** — `git commit -m "docs: the builder out of reach"`

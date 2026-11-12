@@ -11,7 +11,14 @@ import { isJobId } from './job'
 
 const MAX_COMMAND = 100_000
 
-export const containerName = (kind: 'job' | 'gate', jobId: string): string => (kind === 'job' ? `factory-${jobId}` : `factory-gate-${jobId}`)
+const isLabel = (label: string) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(label)
+
+// `factory-job-<job id>.<label>` or `factory-gate-<job id>.<label>`; the label
+// is the name of the repository's state folder. A job id holds no `.`, and the
+// two starts differ, so a name reads one way only: two jobs, a job and a gate
+// run, or two repositories never get one name. Null when a part breaks a rule.
+export const containerName = (kind: 'job' | 'gate', jobId: string, label: string): string | null =>
+  isJobId(jobId) && isLabel(label) ? `factory-${kind}-${jobId}.${label}` : null
 
 export type DockerCall =
   | { do: 'image'; image: string }
@@ -22,23 +29,29 @@ export type DockerCall =
   | { do: 'remove'; name: string }
   | { do: 'list'; label: string }
 
-// `factory-<job id>` or `factory-gate-<job id>`: the factory touches no other container.
-const isName = (name: string) => {
-  const id = name.startsWith('factory-gate-') ? name.slice('factory-gate-'.length) : name.startsWith('factory-') ? name.slice('factory-'.length) : ''
+// The label in a name of the factory, or null: the factory touches no other container.
+const labelIn = (name: string): string | null => {
+  const rest = name.startsWith('factory-job-') ? name.slice('factory-job-'.length) : name.startsWith('factory-gate-') ? name.slice('factory-gate-'.length) : ''
+  const dot = rest.indexOf('.')
+  if (dot < 1) return null
+  const label = rest.slice(dot + 1)
 
-  return id !== '' && isJobId(id)
+  return isJobId(rest.slice(0, dot)) && isLabel(label) ? label : null
 }
 // An absolute path with no `..`, no `:` (the mount's own separator), no space and no control character.
 const isFolder = (path: string) => path.startsWith('/') && !path.split('/').includes('..') && !/[\s:\u0000-\u001f\u007f]/.test(path)
 const isSpec = (spec: ContainerSpec) =>
   isImage(spec.image) && (spec.network === 'on' || spec.network === 'none') && /^[1-9][0-9]{0,5}[mg]$/.test(spec.memory) && spec.cpus >= 0.5 && spec.cpus <= 16
-const isLabel = (label: string) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(label)
 
 // The argument list of a call, or null when one of its values breaks a rule.
 export function dockerArgs(call: DockerCall): string[] | null {
-  if ('name' in call && !isName(call.name)) return null
-  if ('cwd' in call && !isFolder(call.cwd)) return null
   if ('label' in call && !isLabel(call.label)) return null
+  if ('name' in call) {
+    const label = labelIn(call.name)
+    // A container is made under its own repository's label only.
+    if (label === null || ('label' in call && label !== call.label)) return null
+  }
+  if ('cwd' in call && !isFolder(call.cwd)) return null
 
   switch (call.do) {
     case 'image':

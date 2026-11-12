@@ -345,7 +345,7 @@ export function fakeIo(
     failNext: null as string | null,
     // Answers for commands the fake does not act out itself (git, gh).
     answer: null as
-      | ((argv: string[]) => { exitCode: number; stdout: string; stderr?: string; isCut?: boolean } | undefined)
+      | ((argv: string[]) => { exitCode: number; stdout: string; stderr?: string; isCut?: boolean; failed?: 'timeout' | 'other' } | undefined)
       | null,
     now: async () => io.time,
     root: async () => '/r',
@@ -395,6 +395,9 @@ export function fakeIo(
       }
       const given = io.answer?.(argv)
       if (given !== undefined) {
+        // A command that ran past its time, or broke, as the real `run` reports it.
+        if (given.failed !== undefined) return { failed: given.failed }
+
         return { exitCode: given.exitCode, stdout: given.stdout, stderr: given.stderr ?? '', ...(given.isCut ? { isCut: true } : {}) }
       }
       const args = argv.filter(arg => arg !== '-p' && arg !== '-f')
