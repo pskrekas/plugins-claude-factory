@@ -109,3 +109,18 @@ test('a .git that another user put in a shared folder is not used', async ($, on
   expect(rows).toContain('No settings file. Run /factory init.')
   expect(world.reads.some(path => path.startsWith('/tmp/.claude'))).toBe(false)
 })
+
+test('the git call that asks where the repo starts never finds a program inside the repo', async ($, on) => {
+  const world = engine(on, {
+    files: { '/r/.git/HEAD': 'x', '/r/packages/web/index.ts': 'x' },
+    // The session is in a subfolder; the repo's own tools are on the PATH.
+    path: '/usr/bin:/r/node_modules/.bin:/r/packages/web/bin:.:/opt/x',
+  })
+  world.root = '/r/packages/web'
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  expect(world.probePaths.length).toBeGreaterThan(0)
+  expect(world.probePaths.every(path => path === '/usr/bin:/opt/x')).toBe(true)
+  expect(world.paths.every(path => path === '/usr/bin:/opt/x')).toBe(true)
+})

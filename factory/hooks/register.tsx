@@ -94,7 +94,9 @@ export const register: Register = (on, options) => {
       }
       let gitTop: string | null = null
       if (walkTop !== null) {
-        const env = { PATH: safePath(await $.env.get('PATH').catch(() => undefined), real) }
+        // Cleaned against the outermost folder that could be the repo, so a
+        // `git` inside it (a tool folder of the repo on the PATH) is never run.
+        const env = { PATH: safePath(await $.env.get('PATH').catch(() => undefined), walkTop) }
         const said = await $.process
           .run(['git', 'rev-parse', '--show-toplevel'], { cwd: real, env, timeoutMs: GIT_TOP_MS })
           .then(done => (done.exitCode === 0 ? done.stdout.trim() : ''))

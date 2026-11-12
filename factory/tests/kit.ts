@@ -87,6 +87,8 @@ export function engine(
     writes: [] as string[],
     reads: [] as string[],
     paths: [] as (string | undefined)[],
+    // The PATH of the git call that asks where the repo starts.
+    probePaths: [] as (string | undefined)[],
     agents: (world.agents ?? []) as unknown[],
     isOpen: false,
     // The pane is on screen: placed, and the tab the surface shows.
@@ -203,6 +205,7 @@ export function engine(
   }))
   on('process.run', (_, e) => {
     if (e.argv.join(' ') === 'git rev-parse --show-toplevel') {
+      seen.probePaths.push(e.init?.env?.PATH)
       const from = e.init?.cwd ?? seen.root
       const dirs = from.split('/').map((_, i, parts) => parts.slice(0, parts.length - i).join('/') || '/')
       const honest = dirs.find(dir => seen.files[real(`${dir}/.git`)] !== undefined || isDir(real(`${dir}/.git`)))
