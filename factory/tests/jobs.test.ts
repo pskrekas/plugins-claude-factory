@@ -119,8 +119,9 @@ test('a job with a bad id is not written', async () => {
 
 test('two sessions cannot both hold the lock', async () => {
   const files = { '/r/x': '' }
-  const first = fakeIo({ files, session: 's1', now: 1000 })
-  const second = fakeIo({ files, session: 's2', now: 1000 })
+  const dirs = new Map<string, number>()
+  const first = fakeIo({ files, dirs, session: 's1' })
+  const second = fakeIo({ files, dirs, session: 's2' })
 
   expect(await takeLock(first, '/r', 1000)).toEqual({ isHeld: true, holder: null })
   expect(await takeLock(second, '/r', 2000)).toEqual({ isHeld: false, holder: 's1' })
@@ -136,6 +137,97 @@ test('two sessions cannot both hold the lock', async () => {
 
   await releaseLock(second, '/r')
   expect(await takeLock(first, '/r', 3000 + STALE_MS + 3)).toEqual({ isHeld: true, holder: null })
+  // A take-over leaves no old lock folder behind.
+  expect(Object.keys(files).filter(file => file.includes('lock.old'))).toEqual([])
+})
+
+test('a session that saw the lock free, then was slow, does not also get it', async () => {
+  const files = { '/r/x': '' }
+  const dirs = new Map<string, number>()
+  const first = fakeIo({ files, dirs, session: 's1' })
+  const second = fakeIo({ files, dirs, session: 's2' })
+  await writeJob(first, '/r', job('0')) // the state folder exists and is claimed
+
+  // The second session is held just before its first change to the lock.
+  let release = () => {}
+  const gate = new Promise<void>(resolve => (release = resolve))
+  const write = second.writeFile
+  const run = second.run
+  second.writeFile = async (file, text) => {
+    await gate
+
+    return write(file, text)
+  }
+  second.run = async argv => {
+    if (argv[0] === 'mkdir' || argv[0] === 'mv') await gate
+
+    return run(argv)
+  }
+  const slow = takeLock(second, '/r', 1000)
+  for (let tick = 0; tick < 100; tick++) await Promise.resolve()
+
+  expect(await takeLock(first, '/r', 1000)).toEqual({ isHeld: true, holder: null })
+  release()
+  expect((await slow).isHeld).toBe(false)
+  expect(await takeLock(first, '/r', 1001)).toEqual({ isHeld: true, holder: null })
+})
+
+test('sessions that take a free lock at the same moment: exactly one holds it', async () => {
+  for (let round = 0; round < 20; round++) {
+    const files = { '/r/x': '' }
+    const dirs = new Map<string, number>()
+    const sessions = ['a', 'b', 'c'].map(session => fakeIo({ files, dirs, session }))
+    const taken = await Promise.all(sessions.map(io => takeLock(io, '/r', 1000)))
+    expect(taken.filter(result => result.isHeld).length).toBe(1)
+  }
+})
+
+test('sessions that take over a stale lock at the same moment: exactly one holds it', async () => {
+  const files = { '/r/x': '' }
+  const dirs = new Map<string, number>()
+  await takeLock(fakeIo({ files, dirs, session: 'gone' }), '/r', 1000)
+  const sessions = ['a', 'b', 'c'].map(session => fakeIo({ files, dirs, session }))
+  const later = 1000 + STALE_MS + 1
+  const taken = await Promise.all(sessions.map(io => takeLock(io, '/r', later)))
+
+  expect(taken.filter(result => result.isHeld).length).toBe(1)
+  const holder = sessions[taken.findIndex(result => result.isHeld)]!
+  expect(await takeLock(holder, '/r', later + 1)).toEqual({ isHeld: true, holder: null })
+})
+
+test('a job that would not read back is not written', async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  // It asks, and does not say where it goes back to: parseJob refuses such a file.
+  const broken = { ...job('1'), stage: 'needs-human' as const, question: 'q', stoppedIn: null }
+  let error: unknown = null
+  await writeJob(io, '/r', broken).catch(caught => (error = caught))
+
+  expect(error).not.toBe(null)
+  expect(Object.keys(io.files).some(file => file.endsWith('job.json'))).toBe(false)
+})
+
+test('job folders beyond the first 200 are counted, not dropped in silence', async () => {
+  const files: Record<string, string> = { '/r/x': '' }
+  for (let i = 100; i < 305; i++) {
+    const j = { ...job(String(i)), updatedAt: i }
+    files[path(j.id)] = JSON.stringify(j)
+  }
+  const read = await readJobs(fakeIo({ files }), '/r')
+
+  expect(read.jobs.length).toBe(200)
+  expect(read.note).toBe('5 job folders not read')
+})
+
+test('a state folder that is inside the repo is not used', async () => {
+  const io = fakeIo({ files: { '/r/x': '' }, stateDir: '/r/.cache/state' })
+  const INSIDE = 'The state folder is inside the repo. It is not used.'
+
+  expect(await readJobs(io, '/r')).toEqual({ jobs: [], skipped: 0, note: INSIDE })
+  let error: unknown = null
+  await writeJob(io, '/r', job('1')).catch(caught => (error = caught))
+  expect(String(error)).toContain(INSIDE)
+  expect(await takeLock(io, '/r', 1000)).toEqual({ isHeld: false, holder: null })
+  expect(Object.keys(io.files)).toEqual(['/r/x'])
 })
 
 test('SHA-256', async () => {
@@ -165,5 +257,5 @@ test('a state folder records its repository, and one that belongs to another is 
   expect(error).not.toBe(null)
   expect(Object.keys(io.files).some(file => file.includes('2-add-a-thing'))).toBe(false)
   expect(await takeLock(io, '/r', 1000)).toEqual({ isHeld: false, holder: null })
-  expect(io.files[`${DIR}/lock`]).toBe(undefined)
+  expect(Object.keys(io.files).some(file => file.includes('lock'))).toBe(false)
 })

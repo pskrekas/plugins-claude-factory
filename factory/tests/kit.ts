@@ -95,6 +95,8 @@ export function engine(
     // The working tree the session is in, and the main checkout when it differs.
     root: '/r',
     repoRoot: null as string | null,
+    // What git answers as the top of the working tree; by default the session's folder.
+    gitTop: null as string | null,
     cwds: [] as (string | undefined)[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
   }
@@ -198,7 +200,7 @@ export function engine(
   on('process.run', (_, e) => {
     // The top of the working tree: answered here, and not counted as a run.
     if (e.argv.join(' ') === 'git rev-parse --show-toplevel') {
-      return { value: { exitCode: 0, stdout: seen.root + '\n', stderr: '' } as never }
+      return { value: { exitCode: 0, stdout: (seen.gitTop ?? seen.root) + '\n', stderr: '' } as never }
     }
     seen.cwds.push(e.init?.cwd)
     seen.ran.push(e.argv.join(' '))
@@ -246,10 +248,18 @@ export const COMPOSE = {
 // An Io held in memory, for code that takes an Io and needs no engine: a file
 // map, a session id, a clock. `git ls-files` says whether .factory is tracked.
 export function fakeIo(
-  world: { files?: Record<string, string>; session?: string; now?: number } = {},
+  world: {
+    files?: Record<string, string>
+    // Folders made with mkdir, shared by the sessions of one test.
+    dirs?: Map<string, number>
+    session?: string
+    now?: number
+    stateDir?: string
+  } = {},
 ) {
   const files = world.files ?? {}
-  const isDir = (path: string) => Object.keys(files).some(file => file.startsWith(path + '/'))
+  const dirs = world.dirs ?? new Map<string, number>()
+  const isDir = (path: string) => dirs.has(path) || Object.keys(files).some(file => file.startsWith(path + '/'))
   const io = {
     files,
     session: world.session ?? 'session-1',
@@ -261,12 +271,12 @@ export function fakeIo(
     root: async () => '/r',
     remote: async () => null,
     sessionId: async () => io.session,
-    stateDir: async () => '/state',
+    stateDir: async () => world.stateDir ?? '/state',
     stat: async (path: string) => {
       const text = files[path]
       if (text !== undefined) return { kind: 'file' as const, size: text.length, mtimeMs: 0, realPath: path }
 
-      return isDir(path) ? { kind: 'dir' as const, size: 0, mtimeMs: 0, realPath: path } : null
+      return isDir(path) ? { kind: 'dir' as const, size: 0, mtimeMs: dirs.get(path) ?? 0, realPath: path } : null
     },
     isLink: async () => false,
     readFile: async (path: string) => {
@@ -289,6 +299,32 @@ export function fakeIo(
     },
     run: async (argv: string[]) => {
       io.ran.push(argv.join(' '))
+      const done = (ok: boolean) => ({ exitCode: ok ? 0 : 1, stdout: '', stderr: '' })
+      const [program, a, b] = argv
+      // mkdir makes a folder only if nothing is there: it is the atomic step of the lock.
+      if (program === 'mkdir' && a !== undefined) {
+        if (isDir(a) || files[a] !== undefined) return done(false)
+        dirs.set(a, io.time)
+
+        return done(true)
+      }
+      if (program === 'mv' && a !== undefined && b !== undefined) {
+        if (!isDir(a)) return done(false)
+        for (const file of Object.keys(files).filter(name => name.startsWith(a + '/'))) {
+          files[b + file.slice(a.length)] = files[file] ?? ''
+          delete files[file]
+        }
+        dirs.delete(a)
+        dirs.set(b, io.time)
+
+        return done(true)
+      }
+      if (program === 'rm' && a === '-r' && b !== undefined) {
+        for (const file of Object.keys(files).filter(name => name.startsWith(b + '/'))) delete files[file]
+        dirs.delete(b)
+
+        return done(true)
+      }
 
       return { failed: 'not-found' as const }
     },

@@ -8,6 +8,7 @@ import type { Tone } from '../core/layout'
 import { emptyModel } from '../core/model'
 import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
+import { trustedTop } from '../core/top'
 import type { Io } from './io'
 import { init } from './init'
 import { whereText } from './jobs'
@@ -69,6 +70,11 @@ export const register: Register = (on, options) => {
     // worktree `$.session.repo()` names the main checkout, which is not where
     // this session's files and branch are.
     const tops = new Map<string, string>()
+    const realOf = (path: string) =>
+      $.fs
+        .stat(path, { resolve: true })
+        .then(found => found.realPath ?? null)
+        .catch(() => null)
     const root = async () => {
       const at = await $.session.root().catch(() => $.session.cwd())
       const known = tops.get(at)
@@ -78,7 +84,8 @@ export const register: Register = (on, options) => {
         .run(['git', 'rev-parse', '--show-toplevel'], { cwd: at, env, timeoutMs: GIT_TOP_MS })
         .then(done => (done.exitCode === 0 ? done.stdout.trim() : ''))
         .catch(() => '')
-      const found = top !== '' ? top : at
+      // Git's answer is used only when the session really is inside it.
+      const found = trustedTop((await realOf(at)) ?? at, top === '' ? null : await realOf(top))
       tops.set(at, found)
 
       return found
