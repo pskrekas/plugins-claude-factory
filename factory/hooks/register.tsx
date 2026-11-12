@@ -70,6 +70,15 @@ export const register: Register = (on, options) => {
           .repo()
           .then(repo => repo?.remote ?? null)
           .catch(() => null),
+      stat: path =>
+        $.fs
+          .stat(path, { resolve: true })
+          .then(found =>
+            found.realPath === undefined
+              ? null
+              : { kind: found.kind, size: found.size, realPath: found.realPath },
+          )
+          .catch(() => null),
       readFile: path =>
         $.fs
           .read(path)

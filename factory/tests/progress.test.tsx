@@ -4,7 +4,7 @@ import { matchGlob, nameOf, parseOwed, parseProgress } from '../core/progress'
 import { parseSettings } from '../core/settings'
 import { START, cmd, engine, paneText } from './kit'
 
-const P = { done: '^- \\[x\\]', open: '^- \\[ \\]', blocked: 'BLOCKED' }
+const P = { done: '- [x]', open: '- [ ]', blocked: 'BLOCKED' }
 
 test('checkboxes give a percent', async () => {
   expect(parseProgress('- [x] a\n- [x] b\n- [ ] c\ntext', P)).toEqual({
@@ -30,6 +30,12 @@ test('the last blocked line is kept, cleaned', async () => {
 test('a later resume clears the block', async () => {
   expect(parseProgress('BLOCKED: x\nRESUMED 12:00\n', P).blocked).toBe(null)
   expect(parseProgress('BLOCKED: x\nUNBLOCKED\n- [ ] a', P).blocked).toBe(null)
+})
+
+test('marks are plain text, not patterns, and nested boxes count', async () => {
+  expect(parseProgress('  - [x] a\n- [ ] b\n.*', { done: '- [x]', open: '.*', blocked: 'BLOCKED' })).toEqual(
+    { done: 1, open: 1, percent: 50, blocked: null },
+  )
 })
 
 test('owed counts open boxes', async () => {
@@ -109,4 +115,51 @@ test('a missing progress folder shows nothing and no error', async ($, on) => {
   const rows = await paneText($)
   expect(rows).not.toContain('PROGRESS')
   expect(rows.some(row => row.includes('failed'))).toBe(false)
+})
+
+test('a progress file that is a link to a file outside the repo is not read', async ($, on) => {
+  const world = engine(on, {
+    files: {
+      '/r/.claude/factory.json': SETTINGS,
+      '/r/docs/a/progress.md': '',
+      '/secret/key': '# SECRET\n- [x] a\nBLOCKED: token 123',
+      '/r/.claude/owed.md': '',
+      '/secret/owed': '- [ ] a\n- [ ] b',
+    },
+    links: { '/r/docs/a/progress.md': '/secret/key', '/r/.claude/owed.md': '/secret/owed' },
+  })
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  const rows = await paneText($)
+  expect(rows.some(row => row.includes('SECRET') || row.includes('token'))).toBe(false)
+  expect(rows.some(row => row.includes('OWED'))).toBe(false)
+  expect(world.reads.some(path => path.includes('secret'))).toBe(false)
+})
+
+test('a file over 1 MiB is skipped without reading it', async ($, on) => {
+  const world = engine(on, {
+    files: {
+      '/r/.claude/factory.json': SETTINGS,
+      '/r/docs/a/progress.md': '# Big\n' + '- [x] a\n'.repeat(140_000),
+    },
+  })
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  expect((await paneText($)).some(row => row.startsWith('Big'))).toBe(false)
+  expect(world.reads).not.toContain('/r/docs/a/progress.md')
+})
+
+test('a settings file that is a link to a file outside the repo is not used', async ($, on) => {
+  const world = engine(on, {
+    files: { '/r/.claude/factory.json': '', '/elsewhere/s.json': '{"checks":[{"name":"a","run":["x"]}]}' },
+    links: { '/r/.claude/factory.json': '/elsewhere/s.json' },
+  })
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  const rows = await paneText($)
+  expect(rows).toContain('No settings file. Run /factory init.')
+  expect(world.ran).toEqual([])
 })

@@ -25,23 +25,32 @@ test('unknown and phase 2 keys are ignored', async () => {
   expect(parseSettings('{"factory": {"slots": 2}, "zzz": 1}').error).toBe(null)
 })
 
-test('progress gets checkbox patterns by default', async () => {
+test('progress gets checkbox marks by default', async () => {
   expect(parseSettings('{"progress": {"files": "docs/*/p.md"}}').settings.progress).toEqual({
     files: 'docs/*/p.md',
-    done: '^- \\[x\\]',
-    open: '^- \\[ \\]',
+    done: '- [x]',
+    open: '- [ ]',
     blocked: 'BLOCKED',
   })
+  expect(
+    parseSettings('{"progress": {"files": "a/*.md", "done": "DONE", "blocked": "STUCK"}}').settings
+      .progress,
+  ).toEqual({ files: 'a/*.md', done: 'DONE', open: '- [ ]', blocked: 'STUCK' })
+  expect(parseSettings('{"progress": {"files": "a/*.md", "done": 5}}').error).toBe(
+    'progress: wrong type',
+  )
 })
 
-test('a bad pattern is refused', async () => {
-  expect(parseSettings('{"ticketPattern": "("}')).toEqual({
-    settings: DEFAULTS,
-    error: 'ticketPattern: not a valid pattern',
-  })
-  expect(parseSettings('{"progress": {"files": "a/*.md", "done": "("}}').error).toBe(
-    'progress: not a valid pattern',
-  )
+test('a ticket pattern that is not valid, or that can run for a very long time, is refused', async () => {
+  const refused = { settings: DEFAULTS, error: 'ticketPattern: not a valid pattern' }
+  expect(parseSettings('{"ticketPattern": "("}')).toEqual(refused)
+  expect(parseSettings('{"ticketPattern": "(a+)+$"}')).toEqual(refused)
+  expect(parseSettings('{"ticketPattern": "(ab)*c"}')).toEqual(refused)
+  expect(parseSettings('{"ticketPattern": "(a|aa){2,}"}')).toEqual(refused)
+  expect(parseSettings('{"ticketPattern": "(a)\\\\1"}')).toEqual(refused)
+  expect(parseSettings(JSON.stringify({ ticketPattern: 'a'.repeat(201) }))).toEqual(refused)
+  expect(parseSettings('{"ticketPattern": "PROJ-(\\\\d+)"}').settings.ticketPattern).toBe('PROJ-(\\d+)')
+  expect(parseSettings('{"ticketPattern": "[A-Z]{2,5}-\\\\d+"}').error).toBe(null)
 })
 
 test('ports map becomes a list', async () => {

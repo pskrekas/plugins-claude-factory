@@ -325,7 +325,7 @@ optional. Example with neutral values:
     "full": [["npm", "run", "lint"], ["npm", "test"], ["npm", "run", "build"]]
   },
   "progress": { "files": "docs/plans/*/progress.md",
-                "done": "^- \\[x\\]", "open": "^- \\[ \\]", "blocked": "BLOCKED" },
+                "done": "- [x]", "open": "- [ ]", "blocked": "BLOCKED" },
   "checks": [
     { "name": "cloud account", "run": ["cloud", "config", "get", "account"], "want": "me@example.com" },
     { "name": "disk", "minFreeGb": 10 }
@@ -347,8 +347,13 @@ optional. Example with neutral values:
   a model id in one place.
 - `stations.<role>` can name a prompt file in the repo that replaces the plugin's own
   agent prompt for that role. `null` uses the plugin's.
-- `progress`: a percent is done lines over done plus open lines. The default patterns
-  are markdown checkboxes.
+- `progress`: a percent is done lines over done plus open lines. `done`, `open` and
+  `blocked` are plain text marks, never patterns: a line is done or open when it starts
+  with the mark, and blocked when it holds the blocked mark. The defaults are markdown
+  checkboxes. `progress.files` and `owed` must be paths inside the repo, and a file
+  that is a link to somewhere outside the repo is not read.
+- `ticketPattern` is a regular expression. One that can run for a very long time (a
+  repeated group, a back-reference, over 200 characters) is refused.
 - `owed`: a markdown file of checkboxes; open boxes are the count.
 - With no settings file: no tracker, no factory; the panel shows AGENTS, WORKTREES and
   the branch's pull request when the remote is a known PR host.
@@ -417,8 +422,11 @@ comment; the plugin checks before it sends.
 - **Consent for commands.** A settings file arrives with a clone, and it names
   commands. The plugin runs none of them (checks, gate, a custom station prompt) until
   the person has seen the list and approved it. The approval is stored outside the
-  repo (`$.store`), keyed by the repo's path and a hash of the commands; any change to
-  the commands asks again. Until then the panel shows "settings not approved" and the
+  repo (`$.store`), keyed by the repo's path, as the full list of approved command
+  lines (never a digest); a command that is not in the list asks again. `/factory
+  approve` allows only the lines the panel showed, for the repo it showed them for. A
+  command is shown in full, in printable ASCII; one with a control character is
+  refused. Until then the panel shows "settings not approved" and the
   general parts only. This is part of phase 1.
 - **One orchestrator per repo.** `.factory/lock` holds the session id and a heartbeat
   time. A second session shows the line read-only and says who holds the lock. A lock

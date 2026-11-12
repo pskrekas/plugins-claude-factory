@@ -69,6 +69,8 @@ export function engine(
     remote?: string | null
     run?: (argv: readonly string[]) => Run | undefined
     agents?: unknown[]
+    // A path that is a symbolic link, and the real path it leads to.
+    links?: Record<string, string>
   },
 ) {
   const seen = {
@@ -78,6 +80,7 @@ export function engine(
     toasts: [] as string[],
     sounds: 0,
     writes: [] as string[],
+    reads: [] as string[],
     isOpen: false,
     root: '/r',
     clock: mock.clock(on, { now: world.now ?? 0 }),
@@ -117,8 +120,27 @@ export function engine(
   on('agent.list', () => ({ value: (world.agents ?? []) as never }))
   on('session.repo', () => ({ value: { root: seen.root, remote: world.remote ?? null } as never }))
   on('session.cwd', () => ({ value: seen.root }))
+  const real = (path: string) => world.links?.[path] ?? path
+  const isDir = (path: string) =>
+    Object.keys(seen.files).some(file => file.startsWith(path.replace(/\/$/, '') + '/'))
+  on('fs.stat', (_, e) => {
+    const target = real(e.path)
+    const text = seen.files[target]
+    if (text === undefined && !isDir(target)) throw new Error('ENOENT: no such file ' + e.path)
+
+    return {
+      value: {
+        kind: text === undefined ? 'dir' : 'file',
+        size: text?.length ?? 0,
+        mtimeMs: 0,
+        isLink: target !== e.path,
+        realPath: target,
+      } as never,
+    }
+  })
   on('fs.read', (_, e) => {
-    const text = seen.files[e.path]
+    seen.reads.push(e.path)
+    const text = seen.files[real(e.path)]
     if (text === undefined) throw new Error('ENOENT: no such file ' + e.path)
 
     return { value: text }

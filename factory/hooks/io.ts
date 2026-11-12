@@ -12,6 +12,9 @@ export type Io = {
   // The repository's root, or the working directory outside a repository.
   root: () => Promise<string>
   remote: () => Promise<string | null>
+  // What a path is, how large, and where it really is once every symbolic
+  // link is followed; null when there is nothing there.
+  stat: (path: string) => Promise<{ kind: 'file' | 'dir' | 'other'; size: number; realPath: string } | null>
   // A file's text, or null when it cannot be read.
   readFile: (path: string) => Promise<string | null>
   // The names in a directory (folders end with '/'), or [] when it cannot be listed.

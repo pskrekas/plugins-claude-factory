@@ -54,14 +54,38 @@ function argvProblem(v: unknown): string | null {
   return v.some(arg => CONTROL_CHAR.test(arg)) ? CONTROL : null
 }
 
+const MAX_PATTERN = 200
+const MAX_MARK = 100
+
+// A pattern from a settings file runs before anyone approved that file, so it
+// must not be able to run for a very long time. It is refused when it is not a
+// valid pattern, is long, has a back-reference, or repeats a group: `(a+)+` and
+// its relatives are what make a pattern slow, and none of them is needed to
+// find a ticket id in a branch name.
 function isPattern(source: string): boolean {
+  if (source.length > MAX_PATTERN) return false
   try {
     new RegExp(source)
-
-    return true
   } catch {
     return false
   }
+  let inClass = false
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i]
+    if (char === '\\') {
+      const next = source[i + 1] ?? ''
+      if (!inClass && (/[1-9]/.test(next) || next === 'k')) return false
+      i++
+    } else if (inClass) {
+      if (char === ']') inClass = false
+    } else if (char === '[') {
+      inClass = true
+    } else if (char === ')' && /[*+?{]/.test(source[i + 1] ?? '')) {
+      return false
+    }
+  }
+
+  return true
 }
 
 // A path the plugin reads must stay in the repo: what it finds there is shown
@@ -99,16 +123,16 @@ function tracker(v: unknown): Parsed<Settings['tracker']> {
 function progress(v: unknown): Parsed<Settings['progress']> {
   if (!isObject(v) || !isText(v.files)) return { no: WRONG }
   if (!isInside(v.files)) return { no: OUTSIDE }
-  const patterns = { done: '^- \\[x\\]', open: '^- \\[ \\]', blocked: 'BLOCKED' }
+  // Plain text marks, never patterns (see core/progress.ts).
+  const marks = { done: '- [x]', open: '- [ ]', blocked: 'BLOCKED' }
   for (const key of ['done', 'open', 'blocked'] as const) {
     const given = v[key]
     if (given === undefined) continue
-    if (!isText(given)) return { no: WRONG }
-    if (!isPattern(given)) return { no: BAD_PATTERN }
-    patterns[key] = given
+    if (!isText(given) || given.length > MAX_MARK || CONTROL_CHAR.test(given)) return { no: WRONG }
+    marks[key] = given
   }
 
-  return { ok: { files: v.files, ...patterns } }
+  return { ok: { files: v.files, ...marks } }
 }
 
 function checks(v: unknown): Parsed<CheckSpec[]> {

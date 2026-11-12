@@ -2,12 +2,13 @@
 // plain files of the repo: reading them runs nothing, so no approval is needed.
 import type { ProgressState } from '../../core/model'
 import { nameOf, parseOwed, parseProgress, segmentPattern } from '../../core/progress'
+import { readInside } from './files'
 import type { Io } from '../io'
 import type { Reader } from '../refresh'
 
 const MAX_FILES = 8
 const MAX_CANDIDATES = 50
-const MAX_CHARS = 1024 * 1024
+const MAX_BYTES = 1024 * 1024
 
 const join = (base: string, name: string) => (base === '' ? name : `${base}/${name}`)
 
@@ -44,16 +45,13 @@ export const progressReader: Reader = {
     const items: ProgressState[] = []
     if (progress) {
       for (const path of await expand(io, ctx.root, progress.files)) {
-        const text = await io.readFile(`${ctx.root}/${path}`)
-        if (text === null || text.length > MAX_CHARS) continue
+        const text = await readInside(io, ctx.root, path, MAX_BYTES)
+        if (text === null) continue
         items.push({ name: nameOf(text, path), path, ...parseProgress(text, progress) })
       }
     }
-    const owedText = owed ? await io.readFile(`${ctx.root}/${owed}`) : null
+    const owedText = owed ? await readInside(io, ctx.root, owed, MAX_BYTES) : null
 
-    return {
-      progress: items,
-      owed: owedText === null || owedText.length > MAX_CHARS ? null : parseOwed(owedText),
-    }
+    return { progress: items, owed: owedText === null ? null : parseOwed(owedText) }
   },
 }
