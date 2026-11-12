@@ -509,12 +509,17 @@ The fence around a shell is a check of text and does not hold (the reviews of ph
 person's machine.
 
 - **The builder has no shell on the person's machine.** Its agent type has no `Bash`.
-  It has one tool of the plugin; the plugin runs each command of it with `docker exec`
-  in the job's container (`docs/notes/r2c-check.md`).
-- **One container for each job**, made when the job starts and removed when it ends.
-  It sees one folder: the job's worktree, mounted at the same path. It does not see
-  the person's home, the repository's git folder, the state folder, or the Docker
-  socket. It runs as the person's user id, with no added rights.
+  It has one tool of the plugin; the plugin runs each command of it in a container
+  (`docs/notes/r2c-check.md`).
+- **One container for each command of a builder** (`docker run --rm`), gone when the
+  command ends, with every program the command started. It sees one folder: the job's
+  worktree, mounted at the same path. It does not see the person's home, the
+  repository's git folder, the state folder, or the Docker socket. It runs as the
+  person's user id, with no added rights. (First written as one container for each
+  job. Changed in the build: a program left alive in a job's container can swap a
+  file for a link while the person's machine reads the folder.)
+- **One side at a time.** For a job that builds in a container, a file tool on the
+  person's machine and a command in a container never run at the same time.
 - **The gate runs in a container too**: its commands are code of the branch. It gets
   its own container over the gate's clean copy.
 - **The builder does not use git.** The git folder is not in the container. The plugin

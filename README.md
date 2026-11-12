@@ -70,17 +70,17 @@ It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
 
 ### Before you run the line
 
-- **The builder agent has a shell with your rights.** No sandbox is around it. A fence (below) refuses what the line must never do, but for shell commands a fence is a check of text, and text can hide what it does. Run the line on a repository and on issues that you trust, or inside a container or a virtual machine. An issue is text that someone else wrote; the agents are told to read it as data, and that is a rule for a model, not a wall.
+- **Where the builder's and the gate's commands run.** In a container (see "The container"). The builder agent has no shell on your machine: its shell is a tool of the plugin, and each command runs in a container that holds the job's code folder and nothing else of your machine. The gate's commands run in a container too. A container is a strong wall, not a perfect one: it shares your machine's kernel, and with the network on it can reach the internet. An issue is text that someone else wrote; the agents are told to read it as data, and that is a rule for a model, not a wall.
 - **It costs money or quota.** Each station is an agent. Set the limits (`factory.costLimitUsd`, `factory.timeLimitMin`, `factory.slots`, `factory.maxRounds`) before the first run, and try `/factory plan` first.
-- **The gate runs the branch's code** with your rights, before a reviewer has read it.
-- **What does not depend on the fence:** the gate runs in its own clean copy of one commit; what the plugin itself pushes is the commit the gate judged, to the job's own branch; the plugin never merges; your branch protection on GitHub still holds. **What does depend on it:** a builder that gets past the fence has your `git` and your `gh` login, and can read and write what you can.
+- **The gate runs the branch's code** before a reviewer has read it: in its container, or, only if you chose `"container": false`, with your rights on your machine.
+- **What does not depend on the container or the fence:** the gate runs in its own clean copy of one commit; what the plugin itself pushes is the commit the gate judged, to the job's own branch; the plugin never merges; your branch protection on GitHub still holds. **What a container holds:** the job's code and no login of yours. With the network on, that code can leave through the network, and what the builder downloads can come in.
 - **A pushed round starts your CI.** The plugin pushes a job's branch after the fast checks passed, before a reviewer has read it. A workflow that runs on a push runs the branch's code with the secrets that workflow has. A branch that changes a protected path (put `.github/` there) is never pushed.
-- **What goes public.** The pull request is what an agent wrote, pushed to your repository: a builder can commit anything it can read. On the issue the plugin posts its own fixed texts, the name of a limit, the pull request's address, the names of changed test files, and Intake's question or refusal for the item's author. A builder's or a reviewer's own words are never posted there: you read them in the pane.
+- **What goes public.** The pull request is what an agent wrote, pushed to your repository: the plugin commits every file the builder leaves in the job's code folder. On the issue the plugin posts its own fixed texts, the name of a limit, the pull request's address, the names of changed test files, and Intake's question or refusal for the item's author. A builder's or a reviewer's own words are never posted there: you read them in the pane.
 - **Who can speak to the agents.** Only an issue that carries the mark runs, and only you put the mark on. Of an issue's comments, only those of its author and yours reach an agent.
 
 ### Start
 
-1. `/factory init` writes a first `.claude/factory.json`. Edit it: the gate lists must start with the install command. Commit it to the base branch and push: the gate reads the file from there.
+1. `/factory init` writes a first `.claude/factory.json`. Edit it: the gate lists must start with the install command, and `factory.container.image` must be an image that holds the tools of your repo. Get the image (`docker pull node:22`): the plugin fetches none. Commit the file to the base branch and push: the gate and the container settings are read from there.
 2. `/factory`, read the commands in the pane, then `/factory approve`.
 3. Put the label `factory` on an issue. Only you put it there: it is what lets an issue into the line.
 4. `/factory plan` to see what Intake says. `/factory run` to run the line.
@@ -92,7 +92,7 @@ It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
 | --- | --- | --- |
 | Intake | one agent, the strongest model, no shell | accepts the item (with a risk: low, medium, high), asks its author one question, or refuses it |
 | Spec | one agent, no shell | `spec.md`: what to build and how it is checked |
-| Build | one agent with a shell, in the job's own worktree and branch `factory/<job>` | commits |
+| Build | one agent, in the job's own worktree and branch `factory/<job>`. Its commands run in a container | the code of the change. The plugin commits it (`Factory: item <id>, round <n>`) |
 | Gate | the plugin's code | runs the fast checks. A fail goes back to Build with the report. On a pass the plugin pushes the judged commit and opens a draft pull request |
 | Review | one agent for each routed reviewer (`code`; `ux` and `ui` for a screen change; `security`), no shell | each says OK or CHANGES. One CHANGES sends the job back to Build |
 | Approve | one agent, no shell | READY, or one question for you. On READY the plugin brings the base into the branch, runs the full checks on that commit, pushes it, and marks the pull request ready. A commit that landed after the review is not marked ready: the job asks you |
@@ -106,14 +106,31 @@ A step that cannot be done (a push that is refused, a label that cannot be set) 
 
 Agents start only from the plugin's own running code, in the job's folder. The session's model is not told about them and does not see their reports: you can keep using the chat while the line runs. One gate runs at a time, and the other jobs wait while it runs. `/factory run` in a new session goes on with every job from where it was (what happens to a running agent when you close the session is not checked yet). If the line has something to do and nothing of its own is running to do it, the pane's timer says `the line waits`: `/factory run` goes on.
 
+### The container
+
+No code that an agent wrote, and no command that an agent chose, runs on your machine.
+
+- **The builder's shell.** The builder has no `Bash`. It has one tool of the plugin, and the plugin runs each command of it as `docker run --rm … sh -c <command>`: a container of its own, which is gone when the command ends, with every program the command started. The command is one argument of the shell inside the container; your machine's shell never reads it.
+- **What a container sees.** One folder: the job's worktree (for the gate: the gate's clean copy), at its own path. Not your home folder, not the repository's git folder, not the factory's state, not the Docker socket. It runs as your user id (so the files stay yours), with no added right (`--cap-drop ALL`, `no-new-privileges`), at most 512 processes, and the memory and CPUs of the settings. The folder's `.git` file is read-only inside.
+- **What stays between two commands.** The files of the code folder, and nothing else: no running program, no variable, no file outside the folder (a package cache under `/tmp` is gone; `node_modules` in the folder stays).
+- **One side at a time.** While a command of a job runs in its container, the builder's file tools on that job are refused, and the other way round. Each file call is judged by the fence again at the moment it runs. If Docker does not confirm that a command's container is gone, the job's folder stays closed until it does. So nothing in a container can change a path while your machine reads it.
+- **No git in the container.** The builder does not commit. When it ends, the plugin commits every file it left in the code folder, under a fixed message. A git repository of its own inside the folder is refused.
+- **The gate.** Its commands run with `docker exec` in a container over the gate's clean copy; the container is made new for each gate run and removed after.
+- **The settings** are `factory.container` on the base branch: `{ "image": "node:22", "network": "on", "memory": "4g", "cpus": 2 }`. Only `image` is needed. You approve the line the pane shows (`[container] node:22 · network on · memory 4g · cpus 2`); a changed image or network needs a new approval. The plugin fetches no image: run `docker pull <image>` yourself. The image needs `sh` and the tools your gate and your builder use.
+- **The network** is `on` by default, so that an install works. With `"network": "none"` nothing in the container reaches the network: then the image must already hold what the install needs.
+- **No container, no factory.** `/factory run` does not start when `factory.container` is not set, not approved, or when Docker or the image is not there.
+- **On this machine, if you say so.** `"container": false` runs the builder's commands (`Bash`) and the gate's commands on your machine, with your rights, behind the fence below. The pane shows `[container] none: the builder and the gate run on this machine`, and you approve exactly that. Use it only on a repository and on issues that you trust.
+- **Its limits.** A container shares your machine's kernel. With the network on, a command can send the job's code anywhere and download anything. `git` does not work inside (the git folder is not there), so a gate command that needs git fails. The commands in `factory.forbiddenCommands` are refused by a check of text, which is best effort (a command built from pieces can get past it); a container holds no login of yours, so such a command has nothing to act with. The one-side-at-a-time rule depends on Claude Code handing every file call of an agent to the plugin; that is checked for a shell call, not yet for each file tool (see the hand check).
+
 ### The fence
 
 Every tool call of an agent of the line goes through the plugin first.
 
 - **Files (the file tools).** With its read and write tools an agent reads only inside its job (the job's worktree and the job's folder) and writes one file, its report. Only the builder also writes code, in its worktree. A path is judged by where it really is, so a link that leads out of the job is refused.
-- **Shell (the builder only).** Refused: `git push`, `gh` and `az repos` (the plugin talks to the host), changes to git settings and refs, leaving the job's branch or moving another one (`git checkout <branch>`, `git switch`, `git branch -f`), any naming of the git folder, a write to a full path outside the job (scratch space under `/tmp` is allowed), the commands in `factory.forbiddenCommands` (put your deploy and release commands there), and a few forms the fence cannot read (a variable or a pattern in a program name, a write to a place only the shell knows, a shell inside a shell inside a shell). The shell can read anywhere you can.
+- **Shell on this machine (only with `"container": false`).** Refused: `git push`, `gh` and `az repos` (the plugin talks to the host), changes to git settings and refs, leaving the job's branch or moving another one (`git checkout <branch>`, `git switch`, `git branch -f`), any naming of the git folder, a write to a full path outside the job (scratch space under `/tmp` is allowed), the commands in `factory.forbiddenCommands` (put your deploy and release commands there), and a few forms the fence cannot read (a variable or a pattern in a program name, a write to a place only the shell knows, a shell inside a shell inside a shell). The shell can read anywhere you can.
 - **Twice is enough.** The same command refused twice stops the job and asks you.
-- **Its limit.** For shell commands this is best effort. A script that the builder writes and runs is not read by the fence.
+- **Its limit.** For shell commands this is best effort. A script that the builder writes and runs is not read by the fence. That is why the builder's commands run in a container unless you say otherwise.
+- **Shell in a container.** Only the commands in `factory.forbiddenCommands` are refused, as text.
 
 ### Limits and cost
 
@@ -166,8 +183,8 @@ The gate is the set of commands a job's branch must pass. Code runs it, no agent
 - **The commands come from the base branch.** The gate fetches `<baseBranch>` from `origin`, reads its last commit once, and reads `.claude/factory.json` of that commit: never the job's branch, never a file of a folder. The protected paths come from the same file. From then on it uses commit ids only, so a branch or a tag with a look-alike name is not read in the base's place.
 - **You approve them.** The pane lists them as `[gate] npm test`, and `/factory approve` allows them. An approval as a gate command does not make the command a check of the panel, and the other way round.
 - **It runs in a clean copy.** The gate reads the last commit of the job's branch `factory/<job>`, and runs the commands in a fresh working tree at that commit (`gate/<job>` in the state folder), which it removes after. A file that is not committed, a file git ignores, or a file git was told to overlook is not there. The copy holds no installed packages, so **the first command of each list must install them** (`["npm", "install"]`). `/factory init` writes it so for an npm repo.
-- **It runs the branch's code.** A gate command (a test run, a build) runs code that an agent wrote, with your rights on this machine, before any reviewer has read it. The gate checks which files changed, not what the code does.
-- **Files that are not committed are named.** If the job's worktree holds changed or new files that are not committed, the report lists them: the gate did not check them, and they are not in the pull request.
+- **It runs the branch's code.** A gate command (a test run, a build) runs code that an agent wrote, before any reviewer has read it: in the gate's container, or with your rights on this machine when the base branch says `"container": false`. The gate checks which files changed, not what the code does.
+- **Files that are not committed are named.** The plugin commits what the builder left before the gate runs. If the job's worktree still holds changed or new files that are not committed, the report lists them: the gate did not check them, and they are not in the pull request.
 - **Protected paths stop it.** A branch that changes, moves or deletes a protected path (`factory.protectedPaths`: a file, or a folder with everything under it; the settings file is always one) runs no command and waits for you.
 - **A command has ten minutes.** One that runs longer is a failure. The first command that fails ends the run.
 - **The report** is a file of the job, `round-<n>/checks.md` (or `merge-checks.md` for the full gate): a short summary, the end of each command's output (the engine keeps the first 4 MiB of what a command prints; the report says when the end is missing), and the test files and test or build settings the branch changed, for the reviewers and for you.
@@ -202,7 +219,8 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
     { "name": "disk", "minFreeGb": 10 }
   ],
   "ports": { "database": 5432 },
-  "owed": ".claude/owed.md"
+  "owed": ".claude/owed.md",
+  "factory": { "container": { "image": "node:22" } }
 }
 ```
 
@@ -218,12 +236,13 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 | `ports` | a name and a port on this machine. At most 20. |
 | `owed` | a markdown file; its open checkboxes are counted. |
 | `factory` | how the line runs: `slots` (2), `maxRounds` (3), `maxRisk` (`low`), `costLimitUsd` and `timeLimitMin` (`{ job, day }`), `minFreeDiskGb` (15), `stationTimeoutMin` (30), `prices`, `protectedPaths`, `forbiddenCommands`, `forbiddenCommentWords`, `models` (a tier for each role: `strongest`, `strong`, `fast`), `reviewers`. One refused value refuses the whole `factory` key. |
+| `factory.container` | where the builder's and the gate's commands run: `{ "image", "network": "on" or "none", "memory": "4g", "cpus": 2 }`, or `false` for this machine. Read from the base branch. See "The container". The factory will not run without it. |
 
 ## What it can reach
 
 The panel reads. It changes nothing but its own state and, when you ask, `.claude/factory.json`.
 
-- **It runs** `git` and `gh` (the full list is below), `df` for a disk check and `nc` for the ports a settings file names, `mkdir`, `mv` and `rm` on its own state folder, and, only after your approval, the commands a settings file names (the checks, and the gate's commands).
+- **It runs** `git`, `gh` and `docker` (the full lists are below), `id` for your user id, `df` for a disk check and `nc` for the ports a settings file names, `mkdir`, `mv` and `rm` on its own state folder, and, only after your approval, the commands a settings file names (the checks; and the gate's commands, in a container).
 - **It stores no password and no token.** `gh` uses your own login.
 - **It runs no command from a settings file until you approve it.** A settings file arrives with a clone, so the panel first shows `SETTINGS NOT APPROVED`, the number of commands and every command in full. `/factory approve` allows exactly the lines the pane showed while it was on screen, for that repo; a file the pane has not shown yet is shown first, and a second `/factory approve` allows it. Only your own Enter at the prompt can approve. The approved lines are kept outside the repo, for the repo and all its worktrees; a line that changes asks again.
 - **What an approval covers.** It covers the command line you read, not the code that command runs. A check must name a program on your `PATH` (never a file of the repo), runs with a `PATH` that leaves the repo out, and is not run when one of its arguments names a file of the repo. These are guards against the plain cases, not a boundary: a command that runs repo code by its nature (an inline script, a build tool) runs what the repo holds at that time. Approve a check as you would approve the same command in a shell.
@@ -266,6 +285,9 @@ git rev-parse --verify refs/heads/factory/<job>^{commit}
 git show <commit>:.claude/factory.json
 git diff --name-only --no-renames -z <commit>...<commit>
 git … status --porcelain --no-renames --untracked-files=all -z
+git … add -A                                             (what the builder left)
+git … diff --cached --raw --no-renames --no-abbrev -z
+git … commit --no-verify --no-gpg-sign -m "Factory: item <id>, round <n>"
 git diff --no-renames --no-ext-diff --no-textconv <commit>...<commit>
 
 gh label create <mark>:in-progress --force --description …
@@ -286,6 +308,21 @@ Each `gh` call of the second list ends with `-R <owner>/<name>`. The line's `git
 
 `git` reads the repository's own git settings, as it does when you type the command.
 
+### Every `docker` call
+
+`<name>` is `factory-job-<job>.<label>` or `factory-gate-<job>.<label>`; `<label>` is the name of the repository's state folder. `<folder>` is the job's worktree, or the gate's clean copy. `…` in the two `run` lines stands for the same words: `--name <name> --label factory.state=<label> --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory <m> --cpus <n> --network bridge|none --user <your uid>:<your gid> -e HOME=/tmp -v <folder>:<folder> -v <folder>/.git:<folder>/.git:ro -w <folder>`.
+
+```
+docker image inspect --format {{.Id}} <image>            (/factory run: is the image there)
+docker run --rm … --entrypoint sh <image> -c <command>   (one command of the builder)
+docker run -d … --entrypoint sleep <image> infinity      (the gate's container)
+docker exec -w <folder> <name> <a gate command>
+docker rm -f <name>
+docker ps -a --filter label=factory.state=<label> --format {{.Names}}
+```
+
+The plugin fetches no image, mounts no other folder, and never names the Docker socket.
+
 `claude plugin validate factory` prints exactly what it hooks and calls.
 
 ## Troubleshooting
@@ -299,6 +336,14 @@ Each `gh` call of the second list ends with `-R <owner>/<name>`. The line's `git
 **`Another session runs the line (…). Nothing was changed.`** Another Claude Code session in this repository holds the lock; the text names its folder. Run the command there, or close that session and wait five minutes.
 
 **`No gate, no factory: …`.** `/factory run` needs fast checks in `gate.fast`, in the settings file as it is on the base branch on the remote, and approved with `/factory approve`.
+
+**`No container, no factory: …`.** `set factory.container …`: add `"factory": { "container": { "image": "node:22" } }` (your image) to the settings file, commit it to the base branch and push. `the container settings are not approved`: read the `[container]` line in the pane, then `/factory approve`. `docker is not on this machine` or `docker does not answer`: install Docker, or start it. `the image … is not on this machine`: run the `docker pull` the message names.
+
+**The builder is told `A container of this job may still run …`.** Docker did not confirm that a command's container stopped. Start Docker; the builder's next command removes the container and goes on. A job that ends this way asks you: `/factory answer <id>` after Docker runs again.
+
+**The builder says a command `was not run`.** The message names the reason (Docker stopped, the image is gone, the container settings changed). Fix it; `/factory answer <id>` starts the station again.
+
+**The gate fails on a command that needs `git`.** The git folder is not in the container. Use a gate command that does not need it.
 
 **`Factory: an agent started outside the fence. The line is stopped.`** The plugin starts each agent and checks that its fence saw the start. This says it did not: the line stops itself. Tell the plugin's author; it means Claude Code changed how a plugin starts an agent.
 
