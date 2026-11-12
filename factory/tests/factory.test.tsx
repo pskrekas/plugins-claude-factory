@@ -64,8 +64,16 @@ test('the view: running jobs, then waiting ones, twenty at most', async () => {
   const waits = job('w', { stage: 'ready', pr: { number: 51, url: 'u' }, agentMs: 150_000 })
   const view = viewOf([waits, ...many], F, 3, null, NOON)
   expect(view?.jobs.length).toBe(20)
-  expect(view?.more).toBe(6)
+  expect([view?.running, view?.waiting, view?.moreRunning, view?.moreWaiting]).toEqual([25, 1, 6, 0])
+  expect(view?.counts).toEqual([3, 0, 0, 25, 0, 0, 0, 1])
   expect(view?.jobs[0]?.itemId).toBe('24')
+  // The job that waits is always in the view: it needs the person.
+  expect(view?.jobs.at(-1)?.itemId).toBe('w')
+
+  const waiting = Array.from({ length: 22 }, (_, i) => job('w' + i, { stage: 'ready', updatedAt: NOON + i }))
+  const crowd = viewOf([...many.slice(0, 8), ...waiting], F, null, null, NOON)
+  expect([crowd?.running, crowd?.waiting, crowd?.moreRunning, crowd?.moreWaiting]).toEqual([8, 22, 0, 10])
+  expect(crowd?.counts.at(-1)).toBe(22)
   expect(view?.queue).toBe(3)
   expect(view?.slots).toBe(2)
 

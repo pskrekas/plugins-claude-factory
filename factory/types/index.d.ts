@@ -76,10 +76,16 @@ export type JobView = {
 }
 
 export type FactoryView = {
-  // The running jobs, then the waiting ones; at most 20.
+  // Some of the running jobs, then some of the waiting ones; at most 20.
   jobs: JobView[]
+  // The jobs at each station, of all jobs: Queue, Intake … Approve, You.
+  counts: number[]
+  // How many jobs run and how many wait for the person, of all jobs.
+  running: number
+  waiting: number
   // Running and waiting jobs that are not in `jobs`.
-  more: number
+  moreRunning: number
+  moreWaiting: number
   // Items that carry the mark; null when it is not known.
   queue: number | null
   slots: number

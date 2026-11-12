@@ -6,9 +6,10 @@ import { safePath } from '../core/checks'
 import { rowsOf } from '../core/layout'
 import type { Tone } from '../core/layout'
 import { emptyModel } from '../core/model'
+import { displayWidth } from '../core/rows'
 import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
-import { trustedTop } from '../core/top'
+import { ancestorsOf } from '../core/top'
 import type { Io } from './io'
 import { init } from './init'
 import { whereText } from './jobs'
@@ -25,7 +26,6 @@ const MINIMUM = [2, 1, 322] as const
 const REFRESH_MS = 60_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
 const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
-const GIT_TOP_MS = 5_000
 
 // Theme keys, so the colours follow the person's theme.
 const COLOR: Record<Tone, string | undefined> = {
@@ -79,13 +79,17 @@ export const register: Register = (on, options) => {
       const at = await $.session.root().catch(() => $.session.cwd())
       const known = tops.get(at)
       if (known !== undefined) return known
-      const env = { PATH: safePath(await $.env.get('PATH').catch(() => undefined), at) }
-      const top = await $.process
-        .run(['git', 'rev-parse', '--show-toplevel'], { cwd: at, env, timeoutMs: GIT_TOP_MS })
-        .then(done => (done.exitCode === 0 ? done.stdout.trim() : ''))
-        .catch(() => '')
-      // Git's answer is used only when the session really is inside it.
-      const found = trustedTop((await realOf(at)) ?? at, top === '' ? null : await realOf(top))
+      // The nearest folder, from the session's own upward, that holds a `.git`;
+      // the session's folder when none does. Git is not asked (core/top.ts).
+      const real = (await realOf(at)) ?? at
+      let found = real
+      for (const dir of ancestorsOf(real)) {
+        const hasGit = await $.fs.exists(`${dir}/.git`).catch(() => false)
+        if (hasGit) {
+          found = dir
+          break
+        }
+      }
       tops.set(at, found)
 
       return found
@@ -271,7 +275,7 @@ export const register: Register = (on, options) => {
               </Text>
             )
           }
-          const gap = Math.max(1, columns - row.left.length - row.right.length)
+          const gap = Math.max(1, columns - displayWidth(row.left) - displayWidth(row.right))
 
           return (
             <Text bold={row.tone === 'head'} dimColor={row.tone === 'dim'} color={COLOR[row.tone]}>

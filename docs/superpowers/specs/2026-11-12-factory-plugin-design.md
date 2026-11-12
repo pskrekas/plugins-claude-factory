@@ -180,7 +180,7 @@ queued job; `w`, `t`, `o` open a MORE line.
 | `/factory` | Opens the pane. `/factory close` closes it. |
 | `/factory init` | Looks at the repo (remote, test commands, tracker) and writes a first `.claude/factory.json` for the person to edit. |
 | `/factory plan` | Dry run: runs Intake on the queue and shows accept or reject and the risk of each item. Builds nothing, writes nothing to the tracker. |
-| `/factory run` | One pass: reads the queue once, runs those items to their end (ready, a stop for the person, or rejected), continues the jobs already in `.factory/`, then stops. An item marked later waits for the next `/factory run`. `/factory run <id>` runs one. The `n` key in the pane is the same as `/factory run <next id>`. |
+| `/factory run` | One pass: reads the queue once, runs those items to their end (ready, a stop for the person, or rejected), continues the jobs already in the state folder, then stops. An item marked later waits for the next `/factory run`. `/factory run <id>` runs one. The `n` key in the pane is the same as `/factory run <next id>`. |
 | `/factory stop` | Starts no new station. Running agents finish their station. |
 | `/factory answer <id> <text>` | Gives a waiting job the person's answer; the job continues. |
 | `/factory reject <id> <reason>` | Ends a job; the reason goes to the tracker item. |
@@ -283,7 +283,7 @@ minutes, stand in for the cost limits, and the panel shows "cost unknown" (C15).
   state is the claim: another machine's `list` no longer returns the item, and the
   start comment names who runs it. An item that is `needs-human`, `done` or `rejected`
   is never picked up by `/factory run`; `/factory run <id>` runs it again on purpose.
-- **A lost `.factory/` folder.** An item that is `in-progress` in the tracker with no
+- **A lost state folder.** An item that is `in-progress` in the tracker with no
   local job folder is shown in NEEDS YOU as "claimed, no local state"; the person
   rejects it or runs it again by id.
 - **Frozen text.** `item.md` is written once, at intake. Later edits and comments on

@@ -6,11 +6,13 @@ import type { FactorySettings } from '../../core/factory-settings'
 import { isActive, isWaiting } from '../../core/job'
 import type { Job } from '../../core/job'
 import { todayOf } from '../../core/limits'
+import { countsFor } from '../../core/line'
 import type { FactoryView, JobView } from '../../core/model'
 import { readJobs } from '../jobs'
 import type { Reader } from '../refresh'
 
 const MAX_JOBS = 20
+const MAX_WAITING = 10
 const GH_TIMEOUT_MS = 15_000
 
 const viewOfJob = (job: Job, f: FactorySettings): JobView => ({
@@ -39,11 +41,21 @@ export function viewOf(
 ): FactoryView | null {
   if (jobs.length === 0 && queue === null && note === null) return null
   const newest = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
-  const open = [...newest.filter(isActive), ...newest.filter(isWaiting)]
+  const running = newest.filter(isActive)
+  const waiting = newest.filter(isWaiting)
+  // The view holds twenty jobs. The jobs that wait need the person, so they
+  // always get ten of the places, and more when few jobs run.
+  const showWaiting = Math.min(waiting.length, Math.max(MAX_WAITING, MAX_JOBS - running.length))
+  const showRunning = Math.min(running.length, MAX_JOBS - showWaiting)
 
   return {
-    jobs: open.slice(0, MAX_JOBS).map(job => viewOfJob(job, f)),
-    more: Math.max(0, open.length - MAX_JOBS),
+    jobs: [...running.slice(0, showRunning), ...waiting.slice(0, showWaiting)].map(job => viewOfJob(job, f)),
+    // The numbers are of all jobs, so the line is right also when some are not shown.
+    counts: countsFor(jobs, queue),
+    running: running.length,
+    waiting: waiting.length,
+    moreRunning: running.length - showRunning,
+    moreWaiting: waiting.length - showWaiting,
     queue,
     slots: f.slots,
     today: todayOf(jobs, now),

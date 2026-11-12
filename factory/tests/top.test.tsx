@@ -1,17 +1,14 @@
 import { expect, test } from 'claude-code/testing'
 
-import { trustedTop } from '../core/top'
+import { ancestorsOf } from '../core/top'
 import { START, cmd, engine, paneText } from './kit'
 
-test('the top of the working tree is trusted only when the session is inside it', async () => {
-  expect(trustedTop('/r', '/r')).toBe('/r')
-  expect(trustedTop('/r/packages/web', '/r')).toBe('/r')
-  expect(trustedTop('/evil', '/victim')).toBe('/evil')
-  expect(trustedTop('/r-other', '/r')).toBe('/r-other')
-  expect(trustedTop('/r', '/r/sub')).toBe('/r')
-  expect(trustedTop('/r', null)).toBe('/r')
-  expect(trustedTop('/r', '')).toBe('/r')
-  expect(trustedTop('/a/b', '/')).toBe('/a/b')
+test('a folder and the folders above it, nearest first', async () => {
+  expect(ancestorsOf('/a/b/c')).toEqual(['/a/b/c', '/a/b', '/a', '/'])
+  expect(ancestorsOf('/')).toEqual(['/'])
+  expect(ancestorsOf('/a/')).toEqual(['/a', '/'])
+  expect(ancestorsOf('relative/x')).toEqual(['relative/x'])
+  expect(ancestorsOf('/' + 'd/'.repeat(100)).length).toBe(40)
 })
 
 const CHECK = '{"checks":[{"name":"a","run":["x"]}], "owed": ".claude/owed.md"}'
@@ -19,13 +16,13 @@ const CHECK = '{"checks":[{"name":"a","run":["x"]}], "owed": ".claude/owed.md"}'
 test('a folder whose git config points at another repo does not read that repo', async ($, on) => {
   const world = engine(on, {
     files: {
-      '/evil/readme': 'x',
+      '/evil/.git/config': '[core]\n\tworktree = /victim\n',
+      '/victim/.git/HEAD': 'x',
       '/victim/.claude/factory.json': CHECK,
       '/victim/.claude/owed.md': '- [ ] a\n- [ ] b',
     },
   })
   world.root = '/evil'
-  world.gitTop = '/victim'
   await $.session.start(START)
   await $.command.run(cmd(''))
 
@@ -35,16 +32,44 @@ test('a folder whose git config points at another repo does not read that repo',
   expect(world.reads.some(path => path.startsWith('/victim'))).toBe(false)
 })
 
+test('a folder whose git config points at a folder above it does not read that folder', async ($, on) => {
+  const world = engine(on, {
+    files: {
+      '/home/me/downloads/evil/.git/config': '[core]\n\tworktree = /home/me\n',
+      '/home/me/.claude/factory.json': CHECK,
+      '/home/me/.claude/owed.md': '- [ ] a\n- [ ] b',
+    },
+  })
+  world.root = '/home/me/downloads/evil'
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  const rows = await paneText($, 60)
+  expect(rows).toContain('No settings file. Run /factory init.')
+  expect(world.reads.some(path => path.startsWith('/home/me/.claude'))).toBe(false)
+})
+
 test('a session started in a folder of the repo reads the repo top', async ($, on) => {
   const world = engine(on, {
     files: {
+      '/r/.git/HEAD': 'x',
       '/r/packages/web/index.ts': 'x',
       '/r/.claude/factory.json': '{"owed": ".claude/owed.md"}',
       '/r/.claude/owed.md': '- [ ] a',
     },
   })
   world.root = '/r/packages/web'
-  world.gitTop = '/r'
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  expect(await paneText($, 60)).toContain('OWED BY YOU 1')
+})
+
+test('outside any repository the session folder is the top', async ($, on) => {
+  const world = engine(on, {
+    files: { '/notes/today/.claude/factory.json': '{"owed": ".claude/owed.md"}', '/notes/today/.claude/owed.md': '- [ ] a' },
+  })
+  world.root = '/notes/today'
   await $.session.start(START)
   await $.command.run(cmd(''))
 

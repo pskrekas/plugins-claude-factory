@@ -9,13 +9,17 @@ test('status text with jobs', async () => {
   expect(statusText({ ...FULL, factory: VIEW })).toBe(
     'PROJ-12 · factory 2 run, 2 need you · 50% · 1 check wrong · blocked',
   )
-  const running = { ...VIEW, jobs: VIEW.jobs.filter(job => job.stage === 'review') }
+  const running = { ...VIEW, jobs: VIEW.jobs.filter(job => job.stage === 'review'), running: 1, waiting: 0 }
   expect(statusText({ ...FULL, factory: running })).toBe('PROJ-12 · factory 1 run · 50% · 1 check wrong · blocked')
-  const waiting = { ...VIEW, jobs: VIEW.jobs.filter(job => job.stage === 'ready') }
+  const waiting = { ...VIEW, jobs: VIEW.jobs.filter(job => job.stage === 'ready'), running: 0, waiting: 1 }
   expect(statusText({ ...FULL, factory: waiting })).toBe(
     'PROJ-12 · factory 0 run, 1 needs you · 50% · 1 check wrong · blocked',
   )
-  expect(statusText({ ...FULL, factory: { ...VIEW, jobs: [] } })).toBe('PROJ-12 · 50% · 1 check wrong · blocked')
+  expect(statusText({ ...FULL, factory: { ...VIEW, jobs: [], running: 0, waiting: 0 } })).toBe(
+    'PROJ-12 · 50% · 1 check wrong · blocked',
+  )
+  // The numbers are of all jobs, not only of those the view holds.
+  expect(statusText({ ...FULL, factory: { ...VIEW, running: 8, waiting: 22 } })).toContain('factory 8 run, 22 need you')
   expect(statusText({ ...FULL, task: null, progress: [], checks: [], factory: running })).toBe('factory 1 run')
 })
 
@@ -55,7 +59,7 @@ test('the brief counts the waiting jobs and holds no job text', async () => {
   expect(brief).toContain('Factory: 2 jobs wait for the user.')
   expect(brief).not.toContain('Which default font')
   expect(brief).not.toContain('PROJ-14')
-  expect(briefOf({ ...FULL, factory: { ...VIEW, jobs: [] } })).not.toContain('Factory:')
-  const one = { ...VIEW, jobs: VIEW.jobs.filter(job => job.stage === 'ready') }
+  expect(briefOf({ ...FULL, factory: { ...VIEW, jobs: [], waiting: 0 } })).not.toContain('Factory:')
+  const one = { ...VIEW, jobs: VIEW.jobs.filter(job => job.stage === 'ready'), waiting: 1 }
   expect(briefOf({ ...FULL, factory: one })).toContain('Factory: 1 job waits for the user.')
 })

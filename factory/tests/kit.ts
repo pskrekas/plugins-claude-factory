@@ -95,8 +95,6 @@ export function engine(
     // The working tree the session is in, and the main checkout when it differs.
     root: '/r',
     repoRoot: null as string | null,
-    // What git answers as the top of the working tree; by default the session's folder.
-    gitTop: null as string | null,
     cwds: [] as (string | undefined)[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
   }
@@ -166,6 +164,7 @@ export function engine(
       } as never,
     }
   })
+  on('fs.exists', (_, e) => ({ value: seen.files[real(e.path)] !== undefined || isDir(real(e.path)) }))
   on('fs.read', (_, e) => {
     seen.reads.push(e.path)
     const text = seen.files[real(e.path)]
@@ -198,10 +197,6 @@ export function engine(
     value: e.name === 'PATH' ? (world.path ?? '/usr/bin:/bin') : e.name === 'HOME' ? '/home/me' : undefined,
   }))
   on('process.run', (_, e) => {
-    // The top of the working tree: answered here, and not counted as a run.
-    if (e.argv.join(' ') === 'git rev-parse --show-toplevel') {
-      return { value: { exitCode: 0, stdout: (seen.gitTop ?? seen.root) + '\n', stderr: '' } as never }
-    }
     seen.cwds.push(e.init?.cwd)
     seen.ran.push(e.argv.join(' '))
     seen.paths.push(e.init?.env?.PATH)
@@ -374,7 +369,11 @@ export const VIEW: FactoryView = {
     jobView({ itemId: 'PROJ-14', stage: 'needs-info', stoppedIn: 'intake', question: 'Which default font?' }),
     jobView({ itemId: 'PROJ-10', stage: 'ready', prNumber: 51 }),
   ],
-  more: 0,
+  counts: [4, 0, 0, 1, 0, 1, 0, 2],
+  running: 2,
+  waiting: 2,
+  moreRunning: 0,
+  moreWaiting: 0,
   queue: 4,
   slots: 2,
   today: { done: 3, minutes: 41, costUsd: 9.8, firstRound: 2, finished: 3 },

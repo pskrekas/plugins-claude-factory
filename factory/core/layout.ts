@@ -5,7 +5,7 @@ import type { PanelModel } from './model'
 import { clean, fit, wrap } from './rows'
 import type { Row, Tone } from './rows'
 
-export { clean, fit, wrap } from './rows'
+export { clean, cutTo, displayWidth, fit, wrap } from './rows'
 export type { Row, Tone } from './rows'
 
 const MAX_AGENTS = 6

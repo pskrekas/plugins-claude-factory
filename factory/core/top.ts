@@ -1,13 +1,22 @@
-// Which folder is the top of the working tree the session is in. Pure.
+// Finding the top of the working tree a session is in. Pure.
 //
-// Git is asked, but its answer is not taken on trust: a folder's own
-// `.git/config` can make git name any path as its work tree (`core.worktree`),
-// also another repository of the person. The answer is used only when the
-// session's folder is that path or inside it; otherwise the session's own
-// folder is the top. Both paths are real paths (no symbolic link left).
-export function trustedTop(sessionReal: string, gitTopReal: string | null): string {
-  if (gitTopReal === null || gitTopReal === '' || gitTopReal === '/') return sessionReal
-  if (sessionReal === gitTopReal || sessionReal.startsWith(gitTopReal + '/')) return gitTopReal
+// Git is not asked. A folder's own `.git/config` can make git name any path as
+// its work tree (`core.worktree`): another repository of the person, or a
+// folder above this one. So the plugin looks for itself: the top is the
+// nearest folder, from the session's folder upward, that holds a `.git`. What
+// a folder says about itself can then only make that folder the top.
 
-  return sessionReal
+const MAX_DEPTH = 40
+
+// A folder and the folders above it, nearest first, as far as the root.
+export function ancestorsOf(path: string): string[] {
+  const start = path.length > 1 ? path.replace(/\/+$/, '') : path
+  if (!start.startsWith('/')) return [start]
+  const out: string[] = []
+  for (let dir = start; out.length < MAX_DEPTH; dir = dir.slice(0, dir.lastIndexOf('/')) || '/') {
+    out.push(dir)
+    if (dir === '/') break
+  }
+
+  return out
 }

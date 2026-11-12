@@ -2,7 +2,7 @@
 // under each, the loops back to Build, one row of cells per job, the jobs that
 // wait for the person, the queue and the day's totals. Pure.
 import type { FactoryView, JobStage, JobView } from './model'
-import { clean, fit } from './rows'
+import { clean, cutTo, displayWidth, fit, padTo } from './rows'
 import type { Row, Tone } from './rows'
 
 export const STATIONS: readonly string[] = [
@@ -60,22 +60,27 @@ const plain = (left: string, right: string, tone: Tone, rightTone: Tone, columns
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 const money = (usd: number | null) => (usd === null ? 'cost unknown' : `$${usd.toFixed(2)}`)
 
-// How many jobs run, and how many wait for the person.
+// How many jobs run, and how many wait for the person: of all jobs, not only
+// of those the view holds.
 export function jobCounts(view: FactoryView): { run: number; need: number } {
-  const run = view.jobs.filter(isRunning).length
-
-  return { run, need: view.jobs.filter(isWaitingForYou).length }
+  return { run: view.running, need: view.waiting }
 }
 
-export function countsOf(view: FactoryView): number[] {
+// The number of jobs at each station, for any list of jobs.
+export function countsFor(jobs: { stage: JobStage }[], queue: number | null): number[] {
   const counts = STATIONS.map(() => 0)
-  counts[0] = view.queue ?? 0
-  for (const job of view.jobs) {
+  counts[0] = queue ?? 0
+  for (const job of jobs) {
+    if (job.stage === 'done' || job.stage === 'rejected') continue
     const at = STATION[job.stage]
     counts[at] = (counts[at] ?? 0) + 1
   }
 
   return counts
+}
+
+export function countsOf(view: FactoryView): number[] {
+  return STATIONS.map((_, station) => view.counts[station] ?? 0)
 }
 
 const countTone = (count: number, station: number): Tone =>
@@ -122,10 +127,16 @@ export function lineRows(view: FactoryView, columns: number): Row[] {
       .filter(cell => withZeros || cell.count > 0)
       .map(({ text, tone }) => ({ text, tone }))
   const widthOf = (cells: { text: string }[]) => cells.map(cell => cell.text).join(' ').length
+  // Too narrow: a shorter word for You, then without the empty stations, then
+  // without the stations at the start. The jobs that wait for the person are
+  // the last cell, and the last to go.
   let cells = cellsFor('You', true)
   if (widthOf(cells) > columns) cells = cellsFor('Y', true)
-  if (widthOf(cells) > columns) cells = cellsFor('Y', false)
-  while (cells.length > 1 && widthOf(cells) > columns) cells.pop()
+  if (widthOf(cells) > columns) {
+    const you = cells.at(-1)
+    cells = [...cellsFor('Y', false).filter(cell => cell !== you && !cell.text.startsWith('Y')), ...(you ? [you] : [])]
+  }
+  while (cells.length > 1 && widthOf(cells) > columns) cells.shift()
 
   const loops = [gate ? 'gate' : null, review ? 'review' : null].filter(Boolean).join(', ')
   const rows = [row(cells)]
@@ -163,13 +174,42 @@ export function jobRows(job: JobView, columns: number): Row[] {
 
   if (columns < CELLS_SHORT) return [plain(id, job.stage, 'plain', 'dim', columns), second]
 
+
   const width = columns >= CELLS_WIDE ? 7 : 4
   const cells: { text: string; tone: Tone }[] = [
-    { text: id.slice(0, ID_WIDTH).padEnd(ID_WIDTH), tone: 'plain' },
+    { text: idCell(id), tone: 'plain' },
     ...stationCells(job, width === 4).map(cell => ({ text: cell.text.padEnd(width), tone: cell.tone })),
   ]
 
   return [{ left: '', right: '', tone: 'plain', rightTone: 'plain', cells }, second]
+}
+
+// An item id in its cell. A long id keeps its end: ids of one project differ there.
+function idCell(id: string): string {
+  if (displayWidth(id) <= ID_WIDTH) return padTo(id, ID_WIDTH)
+  const chars = [...id]
+  let tail = ''
+  while (chars.length > 0 && displayWidth((chars.at(-1) ?? '') + tail) <= ID_WIDTH - 1) tail = chars.pop() + tail
+
+  return padTo('…' + tail, ID_WIDTH)
+}
+
+// The names of the stations over the job cells, each over its column.
+function headerRow(columns: number): Row | null {
+  if (columns < CELLS_SHORT) return null
+  const names =
+    columns >= CELLS_WIDE
+      ? ['INTAKE', 'SPEC', 'BUILD', 'GATE', 'REVIEW', 'APPROVE']
+      : ['INT', 'SPEC', 'BLD', 'GATE', 'REV', 'APR']
+  const width = columns >= CELLS_WIDE ? 7 : 4
+
+  return {
+    left: '',
+    right: '',
+    tone: 'dim',
+    rightTone: 'plain',
+    cells: [' '.repeat(ID_WIDTH), ...names.map(name => name.padEnd(width))].map(text => ({ text, tone: 'dim' as Tone })),
+  }
 }
 
 function waitingRow(job: JobView, columns: number): Row {
@@ -186,20 +226,28 @@ function waitingRow(job: JobView, columns: number): Row {
 export function factoryRows(view: FactoryView, columns: number): Row[] {
   const { jobs, today } = view
   const isEmpty =
-    jobs.length === 0 && view.more === 0 && view.queue === null && today.finished === 0 && view.note === null
+    view.running === 0 &&
+    view.waiting === 0 &&
+    (view.queue ?? 0) === 0 &&
+    today.finished === 0 &&
+    view.note === null
   if (isEmpty) return []
 
   const running = jobs.filter(isRunning)
   const waiting = jobs.filter(isWaitingForYou)
+  const header = running.length > 0 ? headerRow(columns) : null
   const rows: Row[] = [
-    plain('FACTORY', `${running.length} of ${view.slots} slots busy`, 'head', 'dim', columns),
+    plain('FACTORY', `${view.running} of ${view.slots} slots busy`, 'head', 'dim', columns),
     ...lineRows(view, columns),
+    ...(header ? [header] : []),
     ...running.flatMap(job => jobRows(job, columns)),
   ]
-  if (view.more > 0) rows.push(plain(`+ ${view.more} more`, '', 'dim', 'plain', columns))
-  if (waiting.length > 0) {
-    rows.push(plain(`NEEDS YOU (${waiting.length})`, '', 'bad', 'plain', columns))
+  // Each "more" line sits under the list it cuts short.
+  if (view.moreRunning > 0) rows.push(plain(`+ ${view.moreRunning} more running`, '', 'dim', 'plain', columns))
+  if (view.waiting > 0) {
+    rows.push(plain(`NEEDS YOU (${view.waiting})`, '', 'bad', 'plain', columns))
     rows.push(...waiting.map(job => waitingRow(job, columns)))
+    if (view.moreWaiting > 0) rows.push(plain(`+ ${view.moreWaiting} more wait`, '', 'dim', 'plain', columns))
   }
   if (view.queue !== null) {
     rows.push(plain(`QUEUE  ${plural(view.queue, 'item')} with the mark`, '', 'dim', 'plain', columns))
