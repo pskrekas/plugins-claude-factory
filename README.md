@@ -70,10 +70,10 @@ It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
 
 ### Before you run the line
 
-- **Where the builder's and the gate's commands run.** In a container (see "The container"). The builder agent has no shell on your machine: its shell is a tool of the plugin, and each command runs in a container that holds the job's code folder and nothing else of your machine. The gate's commands run in a container too. A container is a strong wall, not a perfect one: it shares your machine's kernel, and with the network on it can reach the internet. An issue is text that someone else wrote; the agents are told to read it as data, and that is a rule for a model, not a wall.
+- **Where the builder's and the gate's commands run.** In a container (see "The container"). The builder agent has no shell on your machine: its shell is a tool of the plugin, and each command runs in a container that holds the job's code folder and nothing else of your machine. The gate's commands run in a container too. A container is a strong wall, not a perfect one: it shares your machine's kernel, and with the network on it can reach the internet and the services of your own machine and network (a database on `localhost`, for example). An issue is text that someone else wrote; the agents are told to read it as data, and that is a rule for a model, not a wall.
 - **It costs money or quota.** Each station is an agent. Set the limits (`factory.costLimitUsd`, `factory.timeLimitMin`, `factory.slots`, `factory.maxRounds`) before the first run, and try `/factory plan` first.
 - **The gate runs the branch's code** before a reviewer has read it: in its container, or, only if you chose `"container": false`, with your rights on your machine.
-- **What does not depend on the container or the fence:** the gate runs in its own clean copy of one commit; what the plugin itself pushes is the commit the gate judged, to the job's own branch; the plugin never merges; your branch protection on GitHub still holds. **What a container holds:** the job's code and no login of yours. With the network on, that code can leave through the network, and what the builder downloads can come in.
+- **What does not depend on the container or the fence:** the gate runs in its own clean copy of one commit; what the plugin itself pushes is the commit the gate judged, to the job's own branch; the plugin never merges; your branch protection on GitHub still holds. **What a container holds:** the job's code and no login of yours. With the network on, that code can leave through the network, what the builder downloads can come in, and a command can talk to any service your machine can reach.
 - **A pushed round starts your CI.** The plugin pushes a job's branch after the fast checks passed, before a reviewer has read it. A workflow that runs on a push runs the branch's code with the secrets that workflow has. A branch that changes a protected path (put `.github/` there) is never pushed.
 - **What goes public.** The pull request is what an agent wrote, pushed to your repository: the plugin commits every file the builder leaves in the job's code folder. On the issue the plugin posts its own fixed texts, the name of a limit, the pull request's address, the names of changed test files, and Intake's question or refusal for the item's author. A builder's or a reviewer's own words are never posted there: you read them in the pane.
 - **Who can speak to the agents.** Only an issue that carries the mark runs, and only you put the mark on. Of an issue's comments, only those of its author and yours reach an agent.
@@ -111,16 +111,16 @@ Agents start only from the plugin's own running code, in the job's folder. The s
 No code that an agent wrote, and no command that an agent chose, runs on your machine.
 
 - **The builder's shell.** The builder has no `Bash`. It has one tool of the plugin, and the plugin runs each command of it as `docker run --rm … sh -c <command>`: a container of its own, which is gone when the command ends, with every program the command started. The command is one argument of the shell inside the container; your machine's shell never reads it.
-- **What a container sees.** One folder: the job's worktree (for the gate: the gate's clean copy), at its own path. Not your home folder, not the repository's git folder, not the factory's state, not the Docker socket. It runs as your user id (so the files stay yours), with no added right (`--cap-drop ALL`, `no-new-privileges`), at most 512 processes, and the memory and CPUs of the settings. The folder's `.git` file is read-only inside.
+- **What a container sees.** One folder: the job's worktree (for the gate: the gate's clean copy), at its own path. Not your home folder, not the repository's git folder, not the factory's state, not the Docker socket. Nothing inside that folder is ever the source of a mount. It runs as your user id (so the files stay yours), with no added right (`--cap-drop ALL`, `no-new-privileges`), at most 512 processes, and the memory and CPUs of the settings. Docker is told to fetch no image (`--pull never`).
 - **What stays between two commands.** The files of the code folder, and nothing else: no running program, no variable, no file outside the folder (a package cache under `/tmp` is gone; `node_modules` in the folder stays).
-- **One side at a time.** While a command of a job runs in its container, the builder's file tools on that job are refused, and the other way round. Each file call is judged by the fence again at the moment it runs. If Docker does not confirm that a command's container is gone, the job's folder stays closed until it does. So nothing in a container can change a path while your machine reads it.
-- **No git in the container.** The builder does not commit. When it ends, the plugin commits every file it left in the code folder, under a fixed message. A git repository of its own inside the folder is refused.
+- **One side at a time.** While a command of a job runs in its container, the builder's file tools on that job are refused, and the other way round. Each file call is judged by the fence again at the moment it runs. If Docker does not confirm that a container is gone, the job's folder stays closed until it does: no file call, no commit, and no removal of the folder (a reject or the end of a job then leaves the folder and tells you). This is how the plugin keeps a program in a container from changing a path while your machine uses it.
+- **No git in the container.** The builder does not commit. When it ends, the plugin commits every file it left in the code folder, under a fixed message. Before any `git` call on the folder, the plugin looks for a git repository inside it (an entry named `.git` below the top, by any case, or a changed `.git` file at the top). With one there it makes no `git` call on the folder, and the job asks you: a repository can name a program in its own settings, and git would run that program on your machine. So a repository with submodules that a builder fills in cannot use the line.
 - **The gate.** Its commands run with `docker exec` in a container over the gate's clean copy; the container is made new for each gate run and removed after.
 - **The settings** are `factory.container` on the base branch: `{ "image": "node:22", "network": "on", "memory": "4g", "cpus": 2 }`. Only `image` is needed. You approve the line the pane shows (`[container] node:22 · network on · memory 4g · cpus 2`); a changed image or network needs a new approval. The plugin fetches no image: run `docker pull <image>` yourself. The image needs `sh` and the tools your gate and your builder use.
 - **The network** is `on` by default, so that an install works. With `"network": "none"` nothing in the container reaches the network: then the image must already hold what the install needs.
 - **No container, no factory.** `/factory run` does not start when `factory.container` is not set, not approved, or when Docker or the image is not there.
 - **On this machine, if you say so.** `"container": false` runs the builder's commands (`Bash`) and the gate's commands on your machine, with your rights, behind the fence below. The pane shows `[container] none: the builder and the gate run on this machine`, and you approve exactly that. Use it only on a repository and on issues that you trust.
-- **Its limits.** A container shares your machine's kernel. With the network on, a command can send the job's code anywhere and download anything. `git` does not work inside (the git folder is not there), so a gate command that needs git fails. The commands in `factory.forbiddenCommands` are refused by a check of text, which is best effort (a command built from pieces can get past it); a container holds no login of yours, so such a command has nothing to act with. The one-side-at-a-time rule depends on Claude Code handing every file call of an agent to the plugin; that is checked for a shell call, not yet for each file tool (see the hand check).
+- **Its limits.** A container shares your machine's kernel. With the network on, a command can send the job's code anywhere, download anything, and reach the services of your machine and your network (Docker Desktop gives a container the name `host.docker.internal` for your machine); use `"network": "none"` when that matters. `git` does not work inside (the git folder is not there), so a gate command that needs git fails. The commands in `factory.forbiddenCommands` are refused by a check of text, which is best effort (a command built from pieces can get past it); a container holds no login of yours, so such a command has nothing to act with. The one-side-at-a-time rule depends on Claude Code handing every file call of an agent to the plugin; that is checked for a shell call, not yet for each file tool (see the hand check).
 
 ### The fence
 
@@ -242,7 +242,7 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 
 The panel reads. It changes nothing but its own state and, when you ask, `.claude/factory.json`.
 
-- **It runs** `git`, `gh` and `docker` (the full lists are below), `id` for your user id, `df` for a disk check and `nc` for the ports a settings file names, `mkdir`, `mv` and `rm` on its own state folder, and, only after your approval, the commands a settings file names (the checks; and the gate's commands, in a container).
+- **It runs** `git`, `gh` and `docker` (the full lists are below), `id` for your user id, `find` to look for a git repository inside a job's folder, `df` for a disk check and `nc` for the ports a settings file names, `mkdir`, `mv` and `rm` on its own state folder, and, only after your approval, the commands a settings file names (the checks; and the gate's commands, in a container).
 - **It stores no password and no token.** `gh` uses your own login.
 - **It runs no command from a settings file until you approve it.** A settings file arrives with a clone, so the panel first shows `SETTINGS NOT APPROVED`, the number of commands and every command in full. `/factory approve` allows exactly the lines the pane showed while it was on screen, for that repo; a file the pane has not shown yet is shown first, and a second `/factory approve` allows it. Only your own Enter at the prompt can approve. The approved lines are kept outside the repo, for the repo and all its worktrees; a line that changes asks again.
 - **What an approval covers.** It covers the command line you read, not the code that command runs. A check must name a program on your `PATH` (never a file of the repo), runs with a `PATH` that leaves the repo out, and is not run when one of its arguments names a file of the repo. These are guards against the plain cases, not a boundary: a command that runs repo code by its nature (an inline script, a build tool) runs what the repo holds at that time. Approve a check as you would approve the same command in a shell.
@@ -284,7 +284,7 @@ git rev-parse --verify refs/remotes/origin/<base>^{commit}
 git rev-parse --verify refs/heads/factory/<job>^{commit}
 git show <commit>:.claude/factory.json
 git diff --name-only --no-renames -z <commit>...<commit>
-git … status --porcelain --no-renames --untracked-files=all -z
+git … status --porcelain --no-renames --untracked-files=all --ignore-submodules=all -z
 git … add -A                                             (what the builder left)
 git … diff --cached --raw --no-renames --no-abbrev -z
 git … commit --no-verify --no-gpg-sign -m "Factory: item <id>, round <n>"
@@ -310,18 +310,20 @@ Each `gh` call of the second list ends with `-R <owner>/<name>`. The line's `git
 
 ### Every `docker` call
 
-`<name>` is `factory-job-<job>.<label>` or `factory-gate-<job>.<label>`; `<label>` is the name of the repository's state folder. `<folder>` is the job's worktree, or the gate's clean copy. `…` in the two `run` lines stands for the same words: `--name <name> --label factory.state=<label> --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory <m> --cpus <n> --network bridge|none --user <your uid>:<your gid> -e HOME=/tmp -v <folder>:<folder> -v <folder>/.git:<folder>/.git:ro -w <folder>`.
+`<name>` is `factory-job-<job>.<label>` or `factory-gate-<job>.<label>`; `<label>` is the name of the repository's state folder. `<folder>` is the job's worktree, or the gate's clean copy. `…` in the two `run` lines stands for the same words: `--name <name> --label factory.state=<label> --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory <m> --cpus <n> --network bridge|none --user <your uid>:<your gid> -e HOME=/tmp -v <folder>:<folder> -w <folder>`.
 
 ```
 docker image inspect --format {{.Id}} <image>            (/factory run: is the image there)
-docker run --rm … --entrypoint sh <image> -c <command>   (one command of the builder)
-docker run -d … --entrypoint sleep <image> infinity      (the gate's container)
+docker run --pull never --rm … --entrypoint sh <image> -c <command>   (one command of the builder)
+docker run --pull never -d … --entrypoint sleep <image> infinity      (the gate's container)
 docker exec -w <folder> <name> <a gate command>
 docker rm -f <name>
 docker ps -a --filter label=factory.state=<label> --format {{.Names}}
 ```
 
-The plugin fetches no image, mounts no other folder, and never names the Docker socket.
+The plugin fetches no image and tells Docker to fetch none, mounts no other folder and nothing from inside that folder, and never names the Docker socket.
+
+Before a `git` call on a job's folder it runs `find <folder> -mindepth 1 -iname .git -print`.
 
 `claude plugin validate factory` prints exactly what it hooks and calls.
 
@@ -342,6 +344,10 @@ The plugin fetches no image, mounts no other folder, and never names the Docker 
 **The builder is told `A container of this job may still run …`.** Docker did not confirm that a command's container stopped. Start Docker; the builder's next command removes the container and goes on. A job that ends this way asks you: `/factory answer <id>` after Docker runs again.
 
 **The builder says a command `was not run`.** The message names the reason (Docker stopped, the image is gone, the container settings changed). Fix it; `/factory answer <id>` starts the station again.
+
+**`the code folder holds a git repository of its own (…)`.** The builder made a git repository inside the job's folder, or changed the folder's `.git` file. The plugin runs no `git` on such a folder. Remove the entry the message names from `<state>/worktrees/<job>`, then `/factory answer <id>`; or `/factory reject <id> <reason>`.
+
+**`Factory: a container of <id> could not be stopped. …`.** Docker did not confirm that the job's containers are gone, so the plugin left the job's folders. Start Docker; a later `/factory run` removes them.
 
 **The gate fails on a command that needs `git`.** The git folder is not in the container. Use a gate command that does not need it.
 

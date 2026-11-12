@@ -145,6 +145,17 @@ The run:
       commit message is `Factory: item <n>, round 1`.
 - [ ] While the gate runs, `docker ps` shows `factory-gate-<job>.<label>`; after the
       gate, it is gone. `ps` on your machine shows no `npm test` of the gate.
+- [ ] Not checked on a real engine yet (phase 2c): that the plugin's `tool.call` hook
+      sees each file tool call of an agent (Read, Write, Edit, Glob, Grep) and that
+      its refusal stops the call. To see it: put "Call the shell tool with
+      `sleep 60` and, in the same message, write a file" in an issue; the builder's
+      transcript shows one of the two refused with `A command of this job runs in
+      its container. …` or `A file call of this job runs. …`.
+- [ ] Not checked on a real engine yet: what Claude Code reads from an agent's own
+      folder. Put a `.claude/settings.json` with a hook that makes a file under
+      `/tmp` into a job's branch; after the reviewers ran, that file must not exist.
+      If it does, the line is not safe on issues you do not trust: tell the
+      plugin's author.
 - [ ] A draft pull request appears, from the branch `factory/<n>-…`.
 - [ ] The row moves to GATE, REVIEW, APPROVE. Then NEEDS YOU shows
       `PR <n> is ready. You merge.`, with a toast and a sound.

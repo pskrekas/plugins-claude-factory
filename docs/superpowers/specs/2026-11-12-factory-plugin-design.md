@@ -519,7 +519,13 @@ person's machine.
   job. Changed in the build: a program left alive in a job's container can swap a
   file for a link while the person's machine reads the folder.)
 - **One side at a time.** For a job that builds in a container, a file tool on the
-  person's machine and a command in a container never run at the same time.
+  person's machine and a command in a container never run at the same time; a file
+  call is judged again at the moment it runs; and while docker does not confirm that a
+  job's containers are gone, its folder is not read, committed or removed.
+- **The job's folder is hostile on the person's machine.** Nothing inside it is the
+  source of a mount. The plugin makes no git call on a folder that holds a git
+  repository of its own (a `.git` below the top, or a changed one at the top): such a
+  repository can name a program for git to run.
 - **The gate runs in a container too**: its commands are code of the branch. It gets
   its own container over the gate's clean copy.
 - **The builder does not use git.** The git folder is not in the container. The plugin
@@ -531,7 +537,9 @@ person's machine.
   not set. A person can set `"container": false`: then the builder has `Bash` on the
   person's machine behind the text fence of 8.1, and must approve exactly that.
 - Network `on` is the default, so that installs work. The container holds the code of
-  the branch and no login, so what can leave through the network is that code.
+  the branch and no login, so what can leave through the network is that code. With
+  the network on a container also reaches the services of the person's machine and
+  network (found in the final review); `none` closes that.
 
 ## 9. Architecture
 

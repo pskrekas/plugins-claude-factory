@@ -19,7 +19,7 @@ mod, two small agents on the fast model, and Docker Desktop 29.5.3. It follows
 ## What this means for the factory
 
 - The builder gets no `Bash`. It gets the plugin's shell tool, and the plugin runs each
-  command with `docker exec` in the job's own container. The command text is one
+  command in a container (as built: `docker run --rm`, a container for each command; see design 8.3). The command text is one
   argument of `sh -c` inside the container: the person's machine never reads it as a
   command.
 - The builder's file tools stay as they are: they work on the job's worktree on the

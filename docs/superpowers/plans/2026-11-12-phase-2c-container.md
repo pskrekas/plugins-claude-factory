@@ -6,6 +6,8 @@
 
 **Architecture:** The builder agent type loses `Bash` and gets one tool of the plugin (`mcp__factory__sh`); the plugin's `tool.call` hook runs each command with `docker exec` in the job's container. Every `docker` call is a fixed argument list from one pure file (`core/container-args.ts`), as every `git` call is. The gate gets its own container over its clean copy. The git folder is not in a container, so the plugin commits the builder's work. The container's image, network and limits are settings of the base branch, approved by the person.
 
+> **As built (2026-11-12):** a builder's command gets a container of its own (`docker run --rm`), not one container for each job; nothing inside a job's folder is mounted on its own; the plugin makes no git call on a folder that holds a git repository of its own. The reasons are in `docs/notes/phase-2c-decisions.md`.
+
 **Tech Stack:** as before, plus the `docker` command of the person's machine. No npm dependencies.
 
 **Spec:** `docs/superpowers/specs/2026-11-12-factory-plugin-design.md`, section 8.3. Also binding: `docs/notes/r2c-check.md`.
