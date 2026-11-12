@@ -2,12 +2,17 @@
 // The lock is a small file with the holder's session id and the time of its
 // last heartbeat. A holder that has not written for STALE_MS has gone away.
 
-export type LockFile = { session: string; at: number }
+export type LockFile = { session: string; at: number; tree?: string }
 
 export const STALE_MS = 5 * 60_000
 
-export function lockText(session: string, now: number): string {
-  return JSON.stringify({ session, at: now } satisfies LockFile) + '\n'
+const MAX_TREE = 120
+
+// `tree` is the working tree of the holder: what a person can recognise it by.
+export function lockText(session: string, now: number, tree?: string): string {
+  const lock: LockFile = { session, at: now, ...(tree === undefined ? {} : { tree: tree.slice(0, MAX_TREE) }) }
+
+  return JSON.stringify(lock) + '\n'
 }
 
 function parse(text: string | null): LockFile | null {
@@ -16,8 +21,13 @@ function parse(text: string | null): LockFile | null {
     const raw: unknown = JSON.parse(text)
     const lock = raw as Partial<LockFile> | null
     if (typeof lock?.session !== 'string' || lock.session === '') return null
+    if (typeof lock.at !== 'number' || !Number.isFinite(lock.at)) return null
 
-    return typeof lock.at === 'number' && Number.isFinite(lock.at) ? { session: lock.session, at: lock.at } : null
+    return {
+      session: lock.session,
+      at: lock.at,
+      ...(typeof lock.tree === 'string' && lock.tree !== '' ? { tree: lock.tree.slice(0, MAX_TREE) } : {}),
+    }
   } catch {
     return null
   }
@@ -31,7 +41,10 @@ export function lockOf(text: string | null, session: string, now: number): 'free
   return now - lock.at > STALE_MS ? 'stale' : 'theirs'
 }
 
-// The session that holds a lock, for the message to the other one.
+// Who holds a lock, for the message to the other session: its working tree
+// when the lock says one, else its session id.
 export function holderOf(text: string | null): string | null {
-  return parse(text)?.session.slice(0, 60) ?? null
+  const lock = parse(text)
+
+  return lock === null ? null : (lock.tree ?? lock.session.slice(0, 60))
 }

@@ -23,6 +23,20 @@ function hostOf(remote: string): string | null {
   return (authority.split('@').pop() ?? '').split(':')[0]?.toLowerCase() ?? null
 }
 
+// The GitHub repository a remote names, as `owner/name`, or null. Every `gh`
+// call that writes names it: in a fork, `gh` alone would pick the project the
+// fork came from.
+export function repoOf(remote: string | null): string | null {
+  if (remote === null || hostOf(remote) !== 'github.com') return null
+  const path = /^[a-z][a-z0-9+.-]*:\/\//i.test(remote)
+    ? remote.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]+\//i, '')
+    : remote.slice(remote.indexOf(':') + 1)
+  const parts = path.replace(/\/+$/, '').replace(/\.git$/, '').split('/')
+  const isName = (part: string) => /^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}$/.test(part)
+
+  return parts.length === 2 && parts.every(isName) ? parts.join('/') : null
+}
+
 export function prHostOf(
   remote: string | null,
   setting: Settings['prHost'],

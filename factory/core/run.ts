@@ -1,7 +1,9 @@
 // How a host command ended, as the readers see it. A command that could not
 // start, or ran past its time, is a value, never a thrown error.
 export type RunResult =
-  | { exitCode: number; stdout: string; stderr: string }
+  // `isCut`: the program printed more than the engine keeps (4 MiB of each
+  // stream), so the text is the start of what it printed and its end is missing.
+  | { exitCode: number; stdout: string; stderr: string; isCut?: boolean }
   | { failed: 'timeout' | 'not-found' | 'other' }
 
 // Names why a `$.process.run` call rejected.

@@ -91,6 +91,15 @@ export type FactoryView = {
   slots: number
   today: { done: number; minutes: number; costUsd: number | null; firstRound: number; finished: number }
   note: string | null
+  // Who runs the line: this session, another one, or nobody.
+  lock: 'free' | 'mine' | 'theirs'
+  // Where the other session is; null unless `lock` is `theirs`.
+  holder: string | null
+  // The line starts no new station.
+  isStopped: boolean
+  // Items the tracker says are in progress that have no job here; at most 10.
+  // They count in `waiting` and at the last station.
+  claimed: string[]
 }
 
 // none = the repo has no settings file

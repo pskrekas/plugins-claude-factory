@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DEFAULTS, commandsOf, parseSettings } from '../core/settings'
+import { DEFAULTS, GATE_MARK, commandsOf, lineOf, parseSettings } from '../core/settings'
 
 test('no file gives the defaults', async () => {
   expect(parseSettings(null)).toEqual({ settings: DEFAULTS, error: null })
@@ -91,7 +91,7 @@ test('a check must have a name and a command of strings', async () => {
   expect(error).toBe('checks: wrong type')
 })
 
-test('the commands to approve are the checks, once each, sorted', async () => {
+test('the commands to approve: the checks, then the gate commands with their mark', async () => {
   const text = JSON.stringify({
     checks: [
       { name: 'a', run: ['x', 'y'] },
@@ -100,9 +100,9 @@ test('the commands to approve are the checks, once each, sorted', async () => {
     gate: { fast: [['npm', 'test']], full: [['npm', 'test'], ['npm', 'run', 'build']] },
   })
   const { settings } = parseSettings(text)
-  // Only checks run in this phase: a gate command is not on the approval list,
-  // so a line approved for the gate can never start running as a check.
-  expect(commandsOf(settings)).toEqual(['x y'])
+  // A gate command is on the list with a mark: approved for the gate, the
+  // same words never run as a check, and the other way round.
+  expect(commandsOf(settings)).toEqual(['x y', '[gate] npm run build', '[gate] npm test'])
 })
 
 test('a control character in a command is refused', async () => {
@@ -167,4 +167,22 @@ test('a progress path is at most 200 characters', async () => {
   expect(parseSettings(JSON.stringify({ progress: { files: 'a/'.repeat(101) + '*.md' } })).error).toBe(
     'progress: wrong type',
   )
+})
+
+test('no command line can look like a marked gate command', async () => {
+  // The mark starts with a character a plain argument cannot hold, and a
+  // quoted argument starts with a double quote: no line of a check starts with it.
+  expect(GATE_MARK).toBe('[gate] ')
+  for (const first of ['gate:', '[gate]', '[gate', 'gate', '"[gate]"', ' [gate]', '[gate] npm test']) {
+    const line = lineOf([first, 'npm', 'test'])
+    expect(line.startsWith(GATE_MARK)).toBe(false)
+    expect(line.startsWith('[')).toBe(false)
+  }
+  const tricky = parseSettings(
+    JSON.stringify({ checks: [{ name: 'a', run: ['[gate]', 'npm', 'test'] }, { name: 'b', run: ['gate:', 'npm', 'test'] }], gate: { fast: [['npm', 'test']] } }),
+  ).settings
+  const lines = commandsOf(tricky)
+  expect(lines.filter(line => line === '[gate] npm test').length).toBe(1)
+  expect(new Set(lines).size).toBe(lines.length)
+  expect(lines.length).toBe(3)
 })

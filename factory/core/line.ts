@@ -223,6 +223,26 @@ function waitingRow(job: JobView, columns: number): Row {
   return plain(`${id}  ${job.question ?? 'needs you'}`, '', 'plain', 'plain', columns)
 }
 
+// A claimed item with no job here: its state folder was lost, or another
+// machine runs it. Only the person can say which.
+const claimedRow = (id: string, columns: number): Row =>
+  plain(`${id}  claimed in the tracker, no job here. /factory reject ${id} <reason>, or run it again.`, '', 'plain', 'plain', columns)
+
+// The right side of the head row: who runs the line, and that it is stopped.
+function headRight(view: FactoryView): string {
+  const who =
+    view.lock === 'mine'
+      ? `${view.running} of ${view.slots} slots busy`
+      : view.lock === 'theirs'
+        ? 'another session runs the line'
+        : view.running > 0
+          ? 'no session runs the line'
+          : ''
+  if (!view.isStopped) return who
+
+  return who === '' ? 'stopped' : `${who} · stopped`
+}
+
 export function factoryRows(view: FactoryView, columns: number): Row[] {
   const { jobs, today } = view
   const isEmpty =
@@ -237,7 +257,7 @@ export function factoryRows(view: FactoryView, columns: number): Row[] {
   const waiting = jobs.filter(isWaitingForYou)
   const header = running.length > 0 ? headerRow(columns) : null
   const rows: Row[] = [
-    plain('FACTORY', `${view.running} of ${view.slots} slots busy`, 'head', 'dim', columns),
+    plain('FACTORY', headRight(view), 'head', 'dim', columns),
     ...lineRows(view, columns),
     ...(header ? [header] : []),
     ...running.flatMap(job => jobRows(job, columns)),
@@ -248,6 +268,7 @@ export function factoryRows(view: FactoryView, columns: number): Row[] {
     rows.push(plain(`NEEDS YOU (${view.waiting})`, '', 'bad', 'plain', columns))
     rows.push(...waiting.map(job => waitingRow(job, columns)))
     if (view.moreWaiting > 0) rows.push(plain(`+ ${view.moreWaiting} more wait`, '', 'dim', 'plain', columns))
+    rows.push(...view.claimed.map(id => claimedRow(clean(id), columns)))
   }
   if (view.queue !== null) {
     rows.push(plain(`QUEUE  ${plural(view.queue, 'item')} with the mark`, '', 'dim', 'plain', columns))

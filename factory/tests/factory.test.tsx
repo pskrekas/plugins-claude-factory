@@ -94,6 +94,65 @@ test('the view: finished jobs show only in the totals, and nothing gives no view
   expect(viewOf([], F, null, '2 job files skipped', NOON)?.note).toBe('2 job files skipped')
 })
 
+test('the view: who runs the line, the stop flag, and claimed items with no job', async () => {
+  const build = job('12', { itemId: '12', stage: 'build' })
+  const line = { lock: 'theirs' as const, holder: '/somewhere/else', isStopped: true, claimed: ['12', '31', '32'] }
+  const view = viewOf([build], F, 0, null, NOON, line)
+  expect([view?.lock, view?.holder, view?.isStopped]).toEqual(['theirs', '/somewhere/else', true])
+  // An item with a job here is not "claimed with no job".
+  expect(view?.claimed).toEqual(['31', '32'])
+  expect([view?.running, view?.waiting, view?.counts.at(-1)]).toEqual([1, 2, 2])
+  const many = viewOf([], F, null, null, NOON, { ...line, claimed: Array.from({ length: 30 }, (_, i) => String(100 + i)) })
+  expect([many?.claimed.length, many?.waiting]).toEqual([10, 10])
+  // With nothing said about the line, nobody runs it.
+  expect(viewOf([build], F, null, null, NOON)).toEqual(
+    expect.objectContaining({ lock: 'free', holder: null, isStopped: false, claimed: [] }),
+  )
+  expect(viewOf([], F, null, null, NOON, { ...line, claimed: ['31'] })?.claimed).toEqual(['31'])
+  expect(viewOf([], F, null, null, NOON, { ...line, claimed: [] })).toBe(null)
+})
+
+const CLAIMED = JSON.stringify([
+  { number: 4, title: 'Fonts', state: 'OPEN', labels: [{ name: 'factory' }] },
+  { number: 31, title: 'Lost', state: 'OPEN', labels: [{ name: 'factory' }, { name: 'factory:in-progress' }] },
+])
+const claimedWorld = (on: Parameters<typeof engine>[0], files: Record<string, string>) =>
+  engine(on, {
+    files: { '/r/.claude/factory.json': '{"tracker": {"kind": "github"}}', ...files },
+    run: argv => (argv[0] === 'gh' && argv[1] === 'issue' && argv[2] === 'list' ? { exitCode: 0, stdout: CLAIMED } : undefined),
+    now: NOON,
+  })
+
+test('an issue that is in progress in the tracker with no job file shows as claimed', async ($, on) => {
+  claimedWorld(on, {})
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  const rows = await paneText($, 120)
+  expect(rows).toContain('NEEDS YOU (1)')
+  expect(rows).toContain('31  claimed in the tracker, no job here. /factory reject 31 <reason>, or run it again.')
+})
+
+test('the same issue with a job file is a job, not a claimed item', async ($, on) => {
+  claimedWorld(on, file(job('31-lost', { itemId: '31', stage: 'build' })))
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  const rows = await paneText($, 120)
+  expect(rows.some(row => row.includes('claimed in the tracker'))).toBe(false)
+  expect(rows.some(row => row.startsWith('NEEDS YOU'))).toBe(false)
+  expect(rows).toContain('no session runs the line')
+})
+
+test('the pane says when the line is stopped and when this session runs it', async ($, on) => {
+  const w = engine(on, { files: file(job('12', { stage: 'build' })), now: NOON })
+  await $.session.start(START)
+  await $.command.run(cmd('stop'))
+  await $.command.run(cmd(''))
+  expect(w.files[`${STATE}/stop`]).toBe('stop\n')
+  expect(await paneText($, 120)).toContain('no session runs the line · stopped')
+})
+
 test('the pane draws the jobs on disk', async ($, on) => {
   const review = move(move(move(move(job('12'), 'spec', 'ok', NOON), 'build', 'ok', NOON), 'gate', 'ok', NOON), 'review', 'ok', NOON)
   const ready = job('10', { stage: 'ready', pr: { number: 51, url: 'u' } })

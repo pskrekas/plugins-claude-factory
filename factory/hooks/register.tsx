@@ -11,6 +11,7 @@ import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
 import { ancestorsOf, confirmedTop } from '../core/top'
 import type { Io } from './io'
+import { answerJob, rejectJob, stopLine } from './commands'
 import { init } from './init'
 import { whereText } from './jobs'
 import { approve, refresh, refreshAgents } from './refresh'
@@ -19,13 +20,14 @@ import { PANE, TITLE } from './state'
 // Change the tag when PanelModel's fields change: it declines what an earlier
 // version stored, which outlives a reload.
 const panel = atom({ plugin: 'factory', key: 'panel' } as const, emptyModel(), {
-  shape: 'panel-2',
+  shape: 'panel-3',
 })
 
 const MINIMUM = [2, 1, 322] as const
 const REFRESH_MS = 60_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
 const GIT_TOP_MS = 5_000
+const ONLY_A_PERSON_CAN = 'Only a person can do this. Type the command at the prompt.'
 const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
 
 // Theme keys, so the colours follow the person's theme.
@@ -154,11 +156,16 @@ export const register: Register = (on, options) => {
       writeFile: (path, text) => $.fs.write(path, text),
       run: async (argv, init) => {
         const path = await $.env.get('PATH').catch(() => undefined)
-        const env = { PATH: safePath(path, await root()) }
+        const env = { ...init?.env, PATH: safePath(path, await root()) }
 
         return $.process
           .run(argv, { ...init, env })
-          .then(done => ({ exitCode: done.exitCode, stdout: done.stdout, stderr: done.stderr }))
+          .then(done => ({
+            exitCode: done.exitCode,
+            stdout: done.stdout,
+            stderr: done.stderr,
+            ...(done.isStdoutTruncated || done.isStderrTruncated ? { isCut: true } : {}),
+          }))
           .catch(failureOf)
       },
       storeGet: key => $.store.get(key).catch(() => undefined),
@@ -190,7 +197,7 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'factory',
-      description: 'Open the Factory work panel (close | init | approve | where)',
+      description: 'Open the Factory work panel (close | init | approve | where | stop | answer | reject)',
     })
     // One quick read now, so the status line and the session brief have the
     // branch and the progress before the first prompt. It runs no `gh` and no
@@ -266,7 +273,22 @@ export const register: Register = (on, options) => {
     if (arg === 'init') return { text: await init(io) }
     if (arg === 'where') return { text: await whereText(io, await io.root()) }
 
-    return { text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where' }
+    // The commands that change the line or a job: the person's own act, like approve.
+    const [word = '', id = ''] = arg.split(/\s+/)
+    if (word === 'stop' || word === 'answer' || word === 'reject') {
+      if (e.origin?.kind !== 'composer') return { text: ONLY_A_PERSON_CAN }
+      const rest = id === '' ? '' : arg.slice(arg.indexOf(id) + id.length).trim()
+      if (word === 'stop') return { text: await stopLine(io) }
+      if (word === 'answer') {
+        return { text: id === '' ? 'Say which job: /factory answer <id> [text]' : await answerJob(io, id, rest) }
+      }
+
+      return { text: id === '' ? 'A reason is needed: /factory reject <id> <reason>' : await rejectJob(io, id, rest) }
+    }
+
+    return {
+      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
+    }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

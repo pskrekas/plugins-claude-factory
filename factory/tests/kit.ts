@@ -52,7 +52,7 @@ export const FULL: PanelModel = {
 
 // What `state.get` answers for the panel atom holding `model`.
 export function stored(model: PanelModel) {
-  return { value: { value: { shape: 'panel-2', value: model }, version: 1 } }
+  return { value: { value: { shape: 'panel-3', value: model }, version: 1 } }
 }
 
 type Run = { exitCode: number; stdout: string; stderr?: string }
@@ -86,6 +86,8 @@ export function engine(
     sounds: 0,
     writes: [] as string[],
     reads: [] as string[],
+    // What each command got on its standard input.
+    stdins: [] as (string | undefined)[],
     paths: [] as (string | undefined)[],
     // The PATH of the git call that asks where the repo starts.
     probePaths: [] as (string | undefined)[],
@@ -150,7 +152,10 @@ export function engine(
   }))
   on('session.cwd', () => ({ value: seen.root }))
   const real = (path: string) => world.links?.[path] ?? path
+  // Folders that `mkdir` made: a folder exists before a file is in it.
+  const made = new Set<string>()
   const isDir = (path: string) =>
+    made.has(path.replace(/\/$/, '')) ||
     Object.keys(seen.files).some(file => file.startsWith(path.replace(/\/$/, '') + '/'))
   on('fs.stat', (_, e) => {
     // Without `resolve`, a link is described as the link itself.
@@ -216,7 +221,32 @@ export function engine(
 
       return { value: { exitCode: 0, stdout: top + '\n', stderr: '' } as never }
     }
+    // The file commands of the store are acted out on the file map, and not counted as runs.
+    const plain = e.argv.filter(arg => arg !== '-p' && arg !== '-f')
+    const ok = (isOk: boolean) => ({ value: { exitCode: isOk ? 0 : 1, stdout: '', stderr: '' } as never })
+    if (plain[0] === 'mkdir' && plain[1] !== undefined) {
+      made.add(plain[1])
+
+      return ok(true)
+    }
+    if (plain[0] === 'mv' && plain[1] !== undefined && plain[2] !== undefined) {
+      const [from, to] = [plain[1], plain[2]]
+      const moved = Object.keys(seen.files).filter(file => file === from || file.startsWith(from + '/'))
+      for (const file of moved) {
+        seen.files[to + file.slice(from.length)] = seen.files[file] ?? ''
+        delete seen.files[file]
+      }
+
+      return ok(moved.length > 0)
+    }
+    if (plain[0] === 'rm' && plain[1] === '-r' && plain[2] !== undefined) {
+      const gone = plain[2]
+      for (const file of Object.keys(seen.files).filter(name => name.startsWith(gone + '/'))) delete seen.files[file]
+
+      return ok(true)
+    }
     seen.cwds.push(e.init?.cwd)
+    seen.stdins.push(e.init?.stdin)
     seen.ran.push(e.argv.join(' '))
     seen.paths.push(e.init?.env?.PATH)
     const answer = world.run?.(e.argv)
@@ -269,6 +299,10 @@ export function fakeIo(
     session?: string
     now?: number
     stateDir?: string
+    // Paths that are symbolic links.
+    links?: Set<string>
+    // A path whose real place is another one.
+    reals?: Record<string, string>
   } = {},
 ) {
   const files = world.files ?? {}
@@ -281,6 +315,17 @@ export function fakeIo(
     model: emptyModel(),
     reads: [] as string[],
     ran: [] as string[],
+    stdins: [] as (string | undefined)[],
+    // Where each command ran, with which time limit and which environment.
+    cwds: [] as (string | undefined)[],
+    timeouts: [] as (number | undefined)[],
+    envs: [] as (Record<string, string> | undefined)[],
+    // A program whose next run fails, to test what a failure leaves behind.
+    failNext: null as string | null,
+    // Answers for commands the fake does not act out itself (git, gh).
+    answer: null as
+      | ((argv: string[]) => { exitCode: number; stdout: string; stderr?: string; isCut?: boolean } | undefined)
+      | null,
     now: async () => io.time,
     root: async () => '/r',
     remote: async () => null,
@@ -288,11 +333,12 @@ export function fakeIo(
     stateDir: async () => world.stateDir ?? '/state',
     stat: async (path: string) => {
       const text = files[path]
-      if (text !== undefined) return { kind: 'file' as const, size: text.length, mtimeMs: 0, realPath: path }
+      const realPath = world.reals?.[path] ?? path
+      if (text !== undefined) return { kind: 'file' as const, size: text.length, mtimeMs: 0, realPath }
 
-      return isDir(path) ? { kind: 'dir' as const, size: 0, mtimeMs: dirs.get(path) ?? 0, realPath: path } : null
+      return isDir(path) ? { kind: 'dir' as const, size: 0, mtimeMs: dirs.get(path) ?? 0, realPath } : null
     },
-    isLink: async () => false,
+    isLink: async (path: string) => world.links?.has(path) ?? false,
     readFile: async (path: string) => {
       io.reads.push(path)
 
@@ -308,21 +354,46 @@ export function fakeIo(
 
       return [...names]
     },
+    // Every path a file was written to directly (not moved to).
+    written: [] as string[],
     writeFile: async (path: string, text: string) => {
+      io.written.push(path)
       files[path] = text
     },
-    run: async (argv: string[]) => {
+    run: async (argv: string[], init?: { cwd?: string; timeoutMs?: number; stdin?: string; env?: Record<string, string> }) => {
       io.ran.push(argv.join(' '))
+      io.stdins.push(init?.stdin)
+      io.cwds.push(init?.cwd)
+      io.timeouts.push(init?.timeoutMs)
+      io.envs.push(init?.env)
       const done = (ok: boolean) => ({ exitCode: ok ? 0 : 1, stdout: '', stderr: '' })
-      const [program, a, b] = argv
+      if (io.failNext === argv[0]) {
+        io.failNext = null
+
+        return done(false)
+      }
+      const given = io.answer?.(argv)
+      if (given !== undefined) {
+        return { exitCode: given.exitCode, stdout: given.stdout, stderr: given.stderr ?? '', ...(given.isCut ? { isCut: true } : {}) }
+      }
+      const args = argv.filter(arg => arg !== '-p' && arg !== '-f')
+      const [program, a, b] = args
       // mkdir makes a folder only if nothing is there: it is the atomic step of the lock.
       if (program === 'mkdir' && a !== undefined) {
+        if (argv.includes('-p') && isDir(a)) return done(true)
         if (isDir(a) || files[a] !== undefined) return done(false)
         dirs.set(a, io.time)
 
         return done(true)
       }
       if (program === 'mv' && a !== undefined && b !== undefined) {
+        // One file: a rename over whatever is there.
+        if (files[a] !== undefined) {
+          files[b] = files[a] ?? ''
+          delete files[a]
+
+          return done(true)
+        }
         if (!isDir(a)) return done(false)
         for (const file of Object.keys(files).filter(name => name.startsWith(a + '/'))) {
           files[b + file.slice(a.length)] = files[file] ?? ''
@@ -342,8 +413,11 @@ export function fakeIo(
 
       return { failed: 'not-found' as const }
     },
-    storeGet: async () => undefined,
-    storeSet: async () => undefined,
+    store: new Map<string, unknown>(),
+    storeGet: async (key: string) => io.store.get(key),
+    storeSet: async (key: string, value: unknown) => {
+      io.store.set(key, value)
+    },
     getModel: async () => io.model,
     updateModel: async (change: (model: PanelModel) => PanelModel) => {
       io.model = change(io.model)
@@ -397,6 +471,10 @@ export const VIEW: FactoryView = {
   slots: 2,
   today: { done: 3, minutes: 41, costUsd: 9.8, firstRound: 2, finished: 3 },
   note: null,
+  lock: 'mine',
+  holder: null,
+  isStopped: false,
+  claimed: [],
 }
 
 // Where the factory keeps the state of the repo at /r: under the person's home

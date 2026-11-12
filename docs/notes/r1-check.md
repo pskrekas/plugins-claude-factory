@@ -61,3 +61,35 @@ To do by the owner, in any git repo, with `claude --plugin-dir <this repo>/facto
 - [ ] In a narrow terminal the line is the short form (`Q0 I0 S0 B1 …`).
 - [ ] The status line shows `factory 1 run, 2 need you`.
 - [ ] Remove the sample jobs when done: `rm -r "<that folder>/jobs"`.
+
+## The hands of the line, by hand (phase 2b, part 1)
+
+To do by the owner, in a scratch GitHub repo that has one open issue (say it is
+number 1) and a settings file with `"tracker": { "kind": "github" }`, with
+`claude --plugin-dir <this repo>/factory`. `gh` must be logged in.
+
+- [ ] `/factory where` prints the state folder. Copy the sample job that waits:
+      `mkdir -p "<that folder>/jobs" && cp -R <this repo>/docs/examples/factory-jobs/14-different-fonts "<that folder>/jobs/"`.
+      Edit `"itemId": "14"` in its `job.json` to `"1"` (the number of your issue).
+- [ ] `/factory`: NEEDS YOU (1) shows `1  Which font is the default?`. The first
+      row says `FACTORY`, with nothing about a session at its right (no job runs).
+- [ ] `/factory answer 1 Use the first font.` answers `1 goes on in intake.` The
+      issue now has the label `factory:in-progress`. The file
+      `<that folder>/jobs/14-different-fonts/files/feedback-1.md` holds the text.
+- [ ] `/factory`: the job is under INTAKE with `now`, and the first row says
+      `no session runs the line`.
+- [ ] `/factory stop` answers `The line starts no new station. Running agents
+      finish theirs.` The first row of the pane ends with `stopped`.
+- [ ] `/factory answer 1` answers `1 does not wait for you (it is in intake).`
+- [ ] `/factory reject 1 Only a test.` answers `1 is rejected. The reason is on
+      the item.` The issue has a comment `The factory dropped this: Only a test.`,
+      no factory label, and is closed as not planned. The job folder is gone from
+      `jobs/` and is under `retired/`.
+- [ ] `/factory reject 1` (no reason) answers `A reason is needed: …`.
+- [ ] Reopen the issue and add the labels `factory` and `factory:in-progress` by
+      hand. `/factory` shows `1  claimed in the tracker, no job here. …` under
+      NEEDS YOU. `/factory reject 1 Lost.` closes it again.
+- [ ] Remove the stop flag when done: `rm "<that folder>/stop"`.
+
+The gate, the worktrees and the pull request calls have tests only: nothing
+calls them until the line runs (part 2).

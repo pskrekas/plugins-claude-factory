@@ -261,12 +261,17 @@ function gate(v: unknown): Parsed<Settings['gate']> {
   return { ok: { fast: lists[0] ?? [], full: lists[1] ?? [] } }
 }
 
+// A name that can only be read as a branch, never as an option.
+export function isBranchName(name: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(name)
+}
+
 // The base branch is handed to `git` as an argument. It must look like a
 // branch name, so it can never be read as an option.
 function branchName(v: unknown): Parsed<string> {
   if (!isText(v)) return { no: WRONG }
 
-  return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(v) ? { ok: v } : { no: NOT_BRANCH }
+  return isBranchName(v) ? { ok: v } : { no: NOT_BRANCH }
 }
 const prHost = (v: unknown): Parsed<Settings['prHost']> =>
   isText(v) && PR_HOSTS.includes(v) ? { ok: v as Settings['prHost'] } : { no: WRONG }
@@ -322,13 +327,22 @@ export function lineOf(argv: string[]): string {
   return argv.map(arg => (PLAIN_ARG.test(arg) ? arg : quoted(arg))).join(' ')
 }
 
-// Every command the settings file can make the plugin run, one line each.
-// These are the checks. The gate's commands do not run in this phase and are
-// not on this list: a line approved for one purpose must never start running
-// for another, so the gate gets its own approval when it exists.
-export function commandsOf(settings: Settings): string[] {
-  const lines = new Set<string>()
-  for (const check of settings.checks) if (check.run) lines.add(lineOf(check.run))
+// The mark of a gate command on the approval list. It starts with a character
+// that `lineOf` can never put first: a plain argument cannot hold `[`, and a
+// quoted one starts with a double quote. So no check's line can look like a
+// gate's, and the two kinds of approval cannot be mixed up.
+export const GATE_MARK = '[gate] '
 
-  return [...lines].sort()
+// Every command the settings file can make the plugin run, one line each: the
+// checks, then the gate's commands with their mark. A person approves both
+// kinds together, but a line approved for one purpose never runs for the
+// other: `[gate] npm test` does not let `npm test` run as a check each minute,
+// and an approved check does not open the gate.
+export function commandsOf(settings: Settings): string[] {
+  const checks = new Set<string>()
+  for (const check of settings.checks) if (check.run) checks.add(lineOf(check.run))
+  const gate = new Set<string>()
+  for (const argv of [...settings.gate.fast, ...settings.gate.full]) gate.add(GATE_MARK + lineOf(argv))
+
+  return [...[...checks].sort(), ...[...gate].sort()]
 }

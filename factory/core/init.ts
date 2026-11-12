@@ -36,6 +36,9 @@ function gateOf(facts: RepoFacts): { fast: string[][]; full: string[][] } {
     full.push(['npm', 'test'])
   }
   if (typeof scripts.build === 'string') full.push(['npm', 'run', 'build'])
+  // The gate runs in a clean copy of the commit, which holds no installed
+  // packages: the install is the first command of each list.
+  for (const list of [fast, full]) if (list.length > 0) list.unshift(['npm', 'install'])
   if (fast.length === 0 && full.length === 0 && facts.hasPyproject) {
     fast.push(['python3', '-m', 'pytest', '-q'])
     full.push(['python3', '-m', 'pytest', '-q'])

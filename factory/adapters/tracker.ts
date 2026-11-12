@@ -14,8 +14,10 @@ export type TrackerItem = {
   comments: { author: string; text: string }[]
 }
 
-// Runs one host command for an adapter. Never rejects.
-export type Run = (argv: string[]) => Promise<RunResult>
+// Runs one host command for an adapter. Never rejects. `stdin` is the
+// program's standard input: text that came from outside goes there, never
+// into an argument.
+export type Run = (argv: string[], stdin?: string) => Promise<RunResult>
 
 export interface Tracker {
   list(mark: string): Promise<Pick<TrackerItem, 'id' | 'title' | 'state'>[]>

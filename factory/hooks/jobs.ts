@@ -10,7 +10,7 @@ import type { Job } from '../core/job'
 import { STALE_MS, holderOf, lockOf, lockText } from '../core/lock'
 import { stateFolderOf } from '../core/state-path'
 import type { Io } from './io'
-import { readInside } from './readers/files'
+import { readInside, writeInside } from './readers/files'
 import { consentKeyOf } from './readers/repo'
 
 const MAX_JOB_BYTES = 256 * 1024
@@ -21,6 +21,8 @@ const NO_HOME = 'No home folder: the factory has no place for its state.'
 const INSIDE = 'The state folder is inside the repo. It is not used.'
 const NOT_OURS = 'The state folder belongs to another repository. It is not used.'
 const MAX_KEY_BYTES = 4096
+
+const ran = (result: Awaited<ReturnType<Io['run']>>) => !('failed' in result) && result.exitCode === 0
 
 export type Jobs = { jobs: Job[]; skipped: number; note: string | null }
 
@@ -111,7 +113,77 @@ export async function writeJob(io: Io, root: string, job: Job): Promise<void> {
   const state = await stateOf(io, root)
   if ('no' in state) throw new Error(state.no)
   if (!(await claim(io, state))) throw new Error(NOT_OURS)
-  await io.writeFile(`${state.dir}/jobs/${job.id}/job.json`, text)
+  // Written as a fresh file, read back, then renamed over the job file: a
+  // reader sees the old job or the new one and never half of one.
+  await writeInside(io, state.dir, `jobs/${job.id}/job.json`, text, back => parseJob(back, job.id) !== null)
+}
+
+// The state folder of this repository, or null when there is none to use.
+export async function stateDirOf(io: Io, root: string): Promise<string | null> {
+  const state = await stateOf(io, root)
+
+  return 'no' in state ? null : state.dir
+}
+
+// One job by its id, or null.
+export async function readJob(io: Io, root: string, id: string): Promise<Job | null> {
+  const state = await stateOf(io, root)
+  if (!isJobId(id) || 'no' in state || (await owner(io, state)) === 'theirs') return null
+  const text = await readInside(io, state.dir, `jobs/${id}/job.json`, MAX_JOB_BYTES)
+
+  return text === null ? null : parseJob(text, id)
+}
+
+// The newest job of a tracker item, or null.
+export function findJob(jobs: Job[], itemId: string): Job | null {
+  return [...jobs].filter(job => job.itemId === itemId).sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null
+}
+
+// Takes a finished job out of the list: its folder is moved to `retired/`. A
+// hooks module cannot delete, and the record of a job is worth keeping.
+export async function retireJob(io: Io, root: string, id: string, now: number): Promise<void> {
+  const state = await stateOf(io, root)
+  if (!isJobId(id) || 'no' in state || !(await claim(io, state))) throw new Error(`cannot retire ${id.slice(0, 60)}`)
+  await io.run(['mkdir', '-p', `${state.dir}/retired`])
+  if (!ran(await io.run(['mv', `${state.dir}/jobs/${id}`, `${state.dir}/retired/${id}.${now}`]))) {
+    throw new Error(`the job folder could not be moved: ${id}`)
+  }
+}
+
+// A file of a job that is not its state: the item's text, a spec, a report.
+// These live under `files/`, so an agent can be let in there and never reach
+// `job.json`. The name is plain, with at most one `round-<n>/` before it.
+const FILE_NAME = /^(round-\d{1,3}\/)?[a-z][a-z0-9-]{0,40}\.md$/
+const MAX_FILE_CHARS = 256 * 1024
+
+export async function writeJobFile(io: Io, root: string, id: string, name: string, text: string): Promise<void> {
+  const state = await stateOf(io, root)
+  if (!isJobId(id) || !FILE_NAME.test(name)) throw new Error(`not a job file name: ${name.slice(0, 60)}`)
+  if ('no' in state || !(await claim(io, state))) throw new Error('no' in state ? state.no : NOT_OURS)
+  await writeInside(io, state.dir, `jobs/${id}/files/${name}`, text.slice(0, MAX_FILE_CHARS))
+}
+
+// What the person told a job: one more numbered file. Answers the job with
+// its new count; the caller writes the job.
+export async function addFeedback(io: Io, root: string, job: Job, text: string): Promise<Job> {
+  const n = job.feedback + 1
+  await writeJobFile(io, root, job.id, `feedback-${n}.md`, text)
+
+  return { ...job, feedback: n }
+}
+
+// The stop flag: while it is set, the line starts no new station.
+export async function setStop(io: Io, root: string, isOn: boolean): Promise<void> {
+  const state = await stateOf(io, root)
+  if ('no' in state || !(await claim(io, state))) throw new Error('no' in state ? state.no : NOT_OURS)
+  await writeInside(io, state.dir, 'stop', isOn ? 'stop\n' : '')
+}
+
+export async function isStopped(io: Io, root: string): Promise<boolean> {
+  const state = await stateOf(io, root)
+  if ('no' in state) return false
+
+  return ((await readInside(io, state.dir, 'stop', MAX_LOCK_BYTES)) ?? '').trim() !== ''
 }
 
 // The lock is a folder `lock.<n>` with a file `holder` in it. Making a folder
@@ -119,7 +191,6 @@ export async function writeJob(io: Io, root: string, job: Job): Promise<void> {
 // the next generation: of the sessions that try at one moment, one `mkdir`
 // succeeds. The newest generation is the lock; older ones are leftovers.
 const GENERATION = /^lock\.(\d{1,9})\/$/
-const ran = (result: Awaited<ReturnType<Io['run']>>) => !('failed' in result) && result.exitCode === 0
 
 async function generations(io: Io, dir: string): Promise<number[]> {
   return (await io.listDir(dir))
@@ -141,7 +212,7 @@ export async function takeLock(
   const session = await io.sessionId()
   const holderOfGen = (n: number) => readInside(io, dir, `lock.${n}/holder`, MAX_LOCK_BYTES)
   const hold = async (n: number) => {
-    await io.writeFile(`${dir}/lock.${n}/holder`, lockText(session, now))
+    await io.writeFile(`${dir}/lock.${n}/holder`, lockText(session, now, root))
 
     return { isHeld: true, holder: null }
   }
@@ -180,4 +251,22 @@ export async function releaseLock(io: Io, root: string): Promise<void> {
   if (top === undefined) return
   const text = await readInside(io, state.dir, `lock.${top}/holder`, MAX_LOCK_BYTES)
   if (lockOf(text, session, 0) === 'mine') await io.run(['rm', '-r', `${state.dir}/lock.${top}`])
+}
+
+// Who holds the lock now. It only reads: the second session uses it to draw
+// the line without taking anything.
+export async function lockInfo(
+  io: Io,
+  root: string,
+  now: number,
+): Promise<{ state: 'free' | 'mine' | 'theirs'; holder: string | null }> {
+  const state = await stateOf(io, root)
+  if ('no' in state || (await owner(io, state)) === 'theirs') return { state: 'free', holder: null }
+  const top = (await generations(io, state.dir)).at(-1)
+  if (top === undefined) return { state: 'free', holder: null }
+  const text = await readInside(io, state.dir, `lock.${top}/holder`, MAX_LOCK_BYTES)
+  const who = lockOf(text, await io.sessionId(), now)
+  if (who === 'mine') return { state: 'mine', holder: null }
+
+  return who === 'theirs' ? { state: 'theirs', holder: holderOf(text) } : { state: 'free', holder: null }
 }

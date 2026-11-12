@@ -1,0 +1,318 @@
+import { expect, test } from 'claude-code/testing'
+
+import { addSpend, move, newJob, stop } from '../core/job'
+import type { Job } from '../core/job'
+import { lockText } from '../core/lock'
+import { START, STATE, cmd, engine } from './kit'
+
+const NOW = 1_000_000
+const SETTINGS = '{"tracker": {"kind": "github"}, "factory": {"forbiddenCommentWords": ["acme"]}}'
+const file = (j: Job) => ({ [`${STATE}/jobs/${j.id}/job.json`]: JSON.stringify(j) })
+const base = (id: string) => newJob({ id, title: 'A thing' }, NOW)
+const walk = (id: string, stages: Job['stage'][]) => stages.reduce((j, to) => move(j, to, 'ok', NOW), base(id))
+const readJob = (world: { files: Record<string, string> }, j: Job) =>
+  JSON.parse(world.files[`${STATE}/jobs/${j.id}/job.json`] ?? 'null') as Job | null
+
+// gh and git answer 0 unless the test says otherwise.
+// Like the real gh, it refuses a label that the repository does not have yet.
+function tools(fail: string[] = []) {
+  let hasLabels = false
+
+  return (argv: readonly string[]) => {
+    const line = argv.join(' ')
+    if (argv[0] !== 'gh' && argv[0] !== 'git') return undefined
+    if (fail.some(start => line.startsWith(start))) return { exitCode: 1, stdout: '', stderr: 'it broke' }
+    if (line.startsWith('gh label create')) hasLabels = true
+    if (line.startsWith('gh issue edit') && !hasLabels) {
+      return { exitCode: 1, stdout: '', stderr: "'factory:in-progress' not found" }
+    }
+    if (line.startsWith('gh pr view')) {
+      return { exitCode: 0, stdout: JSON.stringify({ number: 21, state: 'OPEN', isDraft: true, url: 'u', statusCheckRollup: [] }) }
+    }
+
+    return { exitCode: 0, stdout: '' }
+  }
+}
+
+function world(on: Parameters<typeof engine>[0], jobs: Job[], extra: Record<string, string> = {}, fail: string[] = []) {
+  const files = { '/r/.claude/factory.json': SETTINGS, ...Object.assign({}, ...jobs.map(file)), ...extra }
+
+  return engine(on, { files, remote: 'git@github.com:a/b.git', run: tools(fail), now: NOW })
+}
+const factoryRuns = (w: { ran: string[] }) =>
+  w.ran.filter(line => (line.startsWith('gh issue') && !line.startsWith('gh issue list') && !line.startsWith('gh issue view')) || line.startsWith('gh pr c') || line.startsWith('git worktree remove'))
+
+test('stop sets the flag; only a person can', async ($, on) => {
+  const w = world(on, [])
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('stop', 'sdk'))).text).toBe('Only a person can do this. Type the command at the prompt.')
+  expect(w.files[`${STATE}/stop`]).toBe(undefined)
+  expect((await $.command.run(cmd('stop'))).text).toBe('The line starts no new station. Running agents finish theirs.')
+  expect(w.files[`${STATE}/stop`]).toBe('stop\n')
+})
+
+test('answer resumes a job that asked a question', async ($, on) => {
+  const asked = stop(base('14'), { question: 'Which font?', asker: 'intake' }, NOW)
+  const w = world(on, [asked])
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('answer 14 Use the handwriting font.'))).text).toBe('14 goes on in intake.')
+  const now = readJob(w, asked)
+  expect([now?.stage, now?.question, now?.feedback]).toEqual(['intake', null, 1])
+  expect(w.files[`${STATE}/jobs/${asked.id}/files/feedback-1.md`]).toBe('Use the handwriting font.')
+  expect(factoryRuns(w)).toEqual(['gh issue edit 14 --add-label factory:in-progress --remove-label factory:needs-human -R a/b'])
+})
+
+test('answer on a job stopped for rounds grants one and sends it to Build, round 2', async ($, on) => {
+  const failed = { ...walk('12', ['spec', 'build', 'gate']), sentBack: { by: 'gate' as const, why: '2 tests failed' } }
+  const stopped = stop(failed, { question: 'round limit: 3 rounds with no pass', asker: 'limit', resumeAt: 'build' }, NOW)
+  const w = world(on, [stopped])
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('answer 12'))).text).toBe('12 goes on in build.')
+  const now = readJob(w, stopped)
+  expect([now?.stage, now?.round, now?.granted.rounds, now?.feedback]).toEqual(['build', 2, 1, 0])
+})
+
+test('answer on a job stopped for cost grants the job limit again', async ($, on) => {
+  const spent = addSpend(walk('12', ['spec', 'build']), 'build', 60_000, 10.5, NOW)
+  const stopped = stop(spent, { question: 'cost limit for the job', asker: 'limit' }, NOW)
+  const w = world(on, [stopped])
+  await $.session.start(START)
+  await $.command.run(cmd('answer 12 go on'))
+
+  expect(readJob(w, stopped)?.granted).toEqual({ rounds: 0, usd: 10, minutes: 0 })
+})
+
+test('answer with text sends a ready job back to Build; with no text it changes nothing', async ($, on) => {
+  const ready = { ...walk('10', ['spec', 'build', 'gate', 'review', 'approve', 'ready']), pr: { number: 21, url: 'u' } }
+  const w = world(on, [ready])
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('answer 10'))).text).toBe(
+    '10 is ready. Merge its pull request, or give it text to change something.',
+  )
+  expect(readJob(w, ready)?.stage).toBe('ready')
+  expect((await $.command.run(cmd('answer 10 Make the button blue.'))).text).toBe('10 goes back to Build, round 2.')
+  const now = readJob(w, ready)
+  expect([now?.stage, now?.round, now?.sentBack]).toEqual(['build', 2, { by: 'you', why: 'Make the button blue.' }])
+})
+
+test('what sent a ready job back is the start of what the person said', async ($, on) => {
+  const ready = { ...walk('10', ['spec', 'build', 'gate', 'review', 'approve', 'ready']), pr: { number: 21, url: 'u' } }
+  const w = world(on, [ready])
+  await $.session.start(START)
+  const long = 'Make it blue. '.repeat(60)
+
+  await $.command.run(cmd(`answer 10 ${long}`))
+  expect(readJob(w, ready)?.sentBack?.why.length).toBe(300)
+  expect(w.files[`${STATE}/jobs/${ready.id}/files/feedback-1.md`]).toBe(long.trim())
+})
+
+test('reject of an item the tracker says is claimed, with no job here, writes to the tracker only', async ($, on) => {
+  const issues = JSON.stringify([
+    { number: 31, title: 'Lost', state: 'OPEN', labels: [{ name: 'factory' }, { name: 'factory:in-progress' }] },
+    { number: 4, title: 'Fonts', state: 'OPEN', labels: [{ name: 'factory' }] },
+  ])
+  const answer = tools()
+  const files = { '/r/.claude/factory.json': SETTINGS }
+  const w = engine(on, {
+    files,
+    remote: 'git@github.com:a/b.git',
+    run: argv => (argv.join(' ').startsWith('gh issue list') ? { exitCode: 0, stdout: issues } : answer(argv)),
+    now: NOW,
+  })
+  await $.session.start(START)
+
+  // An item in the queue, or one the tracker does not know, has nothing to reject.
+  expect((await $.command.run(cmd('reject 4 no'))).text).toBe('No job for 4.')
+  expect((await $.command.run(cmd('reject 99 no'))).text).toBe('No job for 99.')
+  expect(factoryRuns(w)).toEqual([])
+
+  expect((await $.command.run(cmd('reject 31 Its folder is lost.'))).text).toBe('31 is rejected. The reason is on the item.')
+  expect(factoryRuns(w)).toEqual([
+    'gh issue comment 31 --body-file - -R a/b',
+    'gh issue close 31 --reason not planned -R a/b',
+    'gh issue edit 31 --remove-label factory:in-progress --remove-label factory:needs-human -R a/b',
+  ])
+  expect(w.stdins[w.ran.indexOf('gh issue comment 31 --body-file - -R a/b')]).toBe('The factory dropped this: Its folder is lost.')
+  expect(Object.keys(w.files).some(name => name.includes('/jobs/') || name.includes('/retired/'))).toBe(false)
+})
+
+test('answer on a job that runs, or on no job, says so and changes nothing', async ($, on) => {
+  const running = walk('7', ['spec'])
+  const w = world(on, [running])
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('answer 7 hello'))).text).toBe('7 does not wait for you (it is in spec).')
+  expect((await $.command.run(cmd('answer 99 hello'))).text).toBe('No job for 99.')
+  expect((await $.command.run(cmd('answer'))).text).toBe('Say which job: /factory answer <id> [text]')
+  for (const id of ['../x', '--help', 'a b']) {
+    expect((await $.command.run(cmd(`answer ${id}`))).text?.startsWith('No job for')).toBe(true)
+  }
+  expect(factoryRuns(w)).toEqual([])
+  expect(readJob(w, running)?.stage).toBe('spec')
+})
+
+test('reject comments, closes the pull request, sets the state, removes the worktree and retires the job', async ($, on) => {
+  const job = { ...walk('12', ['spec', 'build']), pr: { number: 21, url: 'u' }, branch: 'factory/12-a-thing' }
+  const w = world(on, [job], { [`${STATE}/worktrees/${job.id}/README.md`]: 'x' })
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('reject 12 Not worth building.'))).text).toBe('12 is rejected. The reason is on the item.')
+  expect(factoryRuns(w)).toEqual([
+    'gh issue comment 12 --body-file - -R a/b',
+    'gh pr close 21 -R a/b',
+    'gh issue close 12 --reason not planned -R a/b',
+    'gh issue edit 12 --remove-label factory:in-progress --remove-label factory:needs-human -R a/b',
+    `git worktree remove --force ${STATE}/worktrees/${job.id}`,
+  ])
+  expect(w.stdins[w.ran.indexOf('gh issue comment 12 --body-file - -R a/b')]).toBe('The factory dropped this: Not worth building.')
+  expect(readJob(w, job)).toBe(null)
+  const retired = Object.keys(w.files).find(name => name.startsWith(`${STATE}/retired/${job.id}.`) && name.endsWith('job.json'))
+  expect((JSON.parse(w.files[retired ?? ''] ?? '{}') as Job).stage).toBe('rejected')
+})
+
+test('a reject that fails at the pull request leaves the job as it was, and a second run finishes', async ($, on) => {
+  const job = { ...walk('12', ['spec', 'build']), pr: { number: 21, url: 'u' } }
+  const fail = ['gh pr close']
+  const failing = world(on, [job], {}, fail)
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('reject 12 no'))).text).toBe(
+    '12 was not rejected: close the pull request failed (gh: it broke). Run the command again.',
+  )
+  expect(readJob(failing, job)?.stage).toBe('build')
+
+  fail.length = 0
+  expect((await $.command.run(cmd('reject 12 no'))).text).toBe('12 is rejected. The reason is on the item.')
+  expect(readJob(failing, job)).toBe(null)
+})
+
+test('a reject whose clean-up fails is still a reject, and says what is left', async ($, on) => {
+  const job = { ...walk('12', ['spec', 'build']), branch: 'factory/12-a-thing' }
+  const w = world(on, [job], { [`${STATE}/worktrees/${job.id}/README.md`]: 'x' }, ['git worktree remove'])
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('reject 12 no'))).text).toBe(
+    '12 is rejected. The reason is on the item. Not cleaned up: remove the worktree (git: it broke).',
+  )
+  // The tracker and the job agree: a second reject finds nothing to do.
+  expect(readJob(w, job)).toBe(null)
+  expect((await $.command.run(cmd('reject 12 no'))).text).toBe('No job for 12.')
+})
+
+test('a tracker that cannot be read is named, not taken for "no job"', async ($, on) => {
+  const w = world(on, [], {}, ['gh issue list'])
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('reject 31 no'))).text).toBe(
+    '31 was not rejected: read the tracker failed (gh: it broke). Run the command again.',
+  )
+  expect(factoryRuns(w)).toEqual([])
+})
+
+test('the state labels are made before the first state is written, and every gh call names the repository', async ($, on) => {
+  const asked = stop(base('14'), { question: 'Which font?', asker: 'intake' }, NOW)
+  const w = world(on, [asked])
+  await $.session.start(START)
+  await $.command.run(cmd('answer 14 The first one.'))
+
+  const gh = w.ran.filter(line => line.startsWith('gh label') || line.startsWith('gh issue edit'))
+  expect(gh).toEqual([
+    'gh label create factory:in-progress --force --description The factory works on this -R a/b',
+    'gh label create factory:needs-human --force --description The factory waits for a person -R a/b',
+    'gh issue edit 14 --add-label factory:in-progress --remove-label factory:needs-human -R a/b',
+  ])
+})
+
+test('a remote that names no GitHub repository gives no tracker: nothing is written anywhere else', async ($, on) => {
+  const asked = stop(base('14'), { question: 'Which font?', asker: 'intake' }, NOW)
+  const files = { '/r/.claude/factory.json': '{"tracker": {"kind": "github"}, "prHost": "github"}', ...file(asked) }
+  const w = engine(on, { files, remote: 'https://example.com/a/b.git', run: tools(), now: NOW })
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('answer 14 hello'))).text).toBe(
+    '14 goes on in intake. No tracker is set: nothing was written to one.',
+  )
+  expect(w.ran.some(line => line.startsWith('gh '))).toBe(false)
+})
+
+test('an answer that cannot reach the tracker changes nothing and says so', async ($, on) => {
+  const asked = stop(base('14'), { question: 'Which font?', asker: 'intake' }, NOW)
+  const w = world(on, [asked], {}, ['gh issue edit'])
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('answer 14 hello'))).text).toBe(
+    '14 was not changed: set the tracker state failed (gh: it broke). Run the command again.',
+  )
+  expect(readJob(w, asked)?.stage).toBe('needs-info')
+})
+
+test('a question for the author needs text; a limit of the day is not lifted by an answer', async ($, on) => {
+  const asked = stop(base('14'), { question: 'Which font?', asker: 'intake' }, NOW)
+  // The job is under its own limit (10); with another job the day is over its limit (50).
+  const spent = addSpend(walk('12', ['spec', 'build']), 'build', 60_000, 9, NOW)
+  const other = addSpend(walk('13', ['spec']), 'spec', 60_000, 45, NOW)
+  const day = stop(spent, { question: 'cost limit for the day', asker: 'limit' }, NOW)
+  const w = world(on, [asked, day, other])
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('answer 14'))).text).toBe('Give the answer as text: /factory answer 14 <text>')
+  expect(readJob(w, asked)?.stage).toBe('needs-info')
+  expect((await $.command.run(cmd('answer 12 go on'))).text).toBe(
+    '12 is still at a limit (cost limit for the day). Nothing was changed.',
+  )
+  expect([readJob(w, day)?.stage, readJob(w, day)?.granted.usd]).toEqual(['needs-human', 0])
+  expect(factoryRuns(w)).toEqual([])
+})
+
+test('a reject needs a reason, and a reason with a forbidden word runs nothing', async ($, on) => {
+  const job = walk('12', ['spec'])
+  const w = world(on, [job])
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('reject 12'))).text).toBe('A reason is needed: /factory reject <id> <reason>')
+  expect((await $.command.run(cmd('reject 12 says ACME'))).text).toBe(
+    '12 was not rejected: comment on the item failed (the comment was not sent: a forbidden word). Run the command again.',
+  )
+  expect((await $.command.run(cmd('reject 12 no', 'plugin'))).text).toBe('Only a person can do this. Type the command at the prompt.')
+  expect(factoryRuns(w)).toEqual([])
+  expect(readJob(w, job)?.stage).toBe('spec')
+})
+
+test('with another session holding the lock, a command changes nothing and says who', async ($, on) => {
+  const asked = stop(base('14'), { question: 'Which font?', asker: 'intake' }, NOW)
+  const w = world(on, [asked], { [`${STATE}/lock.1/holder`]: lockText('other-session', NOW - 1000, '/somewhere/else') })
+  await $.session.start(START)
+
+  const text = 'Another session runs the line (/somewhere/else). Nothing was changed.'
+  expect((await $.command.run(cmd('answer 14 hello'))).text).toBe(text)
+  expect((await $.command.run(cmd('reject 14 no'))).text).toBe(text)
+  expect(readJob(w, asked)?.stage).toBe('needs-info')
+  // The brake works from any session: it changes no job.
+  expect((await $.command.run(cmd('stop'))).text).toBe('The line starts no new station. Running agents finish theirs.')
+  expect(w.files[`${STATE}/stop`]).toBe('stop\n')
+  expect(factoryRuns(w)).toEqual([])
+})
+
+test('with no tracker the job still changes, and the answer says nothing was written to one', async ($, on) => {
+  const asked = stop(base('14'), { question: 'Which font?', asker: 'intake' }, NOW)
+  const w = engine(on, { files: file(asked), run: tools(), now: NOW })
+  await $.session.start(START)
+
+  expect((await $.command.run(cmd('answer 14 hello'))).text).toBe(
+    '14 goes on in intake. No tracker is set: nothing was written to one.',
+  )
+  expect(readJob(w, asked)?.stage).toBe('intake')
+  expect(w.ran.some(line => line.startsWith('gh issue edit'))).toBe(false)
+})
+
+test('a command leaves the lock free again', async ($, on) => {
+  const w = world(on, [])
+  await $.session.start(START)
+  await $.command.run(cmd('stop'))
+
+  expect(Object.keys(w.files).some(name => name.includes('/lock.'))).toBe(false)
+})
