@@ -44,7 +44,7 @@ test('docker and the image are there, or one line says what is missing', async (
 test("a builder's command runs in a container of its own over the job's worktree, and the container is gone when the command ends", async () => {
   const io = world({ 'docker run': { exitCode: 3, stdout: 'out line\n', stderr: 'err line\n' }, 'docker rm': { exitCode: 1, stderr: 'No such container' } })
   const command = 'npm test -- "a b"; echo $(id) &'
-  expect(await runOnce(io, '/r', ID, SPEC, command, 120_000)).toEqual({ ok: true, text: 'exit 3\nout line\n[stderr]\nerr line\n', exitCode: 3 })
+  expect(await runOnce(io, '/r', ID, SPEC, command, 120_000)).toEqual({ ok: true, text: 'exit 3\nout line\n[stderr]\nerr line\n', exitCode: 3, isGone: true })
   // One run, then the container is removed by name: also one that a time limit or a lost docker left alive.
   expect(docker(io)).toEqual([`docker run --rm --name ${JOB} --label factory.state=${LABEL} --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -v ${WT}/.git:${WT}/.git:ro -w ${WT} --entrypoint sh node:22 -c ${command}`, `docker rm -f ${JOB}`])
   expect(io.timeouts[io.ran.findIndex(line => line.startsWith('docker run'))]).toBe(120_000)
@@ -59,17 +59,30 @@ test("a builder's command runs in a container of its own over the job's worktree
 
 test('a command that does not end in time is stopped: its container is removed', async () => {
   const slow = world({ 'docker run': 'hang', 'docker rm': { exitCode: 0 } })
-  expect(await runOnce(slow, '/r', ID, SPEC, 'sleep 999', 5000)).toEqual({ ok: true, text: 'The command did not end in 5 s. It was stopped; what it printed is lost.', exitCode: null })
+  expect(await runOnce(slow, '/r', ID, SPEC, 'sleep 999', 5000)).toEqual({ ok: true, text: 'The command did not end in 5 s. It was stopped; what it printed is lost.', exitCode: null, isGone: true })
   expect(docker(slow).at(-1)).toBe(`docker rm -f ${JOB}`)
+  // Docker does not say that the container is gone: the caller is told, whatever the command did.
+  for (const rm of ['hang', 'missing', { exitCode: 1, stderr: 'Cannot connect to the Docker daemon' }] as const) {
+    const stuck = world({ 'docker run': 'hang', 'docker rm': rm })
+    expect([JSON.stringify(rm), (await runOnce(stuck, '/r', ID, SPEC, 'sleep 999', 5000)).isGone]).toEqual([JSON.stringify(rm), false])
+  }
+  // Gone means: docker removed it, or says there is none, or says it is being removed.
+  for (const stderr of ['Error response from daemon: No such container: x', 'Error response from daemon: removal of container x is already in progress']) {
+    expect([stderr, await removeContainer(world({ 'docker rm': { exitCode: 1, stderr } }), JOB)]).toEqual([stderr, true])
+  }
+  expect(await removeContainer(world({ 'docker rm': { exitCode: 0 } }), JOB)).toBe(true)
+  expect(await removeContainer(world({ 'docker rm': { exitCode: 1, stderr: 'permission denied' } }), JOB)).toBe(false)
+  expect(await removeContainer(world({}), JOB)).toBe(false)
+  expect(await removeContainer(world({ 'docker rm': { exitCode: 0 } }), 'postgres')).toBe(false)
 })
 
 test('a command that cannot run says why, and nothing runs', async () => {
-  expect(await runOnce(world({}), '/r', ID, SPEC, '', 1000)).toEqual({ ok: false, why: 'the command is empty or too long' })
-  expect(await runOnce(world({}), '/r', ID, SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'docker is not on this machine' })
+  expect(await runOnce(world({}), '/r', ID, SPEC, '', 1000)).toEqual({ ok: false, why: 'the command is empty or too long', isGone: true })
+  expect(await runOnce(world({}), '/r', ID, SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'docker is not on this machine', isGone: true })
   // No folder, no container.
   const none = world({ docker: { exitCode: 0 } })
-  expect(await runOnce(none, '/r', '99-no-such-job', SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'the job has no folder' })
-  expect(await runOnce(none, '/r', '../x', SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'the job has no folder' })
+  expect(await runOnce(none, '/r', '99-no-such-job', SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'the job has no folder', isGone: true })
+  expect(await runOnce(none, '/r', '../x', SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'the job has no folder', isGone: true })
   expect(docker(none)).toEqual([])
   // A container of the same name is still there (a run that was lost): it is removed, and the command runs once more.
   let tries = 0
@@ -81,11 +94,11 @@ test('a command that cannot run says why, and nothing runs', async () => {
 
     return tries === 1 ? { exitCode: 125, stdout: '', stderr: `docker: Error response from daemon: Conflict. The container name "/${JOB}" is already in use by container "abc".` } : { exitCode: 0, stdout: 'ok\n' }
   }
-  expect(await runOnce(taken, '/r', ID, SPEC, 'ls', 1000)).toEqual({ ok: true, text: 'exit 0\nok\n', exitCode: 0 })
+  expect(await runOnce(taken, '/r', ID, SPEC, 'ls', 1000)).toEqual({ ok: true, text: 'exit 0\nok\n', exitCode: 0, isGone: true })
   expect(docker(taken).map(line => line.split(' ').slice(0, 2).join(' '))).toEqual(['docker run', 'docker rm', 'docker run', 'docker rm'])
   // Docker itself refuses (not the command): the reason is told, with no exit code of a command.
   const refused = world({ 'docker run': { exitCode: 125, stderr: 'docker: invalid reference format.\nSee docker run --help' }, 'docker rm': { exitCode: 0 } })
-  expect(await runOnce(refused, '/r', ID, SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'docker: docker: invalid reference format. See docker run --help' })
+  expect(await runOnce(refused, '/r', ID, SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'docker: docker: invalid reference format. See docker run --help', isGone: true })
 })
 
 test("the gate's container is made new over the gate's clean copy; one that cannot be made says why", async () => {

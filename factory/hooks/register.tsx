@@ -322,7 +322,7 @@ export const register: Register = (on, options) => {
     const ready = io
     if (ready === null || e.tool === SHELL_TOOL) return next(e)
 
-    return onFileCall(ready, { agentId: (e as { agentId?: string }).agentId, tool: e.tool }, () => next(e))
+    return onFileCall(ready, e as { agentId?: string; tool: string; [key: string]: unknown }, () => next(e))
   })
 
   // The end of a turn. For an agent of the line it is a fact for the inbox.

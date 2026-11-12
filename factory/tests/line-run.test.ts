@@ -864,3 +864,18 @@ test('an item whose container settings cannot be read is not started', async () 
   expect([await jobOf(w, '12'), w.started, out.note]).toEqual([undefined, [], '12: no container (the container settings are not approved)'])
   expect(lines(w).some(line => line.startsWith('git worktree add'))).toBe(false)
 })
+
+test("a builder's container that cannot be stopped keeps its work from being committed: after two tries the job asks", async () => {
+  const w = lineWorld({ jobs: [{ ...at('12', ['spec', 'build']), shell: 'container' }], settings: { factory: { container: BOX } } })
+  w.state.hasDocker = true
+  w.state.isDirty = true
+  w.state.fail = ['docker rm']
+  w.state.failText = 'Cannot connect to the Docker daemon'
+  await begin(w)
+  await advance(w.io, w.spawn)
+  await ends(w, 'builder', 'DONE')
+  await advance(w.io, w.spawn)
+  const job = await jobOf(w, '12')
+  expect([job?.stage, job?.question, job?.stoppedIn]).toEqual(['needs-human', "The line could not go on: the builder's container could not be stopped (start Docker)", 'build'])
+  expect(lines(w).some(line => line.includes(' add -A') || line.includes(' commit '))).toBe(false)
+})

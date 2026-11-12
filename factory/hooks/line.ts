@@ -408,9 +408,10 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
       try {
         if (job.stage === 'build' && step.to === 'gate') {
           // Nothing of the builder runs when the plugin reads its folder: a
-          // container that a command left (it should not) is removed first.
+          // container that a command left (it should not) is removed first,
+          // and docker must say that it is gone.
           const box = job.shell === 'container' ? containerName('job', job.id, dir.slice(dir.lastIndexOf('/') + 1)) : null
-          if (box !== null) await removeContainer(io, box).catch(() => undefined)
+          if (box !== null && !(await removeContainer(io, box).catch(() => false))) throw new Error("the builder's container could not be stopped (start Docker)")
           // The builder has no git: the plugin commits what it left, and the gate judges that commit.
           const committed = await commitAll(io, root, job)
           if (!committed.ok) throw new Error(`the work could not be committed (${committed.why ?? 'git failed'})`)

@@ -107,33 +107,35 @@ export async function runOnce(
   spec: ContainerSpec,
   command: string,
   timeoutMs: number,
-): Promise<{ ok: true; text: string; exitCode: number | null } | { ok: false; why: string }> {
-  if (command === '' || command.length > MAX_COMMAND) return { ok: false, why: 'the command is empty or too long' }
+): Promise<({ ok: true; text: string; exitCode: number | null } | { ok: false; why: string }) & { isGone: boolean }> {
+  // `isGone`: docker said that no container of this command is left. When it
+  // is false, a program of the command may still run in the job's folder.
+  if (command === '' || command.length > MAX_COMMAND) return { ok: false, why: 'the command is empty or too long', isGone: true }
   const place = await placeOf(io, root, jobId, 'job')
-  if (!place.ok) return place
+  if (!place.ok) return { ...place, isGone: true }
   const call: DockerCall = { do: 'once', ...place, spec, command }
   let result = await docker(io, call, timeoutMs)
-  if (result !== null && 'failed' in result && result.failed === 'not-found') return { ok: false, why: NOT_HERE }
+  if (result !== null && 'failed' in result && result.failed === 'not-found') return { ok: false, why: NOT_HERE, isGone: true }
   // Nothing of the command stays alive, however the call ended.
-  await docker(io, { do: 'remove', name: place.name })
-  if (result !== null && !('failed' in result) && isDockersOwn(result) && /already in use/i.test(result.stderr)) {
+  let isGone = await removeContainer(io, place.name)
+  if (isGone && result !== null && !('failed' in result) && isDockersOwn(result) && /already in use/i.test(result.stderr)) {
     // A container of this name was there (a run that was lost). It is removed now: once more.
     result = await docker(io, call, timeoutMs)
-    await docker(io, { do: 'remove', name: place.name })
+    isGone = await removeContainer(io, place.name)
   }
-  if (result === null) return { ok: false, why: 'the container settings are not usable' }
+  if (result === null) return { ok: false, why: 'the container settings are not usable', isGone }
   if ('failed' in result) {
-    if (result.failed === 'timeout') return { ok: true, text: `The command did not end in ${Math.round(timeoutMs / 1000)} s. It was stopped; what it printed is lost.`, exitCode: null }
+    if (result.failed === 'timeout') return { ok: true, text: `The command did not end in ${Math.round(timeoutMs / 1000)} s. It was stopped; what it printed is lost.`, exitCode: null, isGone }
 
-    return { ok: false, why: whyNot(result) }
+    return { ok: false, why: whyNot(result), isGone }
   }
-  if (isDockersOwn(result)) return { ok: false, why: failureText('docker', result) }
+  if (isDockersOwn(result)) return { ok: false, why: failureText('docker', result), isGone }
   const { stdout, stderr } = result
   const isLong = stdout.length + stderr.length > MAX_TEXT
   const body = stderr === '' ? tail(stdout, MAX_TEXT) : stdout === '' ? tail(stderr, MAX_TEXT) : `${tail(stdout, (MAX_TEXT * 2) / 3)}[stderr]\n${tail(stderr, MAX_TEXT / 3)}`
   const notes = [isLong ? '[the start of the output is cut]\n' : '', result.isCut === true ? '[the end of the output is missing: the command printed more than is kept]\n' : ''].join('')
 
-  return { ok: true, text: `exit ${result.exitCode}\n${notes}${body}`, exitCode: result.exitCode }
+  return { ok: true, text: `exit ${result.exitCode}\n${notes}${body}`, exitCode: result.exitCode, isGone }
 }
 
 // Runs one command of the gate inside the gate's container, as an argument list.
@@ -141,8 +143,22 @@ export async function runArgv(io: Io, name: string, cwd: string, argv: string[],
   return (await docker(io, { do: 'argv', name, cwd, argv }, timeoutMs)) ?? { failed: 'other' }
 }
 
-export async function removeContainer(io: Io, name: string): Promise<void> {
-  await docker(io, { do: 'remove', name })
+// Removes a container by name, with every program in it. True only when
+// docker says so: it removed the container, there is none of that name, or
+// it is being removed. On any other answer the container may still run.
+export async function removeContainer(io: Io, name: string): Promise<boolean> {
+  const result = await docker(io, { do: 'remove', name })
+  if (result === null || 'failed' in result) return false
+
+  return result.exitCode === 0 || /no such container|is already in progress/i.test(result.stderr)
+}
+
+// The same for the container of a job's commands.
+export async function removeJobContainer(io: Io, root: string, jobId: string): Promise<boolean> {
+  const dir = await stateDirOf(io, root)
+  const name = dir === null ? null : containerName('job', jobId, dir.slice(dir.lastIndexOf('/') + 1))
+
+  return name !== null && (await removeContainer(io, name))
 }
 
 // Removes every container of this repository's factory whose name is not in

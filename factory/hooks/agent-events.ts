@@ -9,7 +9,7 @@ import type { Who } from '../core/fence'
 import { isJobId } from '../core/job'
 import type { Usage } from '../core/price'
 import { clean } from '../core/rows'
-import { runOnce } from './container'
+import { removeJobContainer, runOnce } from './container'
 import { baseContainer } from './gate'
 import { dropFact } from './inbox'
 import type { Io } from './io'
@@ -60,6 +60,12 @@ const fileCalls = new Map<string, number>() // per job: its file calls that run 
 const SHELL_RUNS = 'A command of this job runs in its container. Wait for it to end, then call again.'
 const FILE_RUNS = 'A file call of this job runs. Wait for it to end, then call again.'
 const TWO_SHELLS = 'Another command of this job runs. Wait for it to end, then call again.'
+// The jobs with a command whose container docker did not confirm as gone: a
+// program of it may still run, so the job's folder stays closed.
+const unconfirmed = new Set<string>()
+const STUCK = 'A container of this job may still run: docker did not confirm that it stopped. Start Docker; the next command of the job tries again.'
+// Why a file call of a job must wait, or null.
+const closedFor = (jobId: string): string | null => (unconfirmed.has(jobId) ? STUCK : shellRuns.has(jobId) ? SHELL_RUNS : null)
 const NOT_RUN = 'The command was not run'
 const SHELL_MS = { usual: 120_000, most: 600_000, least: 1_000 }
 
@@ -240,12 +246,27 @@ export async function onToolCheck(
     // passed on. (The hand-back is never the fence's to answer.)
     return unsettled > 0 && FENCED_TOOLS.includes(e.tool) ? { decision: 'deny', reason: NOT_YET } : null
   }
+  // Told early; `onFileCall` is the one that holds the rule.
+  const closed = FILE_TOOLS.includes(e.tool) ? closedFor(agent.jobId) : null
+  if (closed !== null) return { decision: 'deny', reason: closed }
+
+  return verdictOf(io, root, agent, e.agentId, e.tool, e.input)
+}
+
+// The fence's answer for one call of an agent of the line; a refusal is also
+// dropped as a fact. Null when the call is not the fence's to answer.
+async function verdictOf(
+  io: Io,
+  root: string,
+  agent: AgentRef,
+  agentId: string,
+  tool: string,
+  input: unknown,
+): Promise<{ decision: 'allow' } | { decision: 'deny'; reason: string } | null> {
   const dir = await stateDirOf(io, root)
   const [tree, folder] = dir === null ? [null, null] : await Promise.all([io.stat(`${dir}/worktrees/${agent.jobId}`), io.stat(`${dir}/jobs/${agent.jobId}`)])
   const shell = await shellOf(io, root, agent.jobId)
   if (tree === null || folder === null || shell === null) return { decision: 'deny', reason: 'The job of this agent has no folder.' }
-  // Told early; `onFileCall` is the one that holds the rule.
-  if (FILE_TOOLS.includes(e.tool) && shellRuns.has(agent.jobId)) return { decision: 'deny', reason: SHELL_RUNS }
   const who: Who = {
     role: agent.role,
     shell,
@@ -254,10 +275,10 @@ export async function onToolCheck(
     outFile: `${folder.realPath}/out/${OUT_FILE[agent.role](agent.focus)}`,
     forbiddenCommands: await forbiddenOf(io),
   }
-  const verdict = fenceOf({ tool: e.tool, input: await realInput(io, e.tool, e.input, who) }, who)
+  const verdict = fenceOf({ tool, input: await realInput(io, tool, input, who) }, who)
   if (verdict === null) return null
   if (verdict.decision === 'allow') return { decision: 'allow' }
-  await dropFact(io, root, { kind: 'refusal', agentId: e.agentId, command: verdict.command, at: await io.now() }).catch(() => undefined)
+  await dropFact(io, root, { kind: 'refusal', agentId, command: verdict.command, at: await io.now() }).catch(() => undefined)
 
   return { decision: 'deny', reason: verdict.reason }
 }
@@ -291,7 +312,14 @@ export async function onShell(
   if ((fileCalls.get(job.id) ?? 0) > 0) return { deny: FILE_RUNS }
   shellRuns.add(job.id)
   try {
+    // A container of an earlier command that docker did not confirm as gone
+    // is removed first. While that fails, nothing of the job runs.
+    if (unconfirmed.has(job.id)) {
+      if (!(await removeJobContainer(io, root, job.id))) return { deny: STUCK }
+      unconfirmed.delete(job.id)
+    }
     const ran = await runOnce(io, root, job.id, where.container, command, Math.round(Math.min(SHELL_MS.most, Math.max(SHELL_MS.least, asked))))
+    if (!ran.isGone) unconfirmed.add(job.id)
 
     return ran.ok ? { result: ran.text } : { deny: `${NOT_RUN}: ${ran.why.replace(/\.$/, '')}.` }
   } finally {
@@ -300,19 +328,27 @@ export async function onShell(
 }
 
 // A file tool call of an agent of the line, as the engine is about to run it
-// (`next`). For a job that builds in a container it does not run while a
-// command of the job runs, and no command starts while it runs. Any other
-// call goes on unchanged.
-export async function onFileCall<T>(io: Io, e: { agentId?: string; tool: string }, next: () => Promise<T>): Promise<T | { deny: string }> {
+// (`next`); `e` holds the tool's arguments beside its name. For a job that
+// builds in a container it does not run while a command of the job runs, and
+// no command starts while it runs. And the fence judges it again here, at the
+// moment it runs: a command that ended since the engine asked the fence may
+// have turned a part of its path into a link. From the count below until the
+// call ends nothing of the job runs, so what the fence sees now is what the
+// tool will use. Any other call goes on unchanged.
+export async function onFileCall<T>(io: Io, e: { agentId?: string; tool: string; [key: string]: unknown }, next: () => Promise<T>): Promise<T | { deny: string }> {
   if (e.agentId === undefined || !FILE_TOOLS.includes(e.tool)) return next()
   const root = await io.root()
   const agent = await agentOf(io, root, e.agentId)
   if (agent === null || (await shellOf(io, root, agent.jobId)) !== 'container') return next()
   const { jobId } = agent
   // Nothing is awaited between this look and the count.
-  if (shellRuns.has(jobId)) return { deny: SHELL_RUNS }
+  const closed = closedFor(jobId)
+  if (closed !== null) return { deny: closed }
   fileCalls.set(jobId, (fileCalls.get(jobId) ?? 0) + 1)
   try {
+    const verdict = await verdictOf(io, root, agent, e.agentId, e.tool, e)
+    if (verdict !== null && verdict.decision === 'deny') return { deny: verdict.reason }
+
     return await next()
   } finally {
     const left = (fileCalls.get(jobId) ?? 1) - 1

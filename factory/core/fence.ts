@@ -207,6 +207,13 @@ const SPLIT = /;|&&|\|\||\||&|\n|\$\(|`|\(|\)/
 // Also one behind another command, or given to a shell as text. Best effort,
 // as every text check of a command is.
 export function forbiddenIn(command: string, forbidden: string[][], depth = 0): string | null {
+  // A command that the shell builds (a variable, a command inside a command)
+  // cannot be read word by word. It is refused when every word of a forbidden
+  // command is somewhere in it.
+  if (depth === 0 && /[$`]/.test(command)) {
+    const bare = command.replace(/['"\\]/g, '')
+    if (forbidden.some(list => list.length > 0 && list.every((word, i) => bare.includes(i === 0 ? baseName(word) : word)))) return command
+  }
   for (const simple of command.split(SPLIT)) {
     // As the shell reads plain words: with no quotes and no backslashes in them.
     const words = wordsOf(simple).map(word => word.replace(/['"\\]/g, ''))

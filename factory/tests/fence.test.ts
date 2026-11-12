@@ -191,6 +191,14 @@ test("the container builder's shell tool: any command but a forbidden one; it ha
     expect([command, sh(command)?.decision, (sh(command) as { reason?: string }).reason]).toEqual([command, 'deny', 'This command is forbidden in this repository.'])
   }
   expect(sh('npm publish')).toEqual({ decision: 'deny', reason: 'This command is forbidden in this repository.', command: 'npm publish' })
+  // A command that the shell builds (a variable, a command inside a command) and that holds every word of a forbidden one.
+  for (const command of ['X=publish; npm $X', 'npm $(echo publish)', 'npm `echo publish`', 'P=npm; "$P" publish', 'terraform ${A:-apply}']) {
+    expect([command, sh(command)?.decision]).toEqual([command, 'deny'])
+  }
+  // A variable alone does not make a command forbidden.
+  for (const command of ['echo "$HOME" && npm test', 'npm run build -- --out "$PWD/dist"', 'for f in $(ls); do cat "$f"; done']) {
+    expect([command, sh(command)]).toEqual([command, { decision: 'allow' }])
+  }
   expect(sh('')?.decision).toBe('deny')
   expect(sh(7)?.decision).toBe('deny')
   // Its file tools are judged as before.

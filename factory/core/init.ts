@@ -51,10 +51,14 @@ function gateOf(facts: RepoFacts): { fast: string[][]; full: string[][] } {
 // The person reads it and edits it; nothing in it runs before they approve it.
 export function draftSettings(facts: RepoFacts): string {
   const isGitHub = prHostOf(facts.remote, 'auto') === 'github'
+  // The container the builder's and the gate's commands run in: an image with
+  // the repo's kind of tools. For any other repo the person names one.
+  const image = facts.packageJson !== null && Object.keys(scriptsOf(facts.packageJson)).length > 0 ? 'node:22' : facts.hasPyproject ? 'python:3.12' : null
   const draft = {
     ...(isGitHub ? { tracker: { kind: 'github', mark: 'factory' } } : {}),
     baseBranch: facts.baseBranch !== null && BRANCH.test(facts.baseBranch) ? facts.baseBranch : 'main',
     gate: gateOf(facts),
+    ...(image === null ? {} : { factory: { container: { image } } }),
     checks: [{ name: 'disk', minFreeGb: 10 }],
     progress: { files: 'docs/plans/*/progress.md' },
     owed: '.claude/owed.md',

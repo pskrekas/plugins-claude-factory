@@ -178,8 +178,8 @@ const LABEL = stateFolderOf('/r/.git')
 const BOX_LINE = '[container] node:22 · network on · memory 4g · cpus 2'
 const BASE = 'f'.repeat(40)
 // `settings` is the file of the base branch; the person approved the container line.
-function shellWorld(jobs: Job[], settings = BOXED, approved = [BOX_LINE]) {
-  const io = world(jobs, { '/r/.claude/factory.json': BOXED })
+function shellWorld(jobs: Job[], settings = BOXED, approved = [BOX_LINE], reals: Record<string, string> = {}) {
+  const io = world(jobs, { '/r/.claude/factory.json': BOXED }, { reals })
   io.store.set(storeKey('/r/.git'), approved)
   io.answer = argv => {
     const line = argv.join(' ')
@@ -334,23 +334,25 @@ test("a command and a file call of one job never run at the same time", async ()
 
     return 'written'
   }
-  for (const tool of ['Read', 'Write', 'Edit', 'Glob', 'Grep']) expect([tool, await onFileCall(io, { agentId: 'b49', tool }, write)]).toEqual([tool, { deny: SHELL_RUNS }])
+  // A file call as the engine hands it over: the tool's arguments beside its name.
+  const FILE = { file_path: `${wt(job)}/README.md`, path: wt(job), pattern: '*.md', content: 'x' }
+  for (const tool of ['Read', 'Write', 'Edit', 'Glob', 'Grep']) expect([tool, await onFileCall(io, { agentId: 'b49', tool, ...FILE }, write)]).toEqual([tool, { deny: SHELL_RUNS }])
   expect(wrote).toBe(0)
   // A second command of the job does not start either.
   expect(await onShell(io, { agentId: 'b49', command: 'ls' })).toEqual({ deny: 'Another command of this job runs. Wait for it to end, then call again.' })
   // Another job, an agent that is not the line's, and the session's own model are not held up; nor is a tool that is no file tool.
-  expect(await onFileCall(io, { agentId: 'b50', tool: 'Write' }, write)).toBe('written')
+  expect(await onFileCall(io, { agentId: 'b50', tool: 'Write', file_path: `${wt(other)}/a.ts`, content: 'x' }, write)).toBe('written')
   expect(await onFileCall(io, { agentId: 'stranger', tool: 'Write' }, write)).toBe('written')
   expect(await onFileCall(io, { tool: 'Write' }, write)).toBe('written')
   expect(await onFileCall(io, { agentId: 'b49', tool: 'SubagentHandback' }, write)).toBe('written')
   release()
   expect(await command).toEqual({ result: 'exit 0\nhello\n' })
-  expect(await onFileCall(io, { agentId: 'b49', tool: 'Write' }, write)).toBe('written')
+  expect(await onFileCall(io, { agentId: 'b49', tool: 'Write', ...FILE }, write)).toBe('written')
 
   // The other way round: while a file call of the job runs, no command starts.
   let finish: () => void = () => undefined
   let isWriting = false
-  const writing = onFileCall(io, { agentId: 'b49', tool: 'Edit' }, () => {
+  const writing = onFileCall(io, { agentId: 'b49', tool: 'Edit', ...FILE }, () => {
     isWriting = true
 
     return new Promise<string>(resolve => (finish = () => resolve('edited')))
@@ -364,7 +366,7 @@ test("a command and a file call of one job never run at the same time", async ()
   expect(await writing).toBe('edited')
   expect(await onShell(io, { agentId: 'b49', command: 'ls' })).toEqual({ result: 'exit 0\nhello\n' })
   // A file call that fails frees the job too.
-  await onFileCall(io, { agentId: 'b49', tool: 'Write' }, async () => Promise.reject(new Error('disk full'))).catch(() => undefined)
+  await onFileCall(io, { agentId: 'b49', tool: 'Write', ...FILE }, async () => Promise.reject(new Error('disk full'))).catch(() => undefined)
   expect(await onShell(io, { agentId: 'b49', command: 'ls' })).toEqual({ result: 'exit 0\nhello\n' })
 })
 
@@ -378,4 +380,63 @@ test('a job that builds on this machine is not held up by this rule', async () =
   expect(await onFileCall(io, { agentId: 'b51', tool: 'Write' }, async () => 'b')).toBe('b')
   finish()
   expect(await first).toBe('a')
+})
+
+test('a file call is judged again at the moment it runs: a path that became a link since the engine asked is refused', async () => {
+  const job = build('52', 'container')
+  const reals: Record<string, string> = {}
+  const io = shellWorld([job], BOXED, [BOX_LINE], reals)
+  io.time = 250_000
+  io.files[`${wt(job)}/src/keep.ts`] = 'x'
+  rememberAgent('b52', { jobId: job.id, role: 'builder', focus: '' })
+  rememberAgent('r52', { jobId: job.id, role: 'reviewer', focus: 'code' })
+  const file = `${wt(job)}/src/out.ts`
+  let ran = 0
+  const next = async () => {
+    ran += 1
+
+    return 'done'
+  }
+  // The engine asks: the path is inside the job.
+  expect(await onToolCheck(io, { agentId: 'b52', tool: 'Write', input: { file_path: file, content: 'x' } })).toEqual({ decision: 'allow' })
+  expect(await onFileCall(io, { agentId: 'b52', tool: 'Write', file_path: file, content: 'x' }, next)).toBe('done')
+  // A command of the builder ran in between: `src` is now a link that leads out of the job.
+  reals[`${wt(job)}/src`] = '/r/secrets'
+  reals[`${wt(job)}/src/keep.ts`] = '/r/secrets/keep.ts'
+  expect(await onFileCall(io, { agentId: 'b52', tool: 'Write', file_path: file, content: 'x' }, next)).toEqual({ deny: 'This is not a place this agent writes.' })
+  expect(await onFileCall(io, { agentId: 'b52', tool: 'Read', file_path: `${wt(job)}/src/keep.ts` }, next)).toEqual({ deny: 'This is outside the job.' })
+  expect(await onFileCall(io, { agentId: 'r52', tool: 'Grep', pattern: 'KEY', path: `${wt(job)}/src` }, next)).toEqual({ deny: 'This is outside the job.' })
+  expect(ran).toBe(1)
+  // Each refusal is a fact, as at the fence.
+  expect((await drainFacts(io, '/r')).filter(fact => fact.kind === 'refusal').length).toBe(3)
+  // A call with no path the fence can read does not run either.
+  expect(await onFileCall(io, { agentId: 'b52', tool: 'Write' }, next)).toEqual({ deny: 'The call was not understood.' })
+  // A path that is still inside the job runs.
+  expect(await onFileCall(io, { agentId: 'b52', tool: 'Write', file_path: `${wt(job)}/ok.ts`, content: 'x' }, next)).toBe('done')
+})
+
+test('a container that docker does not confirm as stopped keeps the job closed for file calls and commands', async () => {
+  const job = build('53', 'container')
+  const io = shellWorld([job])
+  io.time = 300_000
+  rememberAgent('b53', { jobId: job.id, role: 'builder', focus: '' })
+  const answer = io.answer
+  let canRemove = false
+  io.answer = argv => (argv[1] === 'rm' && !canRemove ? { exitCode: 1, stdout: '', stderr: 'Cannot connect to the Docker daemon' } : answer?.(argv))
+  const STUCK = 'A container of this job may still run: docker did not confirm that it stopped. Start Docker; the next command of the job tries again.'
+
+  // The command ran, but its container is not known to be gone.
+  expect(await onShell(io, { agentId: 'b53', command: 'npm test' })).toEqual({ result: 'exit 0\nhello\n' })
+  const file = { agentId: 'b53', tool: 'Write', file_path: `${wt(job)}/a.ts`, content: 'x' }
+  expect(await onFileCall(io, file, async () => 'done')).toEqual({ deny: STUCK })
+  expect(await onToolCheck(io, { agentId: 'b53', tool: 'Read', input: { file_path: `${wt(job)}/README.md` } })).toEqual({ decision: 'deny', reason: STUCK })
+  // The next command first tries to remove it again. While that fails, nothing runs.
+  const runs = dockerOf(io).filter(line => line.startsWith('docker run')).length
+  expect(await onShell(io, { agentId: 'b53', command: 'ls' })).toEqual({ deny: STUCK })
+  expect(dockerOf(io).filter(line => line.startsWith('docker run')).length).toBe(runs)
+  expect(dockerOf(io).at(-1)?.startsWith('docker rm -f')).toBe(true)
+  // Docker answers again: the container is removed, and the job goes on.
+  canRemove = true
+  expect(await onShell(io, { agentId: 'b53', command: 'ls' })).toEqual({ result: 'exit 0\nhello\n' })
+  expect(await onFileCall(io, file, async () => 'done')).toBe('done')
 })
