@@ -17,6 +17,38 @@ export type Answer =
   | { kind: 'ask'; question: string }
 
 const MAX_LINE = 600
+const RISKS: readonly string[] = ['low', 'medium', 'high']
+const SURFACES: readonly string[] = ['ui', 'security']
+const isText = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= MAX_LINE
+
+// An answer as it reads back from a job file, or null when the value is not one.
+export function parseAnswer(v: unknown): Answer | null {
+  if (typeof v !== 'object' || v === null) return null
+  const a = v as Record<string, unknown>
+  switch (a.kind) {
+    case 'accept': {
+      const surfaces = a.surfaces
+      if (!RISKS.includes(a.risk as string) || !Array.isArray(surfaces) || !surfaces.every(name => SURFACES.includes(name as string))) return null
+
+      return { kind: 'accept', risk: a.risk as Risk, surfaces: [...new Set(surfaces as string[])] }
+    }
+    case 'needs-info':
+      return isText(a.question) ? { kind: 'needs-info', question: a.question } : null
+    case 'reject':
+      return isText(a.reason) ? { kind: 'reject', reason: a.reason } : null
+    case 'stuck':
+      return isText(a.why) ? { kind: 'stuck', why: a.why } : null
+    case 'ask':
+      return isText(a.question) ? { kind: 'ask', question: a.question } : null
+    case 'done':
+    case 'ok':
+    case 'changes':
+    case 'ready':
+      return { kind: a.kind }
+    default:
+      return null
+  }
+}
 const ACCEPT = /^ACCEPT risk=(low|medium|high) surfaces=(none|ui|security|ui,security|security,ui)(?:\s|$)/
 
 // The first line that is not empty, cleaned and cut.

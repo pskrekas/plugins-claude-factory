@@ -16,6 +16,7 @@ import {
   move,
   newJob,
   noteRefusal,
+  noteResult,
   parseJob,
   reject,
   resume,
@@ -309,4 +310,24 @@ test('a job file without work, refused and tries reads with the defaults; a bad 
   expect(parseJob(JSON.stringify({ ...job(), refused: [5] }), id)).toBe(null)
   expect(parseJob(JSON.stringify({ ...job(), tries: -1 }), id)).toBe(null)
   expect(parseJob(JSON.stringify({ ...job(), asker: 'fence' }), id)?.asker).toBe('fence')
+})
+
+test('the answers of a station are kept on the job until it moves', async () => {
+  const ok = { role: 'reviewer' as const, focus: 'code', answer: { kind: 'ok' as const }, why: null }
+  const bad = { role: 'reviewer' as const, focus: 'ui', answer: null, why: 'wrote no file' }
+  const two = noteResult(noteResult(walk(['spec', 'build', 'gate', 'review']), ok, 5), bad, 6)
+  expect(two.results).toEqual([ok, bad])
+  expect(parseJob(JSON.stringify(two), two.id)).toEqual(two)
+  // A second answer of the same reviewer replaces the first.
+  expect(noteResult(two, { ...bad, answer: { kind: 'changes' }, why: null }, 7).results.map(r => r.answer?.kind ?? null)).toEqual(['ok', 'changes'])
+  expect(move(two, 'approve', 'ok', 8).results).toEqual([])
+  expect(clearWork(startWork(two, WORK, 8), 9)).toEqual(expect.objectContaining({ work: [], results: [] }))
+  const { results, ...old } = job()
+  expect([results, parseJob(JSON.stringify(old), old.id)?.results]).toEqual([[], []])
+  const id = job().id
+  expect(parseJob(JSON.stringify({ ...job(), results: [{ ...ok, answer: { kind: 'maybe' } }] }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), results: [{ ...ok, role: 'boss' }] }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), results: Array.from({ length: 9 }, () => ok) }), id)).toBe(null)
+  const accept = { role: 'intake' as const, focus: '', answer: { kind: 'accept' as const, risk: 'low' as const, surfaces: ['ui'] }, why: null }
+  expect(parseJob(JSON.stringify(noteResult(job(), accept, 3)), id)?.results).toEqual([accept])
 })

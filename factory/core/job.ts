@@ -1,6 +1,8 @@
 // A factory job: one tracker item on its way through the line (design 5.3).
 // Pure. The store (hooks/jobs.ts) is the only code that writes a job to disk,
 // and `move` is the only way a job changes its stage.
+import { parseAnswer } from './answer'
+import type { Answer } from './answer'
 import { RISKS, ROLES } from './factory-settings'
 import type { Risk, Role } from './factory-settings'
 import { isObject } from './rules'
@@ -24,6 +26,11 @@ export type Asker = 'intake' | 'gate' | 'review' | 'approve' | 'limit' | 'fence'
 
 // An agent that works on the job now. `focus` says which reviewer (`code`, `ui`, …); '' for the other roles.
 export type Work = { agentId: string; role: Role; focus: string; startedAt: number }
+
+// What an agent of the station that runs now answered. `why` is set when the
+// answer could not be used (no answer line, no file). Kept on the job, so a
+// new session knows what the reviewers that already ended said.
+export type Result = { role: Role; focus: string; answer: Answer | null; why: string | null }
 
 export type SentBack = { by: 'gate' | 'review' | 'approve' | 'you'; why: string }
 
@@ -60,6 +67,7 @@ export type Job = {
   refusals: number // commands the fence refused
   feedback: number // how many feedback files the job has
   work: Work[] // the agents of the station that runs now; empty between stations
+  results: Result[] // what the agents of the station that runs now answered
   refused: string[] // the newest refused commands, to see the same one twice
   tries: number // how often the station that runs now failed
   history: { at: number; from: Stage | null; to: Stage; reason: string }[]
@@ -162,6 +170,7 @@ export function newJob(item: { id: string; title: string }, now: number): Job {
     refusals: 0,
     feedback: 0,
     work: [],
+    results: [],
     refused: [],
     tries: 0,
     history: [{ at: now, from: null, to: 'intake', reason: 'started' }],
@@ -198,8 +207,9 @@ export function move(
     ...job,
     stage: to,
     round: isLoop ? job.round + 1 : job.round,
-    // Every move starts clean: no agent of the last station, no failed try.
+    // Every move starts clean: no agent of the last station, no answer, no failed try.
     work: [],
+    results: [],
     tries: 0,
     updatedAt: now,
     history: [...job.history, { at: now, from, to, reason: reason.slice(0, MAX.reason) }].slice(-MAX_HISTORY),
@@ -268,8 +278,17 @@ export function endWork(job: Job, agentId: string, now: number): Job {
   return { ...job, work: job.work.filter(work => work.agentId !== agentId), updatedAt: now }
 }
 
+// The station starts again: no agent at work, no answer.
 export function clearWork(job: Job, now: number): Job {
-  return { ...job, work: [], updatedAt: now }
+  return { ...job, work: [], results: [], updatedAt: now }
+}
+
+// An agent of the station answered. A second answer of the same agent role
+// and focus takes the place of the first.
+export function noteResult(job: Job, result: Result, now: number): Job {
+  const others = job.results.filter(r => !(r.role === result.role && r.focus === result.focus))
+
+  return { ...job, results: [...others, result].slice(-MAX_WORK), updatedAt: now }
 }
 
 // The station that runs now failed once more.
@@ -423,6 +442,17 @@ export function parseJob(text: string, folder: string): Job | null {
     inFlight.push({ agentId: entry.agentId, role: entry.role as Role, focus: entry.focus, startedAt: entry.startedAt })
   }
   if (!refused.every(text => typeof text === 'string')) return null
+  const { results = [] } = raw
+  if (!Array.isArray(results) || results.length > MAX_WORK) return null
+  const answers: Result[] = []
+  for (const entry of results) {
+    if (!isObject(entry) || !ROLES.includes(entry.role as Role)) return null
+    if (typeof entry.focus !== 'string' || (entry.focus !== '' && !FOCUS.test(entry.focus))) return null
+    const answer = entry.answer === null ? null : parseAnswer(entry.answer)
+    if (entry.answer !== null && answer === null) return null
+    if (entry.why !== null && typeof entry.why !== 'string') return null
+    answers.push({ role: entry.role as Role, focus: entry.focus, answer, why: entry.why === null ? null : cut(entry.why, MAX_COMMAND) })
+  }
   if (!isCount(tries) || !Number.isInteger(tries)) return null
   if (branch !== null && branch !== `factory/${id}`) return null
   if (itemUrl !== null && typeof itemUrl !== 'string') return null
@@ -456,6 +486,7 @@ export function parseJob(text: string, folder: string): Job | null {
     refusals,
     feedback,
     work: inFlight,
+    results: answers,
     refused: (refused as string[]).slice(-MAX_REFUSED).map(text => cut(text, MAX_COMMAND)),
     tries,
     history,
