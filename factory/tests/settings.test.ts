@@ -91,7 +91,7 @@ test('a check must have a name and a command of strings', async () => {
   expect(error).toBe('checks: wrong type')
 })
 
-test('the commands to approve are the checks, once each, sorted', async () => {
+test('the commands to approve: the checks, then the gate commands with their mark', async () => {
   const text = JSON.stringify({
     checks: [
       { name: 'a', run: ['x', 'y'] },
@@ -100,9 +100,9 @@ test('the commands to approve are the checks, once each, sorted', async () => {
     gate: { fast: [['npm', 'test']], full: [['npm', 'test'], ['npm', 'run', 'build']] },
   })
   const { settings } = parseSettings(text)
-  // Only checks run in this phase: a gate command is not on the approval list,
-  // so a line approved for the gate can never start running as a check.
-  expect(commandsOf(settings)).toEqual(['x y'])
+  // A gate command is on the list with a mark: approved for the gate, the
+  // same words never run as a check, and the other way round.
+  expect(commandsOf(settings)).toEqual(['x y', 'gate: npm run build', 'gate: npm test'])
 })
 
 test('a control character in a command is refused', async () => {

@@ -369,8 +369,11 @@ export function fakeIo(
 
       return { failed: 'not-found' as const }
     },
-    storeGet: async () => undefined,
-    storeSet: async () => undefined,
+    store: new Map<string, unknown>(),
+    storeGet: async (key: string) => io.store.get(key),
+    storeSet: async (key: string, value: unknown) => {
+      io.store.set(key, value)
+    },
     getModel: async () => io.model,
     updateModel: async (change: (model: PanelModel) => PanelModel) => {
       io.model = change(io.model)

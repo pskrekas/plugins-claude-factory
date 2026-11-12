@@ -327,13 +327,19 @@ export function lineOf(argv: string[]): string {
   return argv.map(arg => (PLAIN_ARG.test(arg) ? arg : quoted(arg))).join(' ')
 }
 
-// Every command the settings file can make the plugin run, one line each.
-// These are the checks. The gate's commands do not run in this phase and are
-// not on this list: a line approved for one purpose must never start running
-// for another, so the gate gets its own approval when it exists.
-export function commandsOf(settings: Settings): string[] {
-  const lines = new Set<string>()
-  for (const check of settings.checks) if (check.run) lines.add(lineOf(check.run))
+// The mark of a gate command on the approval list.
+export const GATE_MARK = 'gate: '
 
-  return [...lines].sort()
+// Every command the settings file can make the plugin run, one line each: the
+// checks, then the gate's commands with their mark. A person approves both
+// kinds together, but a line approved for one purpose never runs for the
+// other: `gate: npm test` does not let `npm test` run as a check each minute,
+// and an approved check does not open the gate.
+export function commandsOf(settings: Settings): string[] {
+  const checks = new Set<string>()
+  for (const check of settings.checks) if (check.run) checks.add(lineOf(check.run))
+  const gate = new Set<string>()
+  for (const argv of [...settings.gate.fast, ...settings.gate.full]) gate.add(GATE_MARK + lineOf(argv))
+
+  return [...[...checks].sort(), ...[...gate].sort()]
 }
