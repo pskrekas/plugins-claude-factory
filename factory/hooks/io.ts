@@ -12,10 +12,6 @@ export type Io = {
   // The top of the working tree the session is in (a linked worktree's own
   // folder, not the main checkout's), or the session's folder outside git.
   root: () => Promise<string>
-  // What approvals are kept under: the repository's own git folder, which a
-  // linked worktree shares with the main checkout and a repository nested in
-  // this one does not. Outside git, the same as `root`.
-  consentKey: () => Promise<string>
   remote: () => Promise<string | null>
   // What a path is, how large, and where it really is once every symbolic
   // link is followed; null when there is nothing there.

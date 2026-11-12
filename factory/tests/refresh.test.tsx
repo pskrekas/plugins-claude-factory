@@ -172,6 +172,10 @@ test('in a linked worktree the panel reads the worktree, and an approval covers 
       '/wt/.claude/factory.json': CHECK,
       '/r/.claude/factory.json': CHECK,
       '/r/.claude/owed.md': '- [ ] main only',
+      // A linked worktree: its `.git` is a file, and the main checkout points back.
+      '/r/.git/HEAD': 'ref: refs/heads/main',
+      '/wt/.git': 'gitdir: /r/.git/worktrees/wt\n',
+      '/r/.git/worktrees/wt/gitdir': '/wt/.git\n',
     },
     run: argv => {
       if (argv[0] === 'x') return { exitCode: 0, stdout: '' }
@@ -188,7 +192,7 @@ test('in a linked worktree the panel reads the worktree, and an approval covers 
 
   expect(world.ran).toContain('x')
   expect(world.cwds.every(cwd => cwd === '/wt')).toBe(true)
-  expect(world.reads.some(path => path.startsWith('/r/'))).toBe(false)
+  expect(world.reads.some(path => path.startsWith('/r/') && !path.startsWith('/r/.git/'))).toBe(false)
 
   // The main checkout has the same line: nothing more to approve there.
   world.root = '/r'
@@ -199,7 +203,12 @@ test('in a linked worktree the panel reads the worktree, and an approval covers 
 
 test('an approval never covers another repository that sits inside this one', async ($, on) => {
   const world = engine(on, {
-    files: { '/main/.claude/factory.json': CHECK, '/main/vendor/other/.claude/factory.json': CHECK },
+    files: {
+      '/main/.claude/factory.json': CHECK,
+      '/main/.git/HEAD': 'x',
+      '/main/vendor/other/.claude/factory.json': CHECK,
+      '/main/vendor/other/.git/HEAD': 'x',
+    },
     run: argv => (argv[0] === 'x' ? { exitCode: 0, stdout: '' } : undefined),
   })
   world.root = '/main'
@@ -212,7 +221,32 @@ test('an approval never covers another repository that sits inside this one', as
   // The session still names the outer repository as "the repo".
   world.root = '/main/vendor/other'
   world.repoRoot = '/main'
-  world.commonDir = '/main/vendor/other/.git'
+  await $.command.run(cmd(''))
+
+  expect((await paneText($))[0]).toBe('SETTINGS NOT APPROVED · 1 command')
+  expect(world.ran.filter(line => line === 'x').length).toBe(1)
+})
+
+test('a folder that only claims to be a worktree of a repo does not get its approvals', async ($, on) => {
+  const world = engine(on, {
+    files: {
+      '/main/.claude/factory.json': CHECK,
+      '/main/.git/HEAD': 'x',
+      '/main/.git/worktrees/real/gitdir': '/main-wt/.git\n',
+      // Unpacked from an archive: its `.git` file points into the person's own repo.
+      '/evil/.claude/factory.json': CHECK,
+      '/evil/.git': 'gitdir: /main/.git/worktrees/real\n',
+    },
+    run: argv => (argv[0] === 'x' ? { exitCode: 0, stdout: '' } : undefined),
+  })
+  world.root = '/main'
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+  await $.command.run(cmd('approve'))
+  expect(world.ran.filter(line => line === 'x').length).toBe(1)
+
+  world.root = '/evil'
+  world.repoRoot = '/main'
   await $.command.run(cmd(''))
 
   expect((await paneText($))[0]).toBe('SETTINGS NOT APPROVED · 1 command')

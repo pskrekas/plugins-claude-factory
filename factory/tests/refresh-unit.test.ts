@@ -11,7 +11,6 @@ function fakeIo(): Io & { model: PanelModel } {
     model: emptyModel(),
     now: async () => 9000,
     root: async () => '/r',
-    consentKey: async () => '/r',
     remote: async () => null,
     stat: async () => null,
     isLink: async () => false,

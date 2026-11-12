@@ -84,25 +84,6 @@ export const register: Register = (on, options) => {
     io = {
       now: () => $.clock.now(),
       root,
-      // The repository this working tree belongs to, as git itself names it:
-      // its common `.git` folder. A linked worktree has the same one as the
-      // main checkout, so they share approvals; another repository cloned
-      // inside this one has its own, so it never does. Outside git, or when
-      // git cannot say, the working tree's own path.
-      consentKey: async () => {
-        const at = await root()
-        const env = { PATH: safePath(await $.env.get('PATH').catch(() => undefined), at) }
-        const dir = await $.process
-          .run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
-            cwd: at,
-            env,
-            timeoutMs: GIT_TOP_MS,
-          })
-          .then(done => (done.exitCode === 0 ? done.stdout.trim() : ''))
-          .catch(() => '')
-
-        return dir.startsWith('/') ? dir : at
-      },
       remote: () =>
         $.session
           .repo()
