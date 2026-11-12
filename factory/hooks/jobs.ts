@@ -153,7 +153,8 @@ export async function retireJob(io: Io, root: string, id: string, now: number): 
 // A file of a job that is not its state: the item's text, a spec, a report.
 // These live under `files/`, so an agent can be let in there and never reach
 // `job.json`. The name is plain, with at most one `round-<n>/` before it.
-const FILE_NAME = /^(round-\d{1,3}\/)?[a-z][a-z0-9-]{0,40}\.md$/
+// A report (`.md`), or the text of a round's change (`diff.patch`).
+const FILE_NAME = /^(round-\d{1,3}\/)?([a-z][a-z0-9-]{0,40}\.md|diff\.patch)$/
 const MAX_FILE_CHARS = 256 * 1024
 
 export async function writeJobFile(io: Io, root: string, id: string, name: string, text: string): Promise<void> {
