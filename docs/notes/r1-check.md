@@ -179,3 +179,56 @@ Stops and restarts:
 
 What to write down: any permission question that did appear, any dim line that starts
 with `factory:`, and how long and how much each station took.
+
+## Azure DevOps, by hand (phase 3)
+
+To do by the owner. Nothing of phase 3 was run against a real organization
+(`docs/notes/az-check.md`): this is where each `az` call meets a real answer. It
+needs a scratch Azure DevOps project with a repository that holds a small npm
+project, cloned from `dev.azure.com`, with `az login` done and the `azure-devops`
+extension installed.
+
+Before:
+
+- [ ] `claude --plugin-dir <this repo>/factory` in the clone. `/factory init` writes
+      `"tracker": { "kind": "azure-boards", "mark": "factory", "project": "<project>" }`.
+      Set the gate and the container as in the GitHub check. Commit to `main`, push.
+- [ ] `/factory`, read the commands, `/factory approve`.
+- [ ] Make two work items and put the tag `factory` on each: one clear and small, one
+      vague. Give the clear one a description with **bold** text and a comment from
+      you.
+
+The panel:
+
+- [ ] On a branch named after a work item (with `ticketPattern` set), the TASK row
+      shows the work item's title and state.
+- [ ] With a pull request of that branch, the row shows `PR <n> · build … · … approval`.
+- [ ] `az logout`, then `/factory`: the row says `az is not logged in. Run: az login`.
+      Nothing else fails. `az login` again.
+
+The line:
+
+- [ ] `/factory plan` shows what Intake says of the two items. No tag and no comment
+      was added to a work item.
+- [ ] `/factory run`. The clear work item gets the tag `factory:in-progress` beside
+      `factory` and your other tags, and a comment `The factory started on this.`
+      that shows as plain text.
+- [ ] `<state>/jobs/<job>/files/item.md` holds the description as plain text (no
+      `<div>`, no `<b>`) and your comment.
+- [ ] A draft pull request appears, from `factory/<n>-…`, with the title
+      `<n>: <the work item's title>`. The work item shows it under Development (a link).
+- [ ] After Approve the pull request is not a draft any more. The work item has the
+      tag `factory:needs-human` and a comment with the pull request's address.
+- [ ] **The pull request is not completed by the plugin.** Complete it yourself.
+      Within about five minutes of an open session the job is done and the work
+      item's tag is `factory:done`. The work item's own state is what your project's
+      rules made it; the plugin did not change it.
+- [ ] `/factory reject <id> <reason>` on another job: its pull request is abandoned,
+      its work item has `factory:rejected` and the reason as a comment.
+- [ ] Give a work item the title `@/etc/hosts` and run it: the pull request's title is
+      that text. No file of your machine is in the title or in a comment.
+
+What to write down for the plugin's author: the text and the exit code of any `az`
+failure; whether the comments of a work item came newest first; whether
+`7.1-preview.4` was accepted for the comments; whether a tag kept its `:`.
+

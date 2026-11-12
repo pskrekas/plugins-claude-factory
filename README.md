@@ -28,6 +28,15 @@ claude --plugin-dir ./plugins-claude-factory/factory
 
 Mods are an early-access Claude Code feature and their API can change between releases.
 
+For GitHub it needs the GitHub CLI (`gh auth login`). For Azure DevOps it needs the Azure CLI with its DevOps extension:
+
+```sh
+az extension add --name azure-devops
+az login
+```
+
+For the factory line it needs Docker, and the image your settings name.
+
 ## What you see
 
 A section with nothing to show takes no room.
@@ -82,7 +91,7 @@ It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
 
 1. `/factory init` writes a first `.claude/factory.json`. Edit it: the gate lists must start with the install command, and `factory.container.image` must be an image that holds the tools of your repo. Get the image (`docker pull node:22`): the plugin fetches none. Commit the file to the base branch and push: the gate and the container settings are read from there.
 2. `/factory`, read the commands in the pane, then `/factory approve`.
-3. Put the label `factory` on an issue. Only you put it there: it is what lets an issue into the line.
+3. Put the label `factory` on an issue (on Azure DevOps: the tag `factory` on a work item). Only you put it there: it is what lets an item into the line.
 4. `/factory plan` to see what Intake says. `/factory run` to run the line.
 5. A ready job is a pull request for you to merge. A job under **NEEDS YOU** has a question: `/factory answer <id> <text>`, or `/factory reject <id> <reason>`.
 
@@ -200,6 +209,17 @@ Only for a repo whose settings say `"tracker": { "kind": "github" }` and whose r
 
 A job's worktree is in the state folder (`worktrees/<job>`), not in the repo.
 
+### What it writes on Azure DevOps
+
+Only for a repo whose settings say `"tracker": { "kind": "azure-boards" }`, or whose remote `origin` is an Azure DevOps repository (for pull requests). Every `az` call names the organization of that remote (`--org https://dev.azure.com/<organization>`) and tells `az` to detect nothing, so `az`'s own defaults are not used.
+
+- **Tags.** The mark is a tag on a work item (`factory` by default): only you put it there. The line adds one state tag beside it, `<mark>:in-progress`, `<mark>:needs-human`, `<mark>:done` or `<mark>:rejected`, and takes the old one away. It reads the tags just before it writes them, so your other tags stay. A work item with a state tag is not in the queue. **It never changes a work item's own state** (New, Active, Closed, …): take the `<mark>:` tag away to put an item back in the queue.
+- **Comments.** On the work item's discussion, as text (nothing in it is read as markup), and as a new thread on the pull request. `az` reads a value that starts with `@` from a file, so no title and no comment is ever an argument: the plugin writes each one to a file of its own state folder, passes `--<name>=@<file>`, and removes the file. A comment that holds one of `factory.forbiddenCommentWords` is not sent.
+- **Pull requests.** It opens a draft pull request from the job's branch `factory/<job>`, links it to the work item, marks it ready (`--draft false`), comments on it, or abandons it for a rejected item. **It never completes one**: no `az` call of the plugin holds `--status completed`, `--auto-complete` or `--bypass-policy`. A pull request that you complete reads as merged, and the job is done.
+- **What an agent reads.** A work item's description and comments are HTML; an agent gets them as plain text (no tag, no script), and only the comments of the item's author and yours.
+- **Mixes.** GitHub Issues with the code on Azure Repos: `"tracker": { "kind": "github", "project": "<owner>/<name>" }`. Azure Boards with the code on GitHub: `"tracker": { "kind": "azure-boards", "project": "<organization>/<project>" }`; the pull request is then a comment on the work item, not a link.
+- **Not checked on a real organization yet.** The `az` calls are built from the tool's help and its code (`docs/notes/az-check.md`). The hand check is in `docs/notes/r1-check.md`.
+
 ## Settings
 
 One file per repo, `.claude/factory.json`. Every key is optional. With no file the panel shows the branch, its pull request, the agents and the worktrees.
@@ -227,8 +247,8 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 | Key | Meaning |
 | --- | --- |
 | `ticketPattern` | finds the ticket id in the branch name. A small subset of regular expressions: plain characters, `.`, `\d` `\w` `\s`, simple character classes, `^` `$`, up to three repeats, one capture group (its text is the id). |
-| `tracker` | `{ "kind": "github" }` reads the item with `gh`. Other trackers come in later versions. |
-| `prHost` | `auto` (the default) reads the git remote; `github` forces it. Azure DevOps Repos comes later. |
+| `tracker` | `{ "kind": "github" }` reads the items with `gh`; `{ "kind": "azure-boards" }` reads Azure DevOps work items with `az`. `mark` (`factory` by default) is the label or the tag that lets an item into the line. `project` says where the items are when the remote does not: for `azure-boards` a project of the remote's organization, or `<organization>/<project>`; for `github` with the code on another host, `owner/name`. Jira, Asana and an MCP tracker come in later versions. |
+| `prHost` | `auto` (the default) reads the git remote: `github.com` is GitHub, `dev.azure.com` (or `<name>.visualstudio.com`) is Azure DevOps Repos. `github` or `azure-repos` forces one. |
 | `baseBranch` | the branch worktrees are compared with, `main` by default. |
 | `gate` | `fast` and `full`: lists of commands, each a list of words. See "The gate". The factory will not run with an empty `fast`. |
 | `progress` | `files`: a path with `*` in a segment. A file's percent is its done lines over its done and open lines. `done`, `open` and `blocked` are plain text marks (`- [x]`, `- [ ]`, `BLOCKED` by default). A later line with `UNBLOCKED` or `RESUMED` clears a block. |
@@ -242,8 +262,8 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 
 The panel reads. It changes nothing but its own state and, when you ask, `.claude/factory.json`.
 
-- **It runs** `git`, `gh` and `docker` (the full lists are below), `id` for your user id, `find` to look for a git repository inside a job's folder, `df` for a disk check and `nc` for the ports a settings file names, `mkdir`, `mv` and `rm` on its own state folder, and, only after your approval, the commands a settings file names (the checks; and the gate's commands, in a container).
-- **It stores no password and no token.** `gh` uses your own login.
+- **It runs** `git`, `gh` or `az`, and `docker` (the full lists are below), `id` for your user id, `find` to look for a git repository inside a job's folder, `df` for a disk check and `nc` for the ports a settings file names, `mkdir`, `mv` and `rm` on its own state folder, and, only after your approval, the commands a settings file names (the checks; and the gate's commands, in a container).
+- **It stores no password and no token.** `gh` and `az` use your own login.
 - **It runs no command from a settings file until you approve it.** A settings file arrives with a clone, so the panel first shows `SETTINGS NOT APPROVED`, the number of commands and every command in full. `/factory approve` allows exactly the lines the pane showed while it was on screen, for that repo; a file the pane has not shown yet is shown first, and a second `/factory approve` allows it. Only your own Enter at the prompt can approve. The approved lines are kept outside the repo, for the repo and all its worktrees; a line that changes asks again.
 - **What an approval covers.** It covers the command line you read, not the code that command runs. A check must name a program on your `PATH` (never a file of the repo), runs with a `PATH` that leaves the repo out, and is not run when one of its arguments names a file of the repo. These are guards against the plain cases, not a boundary: a command that runs repo code by its nature (an inline script, a build tool) runs what the repo holds at that time. Approve a check as you would approve the same command in a shell.
 - **The factory's state is yours, not the repo's.** Jobs and the lock are files under your home folder. The folder is named after the repository's path, holds that path, and is not used when it names another repository or when it would be inside the repo.
@@ -308,6 +328,27 @@ Each `gh` call of the second list ends with `-R <owner>/<name>`. The line's `git
 
 `git` reads the repository's own git settings, as it does when you type the command.
 
+### Every `az` call
+
+`…` stands for `--org https://dev.azure.com/<organization> --detect false --output json`. `<file>` is a file the plugin wrote in its state folder (`tmp/`) and removes after the call.
+
+```
+az boards query --wiql "SELECT … WHERE [System.TeamProject] = '<project>' AND [System.Tags] CONTAINS '<mark>' AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') …" --project <project> …
+az boards work-item show --id <n> --expand fields …
+az devops invoke --area wit --resource comments --route-parameters project=<project> workItemId=<n> --api-version 7.1-preview.4 …
+az boards work-item update --id <n> --fields=System.Tags=<the tags> …
+az boards work-item update --id <n> --discussion=@<file> …
+az repos pr work-item add --id <pr> --work-items <n> …
+az repos pr create --draft true --source-branch factory/<job> --target-branch <base> --title=@<file> --description=@<file> --project <project> --repository <repository> …
+az repos pr show --id <pr> …
+az repos pr list --source-branch <branch> --status all --top 1 --project <project> --repository <repository> …
+az repos pr policy list --id <pr> …
+az repos pr update --id <pr> --draft false …
+az repos pr update --id <pr> --status abandoned …
+az devops invoke --area git --resource pullRequestThreads --route-parameters project=<project> repositoryId=<repository> pullRequestId=<pr> --http-method POST --in-file <file> --api-version 7.1 …
+az account show --query user.name --output tsv           (whose comments an agent may read)
+```
+
 ### Every `docker` call
 
 `<name>` is `factory-job-<job>.<label>` or `factory-gate-<job>.<label>`; `<label>` is the name of the repository's state folder. `<folder>` is the job's worktree, or the gate's clean copy. `…` in the two `run` lines stands for the same words: `--name <name> --label factory.state=<label> --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory <m> --cpus <n> --network bridge|none --user <your uid>:<your gid> -e HOME=/tmp -v <folder>:<folder> -w <folder>`.
@@ -332,6 +373,14 @@ Before a `git` call on a job's folder it runs `find <folder> -mindepth 1 -iname 
 **The pane does not appear.** Check `claude --version` is 2.1.322 or later, then `/reload-plugins` and `/factory`. A dim line that starts with `factory:` in the transcript names the reason.
 
 **`gh could not start` or `gh is not logged in`.** Install the GitHub CLI, then run `gh auth login`.
+
+**`az could not start`, `az is not logged in`, or `az has no azure-devops extension`.** Install the Azure CLI; run `az login`; run `az extension add --name azure-devops`. An `az` with no extension tries to install it by itself and can wait a long time: the plugin stops each call after 30 seconds.
+
+**`The remote origin names no Azure DevOps project. …`** The settings say `azure-boards`, and the remote is not on `dev.azure.com`. Set `tracker.project` to `<organization>/<project>`.
+
+**`/factory run needs a pull request host: …`** The remote `origin` is neither on `github.com` nor on `dev.azure.com`. The line ends a job as a pull request, so it needs one of the two.
+
+**`The line did not start (the tracker could not be read: …)`.** The tracker's tool is missing or not logged in; the text says which. Fix it and run the command again.
 
 **`SETTINGS NOT APPROVED`.** Read the commands in the pane, then run `/factory approve`. If the pane had not shown them yet, or the file changed since, the pane shows them now; read them and run the command again.
 
@@ -378,7 +427,7 @@ All behaviour is in `factory/core/` as pure functions with tests. `factory/hooks
 
 ## Next
 
-Azure DevOps (Boards and Repos), then Jira, Asana and a tracker through an MCP server. The keys in the pane. A run of one command that is longer than ten minutes.
+Jira, Asana and a tracker through an MCP server. The keys in the pane. A run of one command that is longer than ten minutes.
 
 ## License
 
