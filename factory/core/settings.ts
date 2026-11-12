@@ -164,6 +164,10 @@ function repoPath(v: unknown): Parsed<string> {
   return isInside(v) ? { ok: v } : { no: OUTSIDE }
 }
 
+export function isMark(mark: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9:_ -]{0,49}$/.test(mark)
+}
+
 function ticketPattern(v: unknown): Parsed<string> {
   if (!isText(v)) return { no: WRONG }
 
@@ -172,7 +176,9 @@ function ticketPattern(v: unknown): Parsed<string> {
 
 function tracker(v: unknown): Parsed<Settings['tracker']> {
   if (!isObject(v) || !isText(v.kind) || !TRACKERS.includes(v.kind)) return { no: WRONG }
-  if (v.mark !== undefined && !isText(v.mark)) return { no: WRONG }
+  // The mark is handed to the tracker's command as an argument: it must look
+  // like a label, so it can never be read as an option.
+  if (v.mark !== undefined && (!isText(v.mark) || !isMark(v.mark))) return { no: WRONG }
   if (v.project !== undefined && !isText(v.project)) return { no: WRONG }
 
   return {
