@@ -12,6 +12,8 @@ export type TrackerKind = 'github' | 'azure-boards' | 'jira' | 'asana' | 'mcp'
 
 export type Settings = {
   ticketPattern: string | null
+  // `project`: where the items are when the remote does not say it. For `azure-boards`: a project of the
+  // remote's organization, or `<organization>/<project>`. For `github` with code on another host: `owner/name`.
   tracker: { kind: TrackerKind; mark: string; project: string | null } | null
   prHost: 'auto' | 'github' | 'azure-repos'
   baseBranch: string

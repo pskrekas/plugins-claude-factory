@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { azArgs, azPlaceOf, htmlToText, stateTag, tagsAfter, textToHtml } from '../core/azure'
+import { azArgs, azPlaceOf, boardsPlaceOf, htmlToText, stateTag, tagsAfter, textToHtml } from '../core/azure'
 import type { AzCall, AzPlace } from '../core/azure'
 
 const PLACE: AzPlace = { org: 'https://dev.azure.com/acme', project: 'Shop', repo: 'web' }
@@ -143,4 +143,18 @@ test("the state is one tag; a person's own tags are kept", async () => {
   expect(tagsAfter(['factory'], 'factory', 'done')).toEqual(['factory', 'factory:done'])
   expect(tagsAfter(['factory', 'factory:needs-human'], 'factory', 'rejected')).toEqual(['factory', 'factory:rejected'])
   expect(tagsAfter([], 'factory', 'in-progress')).toEqual(['factory:in-progress'])
+})
+
+test('where the work items are: the remote says it, or the settings do', async () => {
+  const azure = 'https://dev.azure.com/acme/Shop/_git/web'
+  // The remote's own project.
+  expect(boardsPlaceOf(azure, null)).toEqual(PLACE)
+  // Another project of the same organization.
+  expect(boardsPlaceOf(azure, 'Board Room')).toEqual({ ...PLACE, project: 'Board Room' })
+  // Code on GitHub, work items on Azure DevOps: the settings name the organization and the project.
+  expect(boardsPlaceOf('git@github.com:a/b.git', 'acme/Shop')).toEqual({ org: 'https://dev.azure.com/acme', project: 'Shop', repo: 'Shop' })
+  expect(boardsPlaceOf(azure, 'other/Shop')?.org).toBe('https://dev.azure.com/other')
+  for (const [remote, project] of [['git@github.com:a/b.git', null], ['git@github.com:a/b.git', 'Shop'], [null, null], [azure, "Sh'op"], [azure, 'a/b/c'], [azure, '-x/Shop'], [azure, 'acme/--help']] as const) {
+    expect([remote, project, boardsPlaceOf(remote, project)]).toEqual([remote, project, null])
+  }
 })

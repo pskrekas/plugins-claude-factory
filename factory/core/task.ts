@@ -37,6 +37,17 @@ export function repoOf(remote: string | null): string | null {
   return parts.length === 2 && parts.every(isName) ? parts.join('/') : null
 }
 
+// The GitHub repository of the issues: the one the remote names, or, with
+// the code on another host, `tracker.project` as `owner/name`.
+export function githubRepoOf(remote: string | null, project: string | null): string | null {
+  const own = repoOf(remote)
+  if (own !== null || project === null) return own
+  const isName = (part: string) => /^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}$/.test(part)
+  const parts = project.split('/')
+
+  return parts.length === 2 && parts.every(isName) ? project : null
+}
+
 export function prHostOf(
   remote: string | null,
   setting: Settings['prHost'],

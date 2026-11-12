@@ -51,6 +51,22 @@ export function azPlaceOf(remote: string | null): AzPlace | null {
   return null
 }
 
+// Where the work items of a repository are. With no `tracker.project`: the
+// project of the remote. A plain name: that project, in the remote's
+// organization. `<organization>/<project>`: that place, whatever the remote
+// is (code on another host). Null when no organization can be found.
+export function boardsPlaceOf(remote: string | null, project: string | null): AzPlace | null {
+  const place = azPlaceOf(remote)
+  if (project === null) return place
+  const parts = project.split('/')
+  if (parts.length === 1) return place !== null && PART.test(project) ? { ...place, project } : null
+  const [org = '', name = ''] = parts
+  if (parts.length !== 2 || !ORG.test(org) || !PART.test(name)) return null
+
+  // The repository is not used for work items; a pull request elsewhere is linked by a comment.
+  return { org: `https://dev.azure.com/${org}`, project: name, repo: place?.repo ?? name }
+}
+
 export type AzCall =
   | { do: 'item'; place: AzPlace; id: string }
   | { do: 'item-comments'; place: AzPlace; id: string }

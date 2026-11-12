@@ -1,5 +1,5 @@
 // The factory line for the pane: the jobs on disk and the size of the queue.
-// It runs `gh` and reads the state folder: no command from the settings file,
+// It runs `gh` or `az` and reads the state folder: no command from the settings file,
 // so it needs no approval.
 import { inRepo, listIssues } from '../../adapters/github-issues'
 import type { Run } from '../../adapters/tracker'
@@ -9,7 +9,8 @@ import type { Job } from '../../core/job'
 import { todayOf } from '../../core/limits'
 import { countsFor } from '../../core/line'
 import type { FactoryView, JobView } from '../../core/model'
-import { repoOf } from '../../core/task'
+import { githubRepoOf, toolNote } from '../../core/task'
+import { adaptersOf } from '../adapters'
 import { isStopped, lockInfo, readJobs } from '../jobs'
 import type { Reader } from '../refresh'
 
@@ -109,18 +110,30 @@ export function viewOf(
 export const factoryReader: Reader = {
   name: 'factory',
   read: async (io, ctx) => {
-    const { jobs, note } = await readJobs(io, ctx.root)
-    const tracker = ctx.settings.tracker
+    const read = await readJobs(io, ctx.root)
+    const { jobs } = read
+    let { note } = read
     let queue: number | null = null
     let claimed: string[] = []
     // The quick read at session start asks no tracker.
+    const tracker = ctx.settings.tracker
     if (!ctx.isLight && tracker?.kind === 'github') {
       // The list is of the repository `origin` names, as the writes are.
       const plain: Run = argv => io.run(argv, { cwd: ctx.root, timeoutMs: GH_TIMEOUT_MS })
-      const repo = repoOf(await io.remote())
+      const repo = githubRepoOf(await io.remote(), tracker.project)
       const listed = await listIssues(repo === null ? plain : inRepo(plain, repo), tracker.mark)
       queue = listed.items === null ? null : listed.items.length
       claimed = listed.claimed.map(item => item.id)
+    } else if (!ctx.isLight && tracker !== null) {
+      // Any other tracker: the same adapter as the line's.
+      const { tracker: other } = await adaptersOf(io, ctx.root, ctx.settings, GH_TIMEOUT_MS)
+      if (other !== null) {
+        const listed = await other.scan()
+        queue = listed.items === null ? null : listed.items.length
+        claimed = listed.claimed.map(item => item.id)
+        // A tool that is missing or not logged in is said here.
+        if (listed.items === null) note ??= toolNote(listed.result, 'az')
+      }
     }
     const lock = await lockInfo(io, ctx.root, ctx.now)
     const line = { lock: lock.state, holder: lock.holder, isStopped: await isStopped(io, ctx.root), claimed }

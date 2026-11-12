@@ -1,12 +1,10 @@
 // What a command or the line needs to act: the repo, the settings, and the
 // tracker when there is one.
-import { githubIssues, inRepo } from '../adapters/github-issues'
-import { githubPrs } from '../adapters/github-pr'
 import type { PrHost } from '../adapters/pr-host'
 import type { Run, Tracker } from '../adapters/tracker'
 import type { FactorySettings } from '../core/factory-settings'
-import { prHostOf, repoOf } from '../core/task'
 import type { Io } from './io'
+import { adaptersOf } from './adapters'
 import { loadSettings } from './readers/settings'
 
 const GH_TIMEOUT_MS = 30_000
@@ -23,21 +21,15 @@ export type Ctx = {
   tracker: Tracker | null
   host: PrHost | null
   mark: string | null
+  // Why there is no tracker, when the settings name one that cannot be reached.
+  trackerNote: string | null
   // The person who runs the line, as the tracker names an author; null when it is not known.
   me: () => Promise<string | null>
 }
 
 export async function context(io: Io): Promise<Ctx> {
   const { settings, root } = await loadSettings(io)
-  const remote = await io.remote()
-  // Every gh call names the repository of `origin`. A remote that names none
-  // gives no tracker: nothing is written to a project gh would pick itself.
-  const repo = repoOf(remote)
-  const plain: Run = (argv, stdin) => io.run(argv, { cwd: root, timeoutMs: GH_TIMEOUT_MS, stdin })
-  const run = repo === null ? plain : inRepo(plain, repo)
-  const kind = settings.tracker?.kind
-  const tracker = kind === 'github' && repo !== null && settings.tracker ? githubIssues(run, settings.tracker.mark, settings.factory.forbiddenCommentWords) : null
-  const host = prHostOf(remote, settings.prHost) === 'github' && repo !== null ? githubPrs(run) : null
+  const { run, tracker, host, why } = await adaptersOf(io, root, settings, GH_TIMEOUT_MS)
 
   return {
     root,
@@ -46,9 +38,9 @@ export async function context(io: Io): Promise<Ctx> {
     now: await io.now(),
     f: settings.factory,
     run,
-    // As before this contract: with GitHub Issues the pull request host is GitHub too.
-    tracker: host === null ? null : tracker,
+    tracker,
     host,
-    mark: host !== null && tracker !== null && settings.tracker ? settings.tracker.mark : null,
+    mark: tracker !== null && settings.tracker ? settings.tracker.mark : null,
+    trackerNote: why,
   }
 }

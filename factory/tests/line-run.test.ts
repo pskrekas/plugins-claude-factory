@@ -31,12 +31,12 @@ const BOX_LINE = '[container] node:22 · network on · memory 4g · cpus 2'
 const LABEL = stateFolderOf('/r/.git')
 
 type World = ReturnType<typeof lineWorld>
-function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: { factory?: object; [key: string]: unknown } } = {}) {
+function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: { factory?: object; [key: string]: unknown }; remote?: string } = {}) {
   const settings = JSON.stringify({ ...SETTINGS, ...opts.settings, factory: { ...SETTINGS.factory, ...opts.settings?.factory } })
-  const io = fakeIo({ files: { '/r/.git/HEAD': 'x', '/r/.claude/factory.json': settings }, remote: 'git@github.com:a/b.git', now: NOW })
+  const io = fakeIo({ files: { '/r/.git/HEAD': 'x', '/r/.claude/factory.json': settings }, remote: opts.remote ?? 'git@github.com:a/b.git', now: NOW })
   io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE, BOX_LINE])
   // What the fake git, gh and npm answer; a test changes it as it goes.
-  const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isDirty: false, hasDocker: false, containers: '', isMerged: false, fail: [] as string[], failText: 'it broke', list: '[]', labels: ['factory'], comments: [] as { author: { login: string }; body: string }[], onRun: null as ((line: string) => void) | null }
+  const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isDirty: false, hasDocker: false, hasAz: true, azTags: 'bug; factory', azSent: [] as string[], containers: '', isMerged: false, fail: [] as string[], failText: 'it broke', list: '[]', labels: ['factory'], comments: [] as { author: { login: string }; body: string }[], onRun: null as ((line: string) => void) | null }
   const link = (path: string) => {
     const id = path.slice(path.lastIndexOf('/') + 1)
     io.files[`${path}/.git`] = `gitdir: /r/.git/worktrees/${id}\n`
@@ -48,6 +48,27 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: { factory?
     state.onRun?.(line)
     if (state.fail.some(start => line.startsWith(start))) return { exitCode: 1, stdout: '', stderr: state.failText }
     if (line.startsWith('gh api user')) return { exitCode: 0, stdout: 'runner\n' }
+    // Azure DevOps, when the machine has `az`: one work item (12), one pull request (7).
+    if (argv[0] === 'az') {
+      if (!state.hasAz) return undefined
+      // What az loads from a file of the plugin's own.
+      for (const word of argv) if (word.includes('=@')) state.azSent.push(io.files[word.slice(word.indexOf('=@') + 2)] ?? '(no such file)')
+      if (line.startsWith('az account show')) return { exitCode: 0, stdout: 'Runner@Example.com\n' }
+      const row = (id: number, tags: string) => ({ id, fields: { 'System.Title': `Item ${id}`, 'System.State': 'New', 'System.Tags': tags } })
+      if (line.startsWith('az boards query')) return { exitCode: 0, stdout: JSON.stringify([row(12, state.azTags), row(13, 'factory; factory:in-progress')]) }
+      if (line.startsWith('az boards work-item show')) {
+        return { exitCode: 0, stdout: JSON.stringify({ id: Number(argv[5]), fields: { 'System.Title': `Item ${argv[5]}`, 'System.State': 'New', 'System.Description': '<div>Do <b>it</b></div><script>x</script>', 'System.Tags': state.azTags, 'System.CreatedBy': { uniqueName: 'author@example.com' } } }) }
+      }
+      if (line.startsWith('az devops invoke --area wit')) {
+        return { exitCode: 0, stdout: JSON.stringify({ comments: [{ text: 'From the author', createdBy: { uniqueName: 'Author@example.com' } }, { text: 'From a stranger', createdBy: { uniqueName: 'x@example.com' } }, { text: 'From the runner', createdBy: { uniqueName: 'runner@example.com' } }] }) }
+      }
+      const tags = argv.find(word => word.startsWith('--fields=System.Tags='))
+      if (tags !== undefined) state.azTags = tags.slice('--fields=System.Tags='.length)
+      if (line.startsWith('az repos pr create') || line.startsWith('az repos pr show')) return { exitCode: 0, stdout: JSON.stringify({ pullRequestId: 7, status: state.isMerged ? 'completed' : 'active', isDraft: false, reviewers: [] }) }
+      if (line.startsWith('az repos pr policy list')) return { exitCode: 0, stdout: '[]' }
+
+      return { exitCode: 0, stdout: '{}' }
+    }
     if (line.startsWith('gh issue view') && line.includes('--json labels')) return { exitCode: 0, stdout: JSON.stringify({ labels: state.labels.map(name => ({ name })) }) }
     if (line.startsWith('gh issue view')) {
       const n = Number(argv[3])
@@ -924,4 +945,92 @@ test('/factory run a second time in the session that runs the line removes no co
   await startRun(w.io, w.spawn, null, READY)
   expect(dockerOf(w).filter(line => line.startsWith('docker ps')).length).toBe(1)
   expect(dockerOf(w).some(line => line.startsWith('docker rm'))).toBe(false)
+})
+
+const AZ = { remote: 'https://dev.azure.com/acme/Shop/_git/web', settings: { tracker: { kind: 'azure-boards' } } }
+const AZ_TAIL = '--org https://dev.azure.com/acme --detect false --output json'
+const azOf = (w: World) => w.io.ran.filter(line => line.startsWith('az '))
+
+test('on Azure DevOps one work item goes from the queue to a ready pull request, with az only', async () => {
+  const w = lineWorld(AZ)
+  expect(await startRun(w.io, w.spawn, null, READY)).toBe('The line runs: 1 item in the queue, 0 jobs go on. /factory stop stops it.')
+  const id = (await jobOf(w, '12'))?.id ?? ''
+  // The item's file holds plain text, and only the comments of its author and of the person who runs the line.
+  const itemFile = w.io.files[`${DIR}/jobs/${id}/files/item.md`] ?? ''
+  expect([itemFile.includes('> Do it'), itemFile.includes('<b>'), itemFile.includes('script'), itemFile.includes('From the author'), itemFile.includes('From the runner'), itemFile.includes('From a stranger')]).toEqual([true, false, false, true, true, false])
+  await ends(w, 'intake', 'ACCEPT risk=low surfaces=none')
+  await ends(w, 'spec', 'DONE')
+  w.state.isDirty = true
+  await ends(w, 'builder', 'DONE')
+  expect([(await jobOf(w, '12'))?.stage, (await jobOf(w, '12'))?.pr]).toEqual(['review', { number: 7, url: 'https://dev.azure.com/acme/Shop/_git/web/pullrequest/7' }])
+  await ends(w, 'reviewer', 'OK', 'code')
+  w.state.heads = [SHA1]
+  w.state.head = SHA2
+  await ends(w, 'approver', 'READY')
+  expect((await jobOf(w, '12'))?.stage).toBe('ready')
+  expect(
+    inOrder(azOf(w), [
+      'az boards query --wiql SELECT ',
+      `az boards work-item show --id 12 --expand fields ${AZ_TAIL}`,
+      `az devops invoke --area wit --resource comments --route-parameters project=Shop workItemId=12`,
+      `az boards work-item update --id 12 --fields=System.Tags=bug; factory; factory:in-progress ${AZ_TAIL}`,
+      'az boards work-item update --id 12 --discussion=@',
+      `az repos pr create --draft true --source-branch factory/${id} --target-branch main --title=@`,
+      `az repos pr work-item add --id 7 --work-items 12 ${AZ_TAIL}`,
+      `az repos pr update --id 7 --draft false ${AZ_TAIL}`,
+      `az boards work-item update --id 12 --fields=System.Tags=bug; factory; factory:needs-human ${AZ_TAIL}`,
+      'az boards work-item update --id 12 --discussion=@',
+    ]),
+  ).toBe('ok')
+  // What az read from the plugin's files: the fixed comments as HTML, the title, the text of the pull request.
+  expect(w.state.azSent[0]).toBe('The factory started on this.')
+  expect(w.state.azSent).toContain('12: Item 12')
+  expect(w.state.azSent.some(text => text.startsWith('The factory finished this. The pull request is ready for you to merge: https://dev.azure.com/acme/Shop/_git/web/pullrequest/7<br>'))).toBe(true)
+  // No file of the plugin's is left, no gh ran, and nothing completes the pull request.
+  expect(Object.keys(w.io.files).filter(name => name.startsWith(`${DIR}/tmp/`))).toEqual([])
+  expect(w.io.ran.some(line => line.startsWith('gh '))).toBe(false)
+  expect(azOf(w).some(line => / completed\b|--auto-complete|--bypass-policy|--state\b/.test(line))).toBe(false)
+
+  // The person completes the pull request on Azure DevOps: the job is done, and the item says so.
+  w.state.isMerged = true
+  w.io.time += 301_000
+  await watch(w.io)
+  expect([(await jobOf(w, '12'))?.stage, w.state.azTags]).toEqual(['done', 'bug; factory; factory:done'])
+})
+
+test('on Azure DevOps a reject abandons the pull request and tags the item', async () => {
+  const job = at('12', ['spec', 'build', 'gate', 'review'], { pr: { number: 7, url: 'https://dev.azure.com/acme/Shop/_git/web/pullrequest/7' } })
+  const w = lineWorld({ ...AZ, jobs: [job] })
+  expect(await rejectJob(w.io, '12', 'Not now.')).toBe('12 is rejected. The reason is on the item.')
+  expect(inOrder(azOf(w), ['az boards work-item update --id 12 --discussion=@', `az repos pr show --id 7 ${AZ_TAIL}`, `az repos pr update --id 7 --status abandoned ${AZ_TAIL}`, `az boards work-item update --id 12 --fields=System.Tags=bug; factory; factory:rejected ${AZ_TAIL}`])).toBe('ok')
+  expect(w.state.azSent).toContain('The factory dropped this: Not now.')
+})
+
+test('/factory run on Azure DevOps: what it needs', async () => {
+  // Work items on Azure DevOps, code on GitHub: the settings name the organization and the project.
+  const mixed = lineWorld({ settings: { tracker: { kind: 'azure-boards', project: 'acme/Shop' } } })
+  expect(await startRun(mixed.io, mixed.spawn, null, READY)).toBe('The line runs: 1 item in the queue, 0 jobs go on. /factory stop stops it.')
+  expect(azOf(mixed)[0]?.includes("[System.TeamProject] = 'Shop'")).toBe(true)
+  // GitHub Issues with code on Azure Repos: the settings name the GitHub repository.
+  const other = lineWorld({ remote: AZ.remote, settings: { tracker: { kind: 'github', project: 'a/b' } } })
+  other.state.list = ISSUES
+  expect(await startRun(other.io, other.spawn, null, READY)).toBe('The line runs: 2 items in the queue, 0 jobs go on. /factory stop stops it.')
+  expect(other.io.ran.find(line => line.startsWith('gh issue list'))?.endsWith('-R a/b')).toBe(true)
+
+  // Azure Boards with a remote that names no organization, and no project in the settings that does.
+  const lost = lineWorld({ settings: { tracker: { kind: 'azure-boards' } } })
+  expect(await startRun(lost.io, lost.spawn, null, READY)).toBe('The remote origin names no Azure DevOps project. Set tracker.project to <organization>/<project>, or use a dev.azure.com remote.')
+  expect(await startPlan(lost.io, lost.spawn, READY)).toBe('The remote origin names no Azure DevOps project. Set tracker.project to <organization>/<project>, or use a dev.azure.com remote.')
+  // A remote that is neither GitHub nor Azure DevOps has no pull request host.
+  const nowhere = lineWorld({ remote: 'git@example.com:a/b.git', settings: { tracker: { kind: 'azure-boards', project: 'acme/Shop' } } })
+  expect(await startRun(nowhere.io, nowhere.spawn, null, READY)).toBe('/factory run needs a pull request host: a github.com or a dev.azure.com remote.')
+  // az is not there: the line does not start, and says what is missing.
+  const noAz = lineWorld(AZ)
+  noAz.state.hasAz = false
+  expect(await startRun(noAz.io, noAz.spawn, null, READY)).toBe('The line did not start (the tracker could not be read: az could not start. Is it installed?). Nothing runs.')
+  // Only a marked work item runs.
+  const unmarked = lineWorld(AZ)
+  unmarked.state.azTags = 'bug'
+  expect(await startRun(unmarked.io, unmarked.spawn, '12', READY)).toBe('12 does not carry the mark "factory". Only a marked item runs.')
+  for (const w of [lost, nowhere, noAz, unmarked]) expect([w.started, await readRun(w.io, '/r'), (await lockInfo(w.io, '/r', NOW)).state]).toEqual([[], null, 'free'])
 })

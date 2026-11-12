@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { parseGhIssue } from '../adapters/github-issues'
 import { parseGhPr } from '../adapters/github-pr'
-import { prHostOf, repoOf, ticketOf, toolNote } from '../core/task'
+import { githubRepoOf, prHostOf, repoOf, ticketOf, toolNote } from '../core/task'
 import { START, cmd, engine, paneText } from './kit'
 
 test('ticket id from a branch', async () => {
@@ -171,13 +171,65 @@ test('a branch with no pull request shows no note', async ($, on) => {
   expect(rows.some(row => row.includes('gh is'))).toBe(false)
 })
 
-test('an Azure DevOps remote says its pull requests come later', async ($, on) => {
-  const world = engine(on, { files: {}, remote: 'https://dev.azure.com/o/p/_git/r', run: gh })
+const AZ_SETTINGS = '{"ticketPattern": "PROJ-(\\\\d+)", "tracker": {"kind": "azure-boards"}}'
+const AZ_REMOTE = 'https://dev.azure.com/acme/Shop/_git/web'
+function az(argv: readonly string[]) {
+  const line = argv.join(' ')
+  if (argv[0] === 'git') return gh(argv)
+  if (line.startsWith('az boards work-item show --id 12 ')) return { exitCode: 0, stdout: JSON.stringify({ id: 12, fields: { 'System.Title': 'Add dark mode', 'System.State': 'Active', 'System.Description': '<div>x</div>' } }) }
+  if (line.startsWith('az devops invoke --area wit')) return { exitCode: 0, stdout: '{"comments": []}' }
+  if (line.startsWith('az repos pr list --source-branch feat/PROJ-12-x ')) return { exitCode: 0, stdout: JSON.stringify([{ pullRequestId: 51, status: 'active', isDraft: false, reviewers: [{ vote: 10 }] }]) }
+  if (line.startsWith('az repos pr policy list --id 51 ')) return { exitCode: 0, stdout: JSON.stringify([{ status: 'approved', configuration: { isEnabled: true } }]) }
+  if (line.startsWith('az boards query')) return { exitCode: 0, stdout: '[]' }
+
+  return undefined
+}
+
+test('with an Azure DevOps remote the pane shows the work item of the branch and its pull request', async ($, on) => {
+  const world = engine(on, { files: { '/r/.claude/factory.json': AZ_SETTINGS }, remote: AZ_REMOTE, run: az })
   await $.session.start(START)
   await $.command.run(cmd(''))
 
-  expect(await paneText($, 60)).toContain('Azure DevOps Repos comes in a later version')
+  const rows = await paneText($, 60)
+  expect(rows.find(row => /^12 Add dark mode\s+active$/.test(row))).toBeDefined()
+  expect(rows.find(row => row.startsWith('PR 51 · build green · 1 approval'))).toBeDefined()
   expect(world.ran.some(line => line.startsWith('gh '))).toBe(false)
+  // Every az call names the organization and lets az detect nothing.
+  const calls = world.ran.filter(line => line.startsWith('az '))
+  expect(calls.length).toBeGreaterThan(1)
+  expect(calls.every(line => line.includes('--org https://dev.azure.com/acme --detect false'))).toBe(true)
+})
+
+test('with no settings file an Azure DevOps remote still shows the pull request of the branch', async ($, on) => {
+  engine(on, { files: {}, remote: AZ_REMOTE, run: az })
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+  expect((await paneText($, 60)).find(row => row.startsWith('PR 51'))).toBeDefined()
+})
+
+test('a missing az, or an az with no login, shows one note', async ($, on) => {
+  engine(on, { files: { '/r/.claude/factory.json': AZ_SETTINGS }, remote: AZ_REMOTE, run: argv => (argv[0] === 'git' ? gh(argv) : undefined) })
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+  expect(await paneText($, 60)).toContain('az could not start. Is it installed?')
+})
+
+test('an az that is not logged in says what to run', async ($, on) => {
+  engine(on, {
+    files: { '/r/.claude/factory.json': AZ_SETTINGS },
+    remote: AZ_REMOTE,
+    run: argv => (argv[0] === 'git' ? gh(argv) : { exitCode: 1, stdout: '', stderr: 'Before you can run Azure DevOps commands, you need to run the login command (az login if using AAD/MSA identity else az devops login if using PAT token) to setup credentials.' }),
+  })
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+  expect(await paneText($, 60)).toContain('az is not logged in. Run: az login')
+})
+
+test('GitHub Issues with code on Azure Repos: the settings name the GitHub repository', async () => {
+  expect(githubRepoOf('git@github.com:a/b.git', null)).toBe('a/b')
+  expect(githubRepoOf('git@github.com:a/b.git', 'c/d')).toBe('a/b')
+  expect(githubRepoOf(AZ_REMOTE, 'c/d')).toBe('c/d')
+  for (const project of [null, 'Shop', 'a/b/c', '-x/y', 'a/--help']) expect([project, githubRepoOf(AZ_REMOTE, project)]).toEqual([project, null])
 })
 
 test('outside a git repo there is no task section', async ($, on) => {

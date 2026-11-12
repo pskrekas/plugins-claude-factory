@@ -291,7 +291,8 @@ function simpleVerdict(simple: string, who: Who, depth: number, at: { cwd: strin
     const refused = gitVerdict(words, simple)
     if (refused !== null) return refused
   }
-  if (program === 'gh' || (program === 'az' && words[1] === 'repos')) return deny(HOST, simple)
+  // The host's own commands: the line talks to GitHub and to Azure DevOps.
+  if (program === 'gh' || (program === 'az' && ['repos', 'boards', 'devops', 'rest'].includes(words[1] ?? ''))) return deny(HOST, simple)
   if (isForbidden(words, who.forbiddenCommands)) return deny(FORBIDDEN, simple)
   // A write to a place that only the shell knows (a variable, a home folder) cannot be judged.
   const writes = simple.includes('>') || WRITERS.includes(program) || (program === 'sed' && words.some(word => word.startsWith('-i')))

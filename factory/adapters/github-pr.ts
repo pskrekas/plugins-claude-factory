@@ -118,14 +118,15 @@ export async function closePr(run: Run, number: number): Promise<RunResult> {
 }
 
 // The pull request host contract on GitHub. `current` asks for the pull
-// request of the branch that is checked out: `gh` finds it by itself.
-export function githubPrs(run: Run): PrHost {
+// request of the branch that is checked out: `gh` finds it by itself, and
+// only when no repository is named (`bare`: a runner that adds no `-R`).
+export function githubPrs(run: Run, bare: Run = run): PrHost {
   return {
     kind: 'github',
     open: pr => createDraftPr(run, pr),
     ready: number => readyPr(run, number),
     read: number => readPrByNumber(run, number),
-    current: () => readPr(run),
+    current: () => readPr(bare),
     comment: (number, markdown) => commentPr(run, number, markdown),
     close: number => closePr(run, number),
   }
