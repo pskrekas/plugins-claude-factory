@@ -52,7 +52,7 @@ export const FULL: PanelModel = {
 
 // What `state.get` answers for the panel atom holding `model`.
 export function stored(model: PanelModel) {
-  return { value: { value: { shape: 'panel-3', value: model }, version: 1 } }
+  return { value: { value: { shape: 'panel-4', value: model }, version: 1 } }
 }
 
 type Run = { exitCode: number; stdout: string; stderr?: string }
@@ -514,6 +514,7 @@ export const VIEW: FactoryView = {
   holder: null,
   isStopped: false,
   claimed: [],
+  plan: [],
 }
 
 // Where the factory keeps the state of the repo at /r: under the person's home

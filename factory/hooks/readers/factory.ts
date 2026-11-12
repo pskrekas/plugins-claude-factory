@@ -16,6 +16,7 @@ import type { Reader } from '../refresh'
 const MAX_JOBS = 20
 const MAX_WAITING = 10
 const MAX_CLAIMED = 10
+const MAX_PLAN = 10
 const GH_TIMEOUT_MS = 15_000
 
 // What is known of the line besides its jobs. `claimed` are the ids the
@@ -48,10 +49,19 @@ export function viewOf(
   now: number,
   line: LineInfo = NOBODY,
 ): FactoryView | null {
+  // A plan job is a row of the plan, never a job of the line. What it spent
+  // is in the day's total with every other job.
+  const everyJob = jobs
+  const plan = [...jobs]
+    .filter(job => job.plan !== null)
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+    .slice(0, MAX_PLAN)
+    .map(job => ({ itemId: job.itemId, verdict: job.plan?.verdict ?? 'failed', risk: job.plan?.risk ?? null, note: job.plan?.note ?? '' }))
+  jobs = jobs.filter(job => job.plan === null)
   // An item that has a job here is that job, whatever the tracker says.
   const here = new Set(jobs.map(job => job.itemId))
   const claimed = line.claimed.filter(id => !here.has(id)).slice(0, MAX_CLAIMED)
-  if (jobs.length === 0 && queue === null && note === null && claimed.length === 0) return null
+  if (everyJob.length === 0 && queue === null && note === null && claimed.length === 0) return null
   const newest = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
   const running = newest.filter(isActive)
   const waiting = newest.filter(isWaiting)
@@ -71,12 +81,13 @@ export function viewOf(
     moreWaiting: waiting.length - showWaiting,
     queue,
     slots: f.slots,
-    today: todayOf(jobs, now),
+    today: todayOf(everyJob, now),
     note,
     lock: line.lock,
     holder: line.lock === 'theirs' ? line.holder : null,
     isStopped: line.isStopped,
     claimed,
+    plan,
   }
 }
 

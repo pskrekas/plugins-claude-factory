@@ -30,6 +30,10 @@ export type Work = { agentId: string; role: Role; focus: string; startedAt: numb
 // What an agent of the station that runs now answered. `why` is set when the
 // answer could not be used (no answer line, no file). Kept on the job, so a
 // new session knows what the reviewers that already ended said.
+// What Intake said of an item in a dry run (`/factory plan`). A job that has
+// one is a plan job: it never goes past Intake and is never a job of the line.
+export type PlanRow = { verdict: 'running' | 'accept' | 'needs-info' | 'reject' | 'failed'; risk: Risk | null; note: string }
+
 export type Result = { role: Role; focus: string; answer: Answer | null; why: string | null }
 
 export type SentBack = { by: 'gate' | 'review' | 'approve' | 'you'; why: string }
@@ -70,6 +74,7 @@ export type Job = {
   results: Result[] // what the agents of the station that runs now answered
   refused: string[] // the newest refused commands, to see the same one twice
   tries: number // how often the station that runs now failed
+  plan: PlanRow | null // set for a job of a dry run
   history: { at: number; from: Stage | null; to: Stage; reason: string }[]
 }
 
@@ -119,6 +124,7 @@ const MAX_SPEND = 60
 const RESUMES: readonly Stage[] = ['intake', 'spec', 'build', 'gate', 'review', 'approve']
 const ASKERS: readonly string[] = ['intake', 'gate', 'review', 'approve', 'limit', 'fence', 'station']
 const MAX_WORK = 8
+const PLAN_VERDICTS: readonly string[] = ['running', 'accept', 'needs-info', 'reject', 'failed']
 const MAX_REFUSED = 10
 const MAX_COMMAND = 200
 const FOCUS = /^[a-z0-9-]{1,20}$/
@@ -173,6 +179,7 @@ export function newJob(item: { id: string; title: string }, now: number): Job {
     results: [],
     refused: [],
     tries: 0,
+    plan: null,
     history: [{ at: now, from: null, to: 'intake', reason: 'started' }],
   }
 }
@@ -442,6 +449,13 @@ export function parseJob(text: string, folder: string): Job | null {
     inFlight.push({ agentId: entry.agentId, role: entry.role as Role, focus: entry.focus, startedAt: entry.startedAt })
   }
   if (!refused.every(text => typeof text === 'string')) return null
+  const { plan = null } = raw
+  let planRow: PlanRow | null = null
+  if (plan !== null) {
+    if (!isObject(plan) || !PLAN_VERDICTS.includes(plan.verdict as string) || typeof plan.note !== 'string') return null
+    if (plan.risk !== null && !RISKS.includes(plan.risk as Risk)) return null
+    planRow = { verdict: plan.verdict as PlanRow['verdict'], risk: plan.risk as Risk | null, note: cut(plan.note, MAX.url) }
+  }
   const { results = [] } = raw
   if (!Array.isArray(results) || results.length > MAX_WORK) return null
   const answers: Result[] = []
@@ -487,6 +501,7 @@ export function parseJob(text: string, folder: string): Job | null {
     feedback,
     work: inFlight,
     results: answers,
+    plan: planRow,
     refused: (refused as string[]).slice(-MAX_REFUSED).map(text => cut(text, MAX_COMMAND)),
     tries,
     history,

@@ -26,6 +26,7 @@ const EMPTY: FactoryView = {
   holder: null,
   isStopped: false,
   claimed: [],
+  plan: [],
 }
 
 test('the stations and their counts', async () => {
@@ -243,6 +244,31 @@ test('an item the tracker says is claimed, with no job here, is a row under NEED
   const only = factoryRows({ ...EMPTY, claimed: ['31'], waiting: 1, counts: [0, 0, 0, 0, 0, 0, 0, 1] }, 120).map(row => row.left)
   expect(only[0]).toBe('FACTORY')
   expect(only).toContain('NEEDS YOU (1)')
+})
+
+test('the rows of a plan: what Intake said of each item, and how many would run', async () => {
+  const plan = [
+    { itemId: '4', verdict: 'accept' as const, risk: 'low' as const, note: '' },
+    { itemId: '5', verdict: 'accept' as const, risk: 'high' as const, note: 'above the limit (low)' },
+    { itemId: '6', verdict: 'needs-info' as const, risk: null, note: 'Which font?' },
+    { itemId: '7', verdict: 'reject' as const, risk: null, note: 'Three features.\u001b[2J' },
+    { itemId: '9', verdict: 'failed' as const, risk: null, note: 'The intake failed twice: wrote no file' },
+  ]
+  const text = factoryRows({ ...EMPTY, plan }, 120).map(row => row.left)
+  expect(text[0]).toBe('FACTORY')
+  expect(text.slice(text.indexOf('PLAN'))).toEqual([
+    'PLAN',
+    '4  accept · risk low',
+    '5  accept · risk high · above the limit (low)',
+    '6  asks: Which font?',
+    '7  reject: Three features.[2J',
+    '9  failed: The intake failed twice: wrote no file',
+    '1 item would run now. /factory run starts the line.',
+  ])
+  // While an Intake still runs, the count is not said yet.
+  const going = factoryRows({ ...EMPTY, plan: [...plan, { itemId: '8', verdict: 'running', risk: null, note: '' }] }, 120).map(row => row.left)
+  expect(going.slice(-2)).toEqual(['9  failed: The intake failed twice: wrote no file', '8  Intake runs'])
+  expect(factoryRows({ ...EMPTY, plan: [] }, 120)).toEqual([])
 })
 
 test('the width of text on screen', async () => {

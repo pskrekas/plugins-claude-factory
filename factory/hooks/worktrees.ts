@@ -200,6 +200,15 @@ export async function addCleanCopy(
   return made.ok ? { ok: true, path } : { ok: false, why: made.why ?? 'git failed' }
 }
 
+// A plan job's folder: the base's commit, on no branch, where a job's
+// worktree would be. A dry run makes no branch.
+export async function addPlanTree(io: Io, root: string, jobId: string, sha: string): Promise<Done> {
+  const path = await worktreePath(io, root, jobId)
+  if (path === null || gitArgs({ do: 'head', jobId }) === null || gitArgs({ do: 'add-clean', path, sha }) === null) return { ok: false, why: BAD }
+
+  return done(await git(io, root, { do: 'add-clean', path, sha }))
+}
+
 export async function removeCleanCopy(io: Io, root: string, jobId: string): Promise<Done> {
   const path = await cleanPath(io, root, jobId)
 

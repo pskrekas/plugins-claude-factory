@@ -331,3 +331,17 @@ test('the answers of a station are kept on the job until it moves', async () => 
   const accept = { role: 'intake' as const, focus: '', answer: { kind: 'accept' as const, risk: 'low' as const, surfaces: ['ui'] }, why: null }
   expect(parseJob(JSON.stringify(noteResult(job(), accept, 3)), id)?.results).toEqual([accept])
 })
+
+test('a plan job carries what Intake said of its item', async () => {
+  expect(job().plan).toBe(null)
+  const { plan, ...old } = job()
+  expect([plan, parseJob(JSON.stringify(old), old.id)?.plan]).toEqual([null, null])
+  const row = { verdict: 'accept' as const, risk: 'low' as const, note: '' }
+  expect(parseJob(JSON.stringify({ ...job(), plan: row }), job().id)?.plan).toEqual(row)
+  expect(parseJob(JSON.stringify({ ...job(), plan: { ...row, note: 'n'.repeat(900) } }), job().id)?.plan?.note.length).toBe(300)
+  for (const bad of [{ ...row, verdict: 'maybe' }, { ...row, risk: 'tiny' }, { verdict: 'accept' }, 'accept']) {
+    expect(parseJob(JSON.stringify({ ...job(), plan: bad }), job().id)).toBe(null)
+  }
+  // A move keeps it.
+  expect(move({ ...job(), plan: row }, 'rejected', 'plan only', 5).plan).toEqual(row)
+})

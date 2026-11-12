@@ -48,6 +48,8 @@ test('/factory run and /factory plan are a person\'s own, and need a tracker', a
   expect((await $.command.run(cmd('run', 'sdk'))).text).toBe('Only a person can do this. Type the command at the prompt.')
   expect((await $.command.run(cmd('run 12', 'plugin'))).text).toBe('Only a person can do this. Type the command at the prompt.')
   expect((await $.command.run(cmd('run'))).text).toBe('/factory run needs a GitHub tracker in the settings.')
+  expect((await $.command.run(cmd('plan', 'sdk'))).text).toBe('Only a person can do this. Type the command at the prompt.')
+  expect((await $.command.run(cmd('plan'))).text).toBe('/factory plan needs a GitHub tracker in the settings.')
 })
 
 test('stop sets the flag; only a person can', async ($, on) => {

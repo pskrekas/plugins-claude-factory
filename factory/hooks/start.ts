@@ -5,9 +5,9 @@ import type { Spawn } from './agent-events'
 import { context } from './context'
 import { gateCommands } from './gate'
 import type { Io } from './io'
-import { readJobs, setStop, takeLock, writeJob } from './jobs'
-import { advance, liveOf } from './line'
-import { MAX_QUEUE, writeRun } from './run'
+import { lockInfo, readJobs, retireJob, setStop, stateDirOf, takeLock, writeJob } from './jobs'
+import { advance, liveOf, tidy } from './line'
+import { MAX_QUEUE, readRun, writeRun } from './run'
 import { clean } from '../core/rows'
 
 const ITEM_ID = /^[A-Za-z0-9#][A-Za-z0-9_.#-]{0,39}$/
@@ -19,6 +19,41 @@ function gateHint(why: string): string {
   if (why === 'no gate') return 'Put the fast checks in gate.fast of the settings file on the base branch.'
 
   return 'Check the settings file on the base branch.'
+}
+
+const MAX_PLAN = 10
+
+// The jobs of the last dry run go: a run of the line, or a new plan, starts clean.
+async function clearPlan(io: Io, root: string, now: number): Promise<void> {
+  const dir = await stateDirOf(io, root)
+  if (dir === null) return
+  for (const job of (await readJobs(io, root)).jobs.filter(one => one.plan !== null)) {
+    await tidy(io, root, dir, job)
+    await retireJob(io, root, job.id, now).catch(() => undefined)
+  }
+}
+
+// `/factory plan`, the dry run: Intake on the queue as it is now (ten items at
+// most), in a clean copy of the base. It builds nothing, makes no branch and
+// no pull request, and writes nothing to the tracker. The pane shows what
+// Intake said of each item.
+export async function startPlan(io: Io, spawn: Spawn, ready: { hasAgentTypes: boolean }): Promise<string> {
+  const ctx = await context(io)
+  if (ctx.tracker === null || ctx.mark === null) return '/factory plan needs a GitHub tracker in the settings.'
+  if (!ready.hasAgentTypes) return 'The agent types of the line are not registered. Start a new session.'
+  // A run that is going is left alone. A run file with no live lock is a run that died.
+  const lock = await lockInfo(io, ctx.root, ctx.now)
+  if (lock.state === 'theirs' || ((await readRun(io, ctx.root)) !== null && lock.state === 'mine')) {
+    return 'The line runs. Wait for it to end, or stop it with /factory stop, before a plan.'
+  }
+  if (!(await takeLock(io, ctx.root, ctx.now)).isHeld) return 'The line runs. Wait for it to end, or stop it with /factory stop, before a plan.'
+  await setStop(io, ctx.root, false)
+  await clearPlan(io, ctx.root, ctx.now)
+  const queue = (await ctx.tracker.list(ctx.mark)).map(item => item.id).slice(0, MAX_PLAN)
+  await writeRun(io, ctx.root, { version: 1, session: await io.sessionId(), startedAt: ctx.now, queue, plan: true })
+  await advance(io, spawn)
+
+  return `The plan runs Intake on ${plural(queue.length, 'item')}. It builds nothing and writes nothing to the tracker.`
 }
 
 // Starts a run of the line: one pass over the queue as it is now (or over one
@@ -38,6 +73,7 @@ export async function startRun(io: Io, spawn: Spawn, only: string | null, ready:
 
   // The jobs of an earlier session go on. An agent of theirs that is gone is
   // taken off its job, so its station starts again: this is a hook, it may.
+  await clearPlan(io, ctx.root, ctx.now)
   const live = liveOf(await io.agents())
   const jobs = (await readJobs(io, ctx.root)).jobs.filter(job => !isFinished(job))
   for (const job of jobs) {

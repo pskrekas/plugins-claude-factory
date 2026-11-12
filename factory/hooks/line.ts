@@ -14,7 +14,7 @@ import { briefOf } from '../core/agents'
 import { parseDfFreeGb } from '../core/checks'
 import { branchOf } from '../core/git-args'
 import { clearWork, failStation, isActive, isFinished, move, newJob, noteRefusal, noteResult, startWork, stop } from '../core/job'
-import type { Job, Stage } from '../core/job'
+import type { Job, PlanRow, Stage } from '../core/job'
 import { canStart, freeSlots, limitOf } from '../core/limits'
 import { clean } from '../core/rows'
 import { nextStep } from '../core/step'
@@ -30,7 +30,7 @@ import { isStopped, lockInfo, readJobs, releaseLock, retireJob, stateDirOf, take
 import { readInside } from './readers/files'
 import { endRun, readRun, writeRun } from './run'
 import { collect, discardOut, spendOf, writeDiff, writeItem } from './station'
-import { addWorktree, baseHeadOf, dropBranch, headOf, pushCommit, removeCleanCopy, removeWorktree, syncBase } from './worktrees'
+import { addPlanTree, addWorktree, baseHeadOf, dropBranch, fetchBase, headOf, pushCommit, removeCleanCopy, removeWorktree, syncBase } from './worktrees'
 
 export type Advanced = { ran: boolean; started: number; moved: number; isDone: boolean; note: string | null }
 
@@ -62,13 +62,15 @@ async function freeDiskGb(io: Io, dir: string): Promise<number | null> {
   return 'failed' in df || df.exitCode !== 0 ? null : parseDfFreeGb(df.stdout)
 }
 
-// What is left of a job that ended: its worktree, the gate's copy, its folder.
-async function tidy(io: Io, root: string, dir: string, job: Job, now: number): Promise<void> {
+// What a job that ended no longer needs: its worktree, the gate's copy, its
+// local branch. The job itself stays in the state folder: what it spent is in
+// the day's total and under the day's limit. It is retired when its item
+// runs again.
+export async function tidy(io: Io, root: string, dir: string, job: Job): Promise<void> {
   if ((await io.stat(`${dir}/worktrees/${job.id}`)) !== null) await removeWorktree(io, root, job.id).catch(() => undefined)
   if ((await io.stat(`${dir}/gate/${job.id}`)) !== null) await removeCleanCopy(io, root, job.id).catch(() => undefined)
   // The local branch goes too, so the item can run again.
   if (job.branch !== null && (await headOf(io, root, job.id)) !== null) await dropBranch(io, root, job.id).catch(() => undefined)
-  await retireJob(io, root, job.id, now).catch(() => undefined)
   gates.delete(job.id)
   repeats.delete(job.id)
   mergeAsked.delete(job.id)
@@ -89,6 +91,18 @@ async function summaryOf(io: Io, dir: string, job: Job, name: string): Promise<s
   return out
 }
 
+// What a step of a plan job says of its item.
+function planRowOf(step: Step & { do: 'ask' | 'move' }, maxRisk: string): PlanRow {
+  const risk = step.set?.risk ?? null
+  if (step.do === 'move' && step.to === 'spec') return { verdict: 'accept', risk, note: '' }
+  if (step.do === 'move' && step.to === 'rejected') return { verdict: 'reject', risk: null, note: step.reason }
+  if (step.do === 'ask' && step.asker === 'intake') {
+    return step.resumeAt === 'spec' ? { verdict: 'accept', risk, note: `above the limit (${maxRisk})` } : { verdict: 'needs-info', risk: null, note: step.question }
+  }
+
+  return { verdict: 'failed', risk: null, note: step.do === 'ask' ? step.question : step.reason }
+}
+
 type Pass = Advanced & { changed: boolean }
 
 async function pass(io: Io, spawn: Spawn): Promise<Pass> {
@@ -101,16 +115,17 @@ async function pass(io: Io, spawn: Spawn): Promise<Pass> {
   if (!(await takeLock(io, root, ctx.now)).isHeld) return idle
   if (tally.startedAt !== run.startedAt) tally = { startedAt: run.startedAt, rejected: 0 }
   const out: Pass = { ran: true, started: 0, moved: 0, isDone: false, note: null, changed: false }
-  let jobs = (await readJobs(io, root)).jobs.filter(job => !isFinished(job))
+  // Every job in the folder: the ones that ended today count for the limits.
+  let jobs = (await readJobs(io, root)).jobs
+  // A dry run moves only plan jobs; a run of the line moves only its own.
+  const isPlanRun = run.plan === true
+  const isMine = (job: Job) => isActive(job) && (job.plan !== null) === isPlanRun
   const save = async (job: Job) => {
     await writeJob(io, root, job)
     jobs = jobs.some(one => one.id === job.id) ? jobs.map(one => (one.id === job.id ? job : one)) : [...jobs, job]
     out.changed = true
 
     return job
-  }
-  const drop = (id: string) => {
-    jobs = jobs.filter(one => one.id !== id)
   }
   const tell = (job: Job, what: string, error: unknown) => {
     out.note = `${clean(job.itemId)}: ${what} (${why(error)})`
@@ -136,13 +151,13 @@ async function pass(io: Io, spawn: Spawn): Promise<Pass> {
 
   const stopped = await isStopped(io, root)
   const live = liveOf(await io.agents())
-  const order = jobs.filter(isActive).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).map(job => job.id)
+  const order = jobs.filter(isMine).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).map(job => job.id)
   let isOutsideFence = false
 
   for (const id of order) {
     for (let n = 0; n < MAX_STEPS && !isOutsideFence; n++) {
       const job = jobs.find(one => one.id === id)
-      if (job === undefined || !isActive(job)) break
+      if (job === undefined || !isMine(job)) break
       const kept = gates.get(id)
       const gate = kept !== undefined && kept.stage === job.stage && kept.round === job.round ? kept.result : null
       const step: Step = nextStep(job, { now: ctx.now, f, jobs, live, isStopped: stopped, gate, isRepeatRefusal: repeats.has(id), refused: repeats.get(id) ?? '' })
@@ -197,6 +212,15 @@ async function pass(io: Io, spawn: Spawn): Promise<Pass> {
         gates.set(id, { stage: job.stage, round: job.round, result: result ?? (await runGate(io, root, job, ctx.base, step.which)) })
         out.changed = true
         continue
+      }
+
+      // A plan job ends here: what Intake said is its row, and nothing is
+      // written to the tracker.
+      if (job.plan !== null && (step.do === 'ask' || step.do === 'move')) {
+        const ended = await save({ ...move(job, 'rejected', 'plan only', ctx.now), plan: planRowOf(step, f.maxRisk) })
+        await tidy(io, root, dir, ended)
+        out.moved += 1
+        break
       }
 
       if (step.do === 'ask') {
@@ -291,8 +315,7 @@ async function pass(io: Io, spawn: Spawn): Promise<Pass> {
       }
       if (isFinished(moved)) {
         tally.rejected += 1
-        await tidy(io, root, dir, moved, ctx.now)
-        drop(id)
+        await tidy(io, root, dir, moved)
       }
     }
     if (isOutsideFence) break
@@ -310,13 +333,34 @@ async function pass(io: Io, spawn: Spawn): Promise<Pass> {
     queue = rest
     await writeRun(io, root, { ...run, queue })
     out.changed = true
-    if (jobs.some(job => job.itemId === itemId)) continue
+    if (jobs.some(job => job.itemId === itemId && isActive(job))) continue
     const item = await ctx.tracker.read(itemId).catch(() => null)
     if (item === null) {
       out.note = `${clean(itemId)}: the item could not be read`
       continue
     }
     const fresh = newJob({ id: item.id, title: item.title }, ctx.now)
+    // An item that ended runs again: its old job is retired first.
+    const old = jobs.find(one => one.id === fresh.id)
+    if (old !== undefined) {
+      if (!isFinished(old)) continue
+      await tidy(io, root, dir, old)
+      await retireJob(io, root, old.id, ctx.now)
+      jobs = jobs.filter(one => one.id !== old.id)
+    }
+    if (isPlanRun) {
+      // A dry run: a clean copy of the base on no branch, Intake, and no word to the tracker.
+      const baseSha = (await fetchBase(io, root, ctx.base)).ok ? await baseHeadOf(io, root, ctx.base) : null
+      const copy = baseSha === null ? { ok: false, why: 'the base branch could not be read' } : await addPlanTree(io, root, fresh.id, baseSha)
+      if (!copy.ok) {
+        out.note = `${clean(itemId)}: no copy of the base (${copy.why})`
+        continue
+      }
+      const planned: Job = { ...fresh, itemUrl: item.url === '' ? null : item.url, plan: { verdict: 'running', risk: null, note: '' } }
+      await writeItem(io, root, planned, item)
+      await save(planned)
+      continue
+    }
     const job: Job = { ...fresh, branch: branchOf(fresh.id), itemUrl: item.url === '' ? null : item.url }
     const tree = await addWorktree(io, root, job.id, ctx.base)
     if (!tree.ok) {
@@ -335,15 +379,24 @@ async function pass(io: Io, spawn: Spawn): Promise<Pass> {
   }
 
   // Nothing left to do: the run ends. A stopped line is done when no agent works.
-  const active = jobs.filter(isActive)
+  const active = jobs.filter(isMine)
   out.isDone = !isOutsideFence && (stopped ? active.every(job => job.work.length === 0) : queue.length === 0 && active.length === 0)
   if (out.isDone) {
     await endRun(io, root)
     await releaseLock(io, root).catch(() => undefined)
     gates.clear()
-    const ready = jobs.filter(job => job.stage === 'ready').length
-    const need = jobs.filter(job => job.stage === 'needs-info' || job.stage === 'needs-human').length
-    io.toast(`The factory line finished: ${ready} ready, ${need} need you, ${tally.rejected} rejected.`)
+    if (isPlanRun) {
+      const rows = jobs.map(job => job.plan).filter((row): row is PlanRow => row !== null)
+      const count = (is: (row: PlanRow) => boolean) => rows.filter(is).length
+      const go = count(row => row.verdict === 'accept' && row.note === '')
+      const asks = count(row => row.verdict === 'needs-info')
+      io.toast(`The plan is done: ${go} would run, ${asks} ask${asks === 1 ? 's' : ''}, ${count(row => row.verdict === 'reject')} refused.`)
+    } else {
+      const own = jobs.filter(job => job.plan === null)
+      const ready = own.filter(job => job.stage === 'ready').length
+      const need = own.filter(job => job.stage === 'needs-info' || job.stage === 'needs-human').length
+      io.toast(`The factory line finished: ${ready} ready, ${need} need you, ${tally.rejected} rejected.`)
+    }
   }
 
   return out
@@ -399,7 +452,7 @@ async function settleMerged(io: Io): Promise<void> {
       await ctx.tracker.setState(job.itemId, 'done').catch(() => undefined)
       const done = move(job, 'done', 'the pull request was merged', ctx.now)
       await writeJob(io, ctx.root, done)
-      await tidy(io, ctx.root, dir, done, ctx.now)
+      await tidy(io, ctx.root, dir, done)
     }
   } finally {
     if (before.state !== 'mine') await releaseLock(io, ctx.root).catch(() => undefined)

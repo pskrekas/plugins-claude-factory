@@ -112,6 +112,18 @@ test('the view: who runs the line, the stop flag, and claimed items with no job'
   expect(viewOf([], F, null, null, NOON, { ...line, claimed: [] })).toBe(null)
 })
 
+test('the view: a plan job is a row of the plan, never a job of the line', async () => {
+  const done = { verdict: 'accept' as const, risk: 'low' as const, note: '' }
+  const planned = addSpend(job('4', { itemId: '4', stage: 'rejected', plan: done }), 'intake', 120_000, null, NOON)
+  const running = job('5', { itemId: '5', stage: 'intake', plan: { verdict: 'running', risk: null, note: '' } })
+  const view = viewOf([planned, running, job('12', { itemId: '12', stage: 'build' })], F, null, null, NOON)
+  expect(view?.plan).toEqual([{ itemId: '4', ...done }, { itemId: '5', verdict: 'running', risk: null, note: '' }])
+  expect([view?.jobs.map(one => one.itemId), view?.running, view?.waiting, view?.counts]).toEqual([['12'], 1, 0, [0, 0, 0, 1, 0, 0, 0, 0]])
+  // What the plan's agents spent is in the day's total.
+  expect(view?.today.minutes).toBe(2)
+  expect(viewOf([planned], F, null, null, NOON)?.plan.length).toBe(1)
+})
+
 const CLAIMED = JSON.stringify([
   { number: 4, title: 'Fonts', state: 'OPEN', labels: [{ name: 'factory' }] },
   { number: 31, title: 'Lost', state: 'OPEN', labels: [{ name: 'factory' }, { name: 'factory:in-progress' }] },

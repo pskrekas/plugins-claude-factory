@@ -3,7 +3,8 @@ import { expect, test } from 'claude-code/testing'
 import { OUT_FILE } from '../core/agents'
 import { storeKey } from '../core/consent'
 import type { Role } from '../core/factory-settings'
-import { move, newJob, startWork } from '../core/job'
+import { isActive, move, newJob, startWork } from '../core/job'
+import { todayOf } from '../core/limits'
 import { lockText } from '../core/lock'
 import type { Job, Stage } from '../core/job'
 import { stateFolderOf } from '../core/state-path'
@@ -13,7 +14,7 @@ import { answerJob, rejectJob } from '../hooks/commands'
 import { isStopped, lockInfo, readJobs, setStop, takeLock } from '../hooks/jobs'
 import { advance, watch } from '../hooks/line'
 import { readRun, writeRun } from '../hooks/run'
-import { startRun } from '../hooks/start'
+import { startPlan, startRun } from '../hooks/start'
 import { fakeIo } from './kit'
 
 const NOW = 1_700_000_000_000
@@ -55,6 +56,11 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
     if (line.startsWith('git diff --name-only')) return { exitCode: 0, stdout: state.changed }
     if (line.startsWith('git diff --no-renames')) return { exitCode: 0, stdout: 'diff --git a/src/a.ts b/src/a.ts\n+x' }
     if (line.startsWith('git worktree add') && argv.includes('-b')) link(argv[3] ?? '')
+    // A copy at one commit holds the commit's files; a removed one holds nothing.
+    if (line.startsWith('git worktree add --detach')) io.files[`${argv[4]}/README.md`] = 'x'
+    if (line.startsWith('git worktree remove --force')) {
+      for (const name of Object.keys(io.files).filter(name => name.startsWith(`${argv[4]}/`))) delete io.files[name]
+    }
     if (line.startsWith('npm')) return { exitCode: state.npm, stdout: state.npm === 0 ? 'all good' : 'FAILED 2 tests' }
     if (line.startsWith('df ')) return { exitCode: 0, stdout: 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/x 900000000 1 500000000 1% /\n' }
 
@@ -81,8 +87,10 @@ async function begin(w: World): Promise<void> {
   await writeRun(w.io, '/r', { version: 1, session: w.io.session, startedAt: NOW, queue: w.queue })
 }
 // The newest agent of a role ends its turn: its file is in `out/`, its answer is a fact.
-async function ends(w: World, role: Role, line: string, focus = '', file: string | null = '## Summary\n- ok') {
-  const agent = [...w.started].reverse().find(one => one.role === role && (focus === '' || one.description.includes(`:${focus} `)))
+async function ends(w: World, role: Role, line: string, focus = '', file: string | null = '## Summary\n- ok', item?: string) {
+  const agent = [...w.started]
+    .reverse()
+    .find(one => one.role === role && (focus === '' || one.description.includes(`:${focus} `)) && (item === undefined || one.description.split(' ').at(-1)?.startsWith(`${item}-`)))
   if (agent === undefined) throw new Error(`no ${role} was started`)
   const jobId = agent.description.split(' ').at(-1) ?? ''
   if (file !== null) w.io.files[`${DIR}/jobs/${jobId}/out/${OUT_FILE[role](focus)}`] = file
@@ -214,7 +222,9 @@ test('two slots: the third item waits in the queue until a job waits or ends', a
   // Item 1 is refused: its slot is free for item 3.
   w.started.pop()
   await ends(w, 'intake', 'REJECT: Not one piece of work.')
-  expect([(await jobsOf(w)).map(job => job.itemId).sort(), (await readRun(w.io, '/r'))?.queue]).toEqual([['2', '3'], []])
+  expect([(await jobsOf(w)).filter(isActive).map(job => job.itemId).sort(), (await readRun(w.io, '/r'))?.queue]).toEqual([['2', '3'], []])
+  // The job that ended stays for the day's totals; only its worktree and its branch go.
+  expect((await jobOf(w, '1'))?.stage).toBe('rejected')
   expect(inOrder(lines(w), ['gh issue comment 1 ', 'gh issue close 1 ', `git worktree remove --force ${DIR}/worktrees/1-item-1`])).toBe('ok')
   expect(w.io.stdins).toContain('The factory did not take this: Not one piece of work.')
 })
@@ -263,8 +273,8 @@ test('a merged pull request ends the job: done, the worktree removed, the job re
   w.state.isMerged = true
   w.io.time += 301_000
   await watch(w.io)
-  expect(await jobOf(w, '12')).toBe(undefined)
-  expect(Object.keys(w.io.files).some(name => name.startsWith(`${DIR}/retired/12-item-12.`))).toBe(true)
+  expect((await jobOf(w, '12'))?.stage).toBe('done')
+  expect(Object.keys(w.io.files).some(name => name.startsWith(`${DIR}/worktrees/12-item-12/`))).toBe(false)
   expect(inOrder(lines(w), ['gh pr view 7', 'gh issue edit 12 --remove-label', `git worktree remove --force ${DIR}/worktrees/12-item-12`])).toBe('ok')
   expect(w.started).toEqual([])
 })
@@ -406,4 +416,65 @@ test("a reject also removes the gate's copy and the job's branch, so the item ca
   expect(await rejectJob(w.io, '12', 'Not now.')).toBe('12 is rejected. The reason is on the item.')
   expect(inOrder(lines(w), [`git worktree remove --force ${DIR}/worktrees/${job.id}`, `git worktree remove --force ${DIR}/gate/${job.id}`, `git branch -D factory/${job.id}`])).toBe('ok')
   expect(await jobOf(w, '12')).toBe(undefined)
+})
+
+test('an item that ended can run again: its old job is retired when the new one starts', async () => {
+  const w = lineWorld({ jobs: [at('12', ['spec', 'build', 'gate', 'review', 'approve', 'ready', 'done'], { branch: null })] })
+  expect(await startRun(w.io, w.spawn, '12', READY)).toBe('The line runs: 1 item in the queue, 0 jobs go on. /factory stop stops it.')
+  expect((await jobsOf(w)).map(job => [job.itemId, job.stage])).toEqual([['12', 'intake']])
+  expect(Object.keys(w.io.files).some(name => name.startsWith(`${DIR}/retired/12-item-12.`) && name.endsWith('/job.json'))).toBe(true)
+})
+
+const THREE = JSON.stringify([4, 6, 7].map(number => ({ number, title: `Item ${number}`, state: 'OPEN', labels: [{ name: 'factory' }] })))
+const planRows = async (w: World) => (await jobsOf(w)).filter(job => job.plan !== null).sort((a, b) => a.id.localeCompare(b.id)).map(job => [job.itemId, job.plan?.verdict, job.plan?.risk, job.plan?.note])
+
+test('a plan runs Intake on the queue, and nothing else: no branch, no push, nothing on the tracker', async () => {
+  const w = lineWorld()
+  w.state.list = THREE
+  expect(await startPlan(w.io, w.spawn, READY)).toBe('The plan runs Intake on 3 items. It builds nothing and writes nothing to the tracker.')
+  // Two slots.
+  expect([w.started.map(one => one.role), await planRows(w)]).toEqual([['intake', 'intake'], [['4', 'running', null, ''], ['6', 'running', null, '']]])
+
+  await ends(w, 'intake', 'ACCEPT risk=low surfaces=none', '', undefined, '4')
+  expect(w.started.length).toBe(3) // a slot is free: item 7's Intake started
+  await ends(w, 'intake', 'REJECT: Three features.', '', undefined, '7')
+  const last = await ends(w, 'intake', 'NEEDS-INFO: Which font?', '', undefined, '6')
+
+  expect(await planRows(w)).toEqual([['4', 'accept', 'low', ''], ['6', 'needs-info', null, 'Which font?'], ['7', 'reject', null, 'Three features.']])
+  expect((await jobsOf(w)).filter(isActive)).toEqual([])
+  expect([last.isDone, await readRun(w.io, '/r'), w.io.toasts.at(-1)]).toEqual([true, null, 'The plan is done: 1 would run, 1 asks, 1 refused.'])
+  const all = lines(w)
+  for (const start of ['gh issue edit', 'gh issue comment', 'gh issue close', 'gh label', 'gh pr', 'git push']) expect([start, all.some(line => line.startsWith(start))]).toEqual([start, false])
+  expect(all.some(line => line.startsWith('git worktree add') && line.includes(' -b '))).toBe(false)
+  // Each agent read a clean copy of the base, on no branch; the copies are gone.
+  expect(all.filter(line => line.startsWith('git worktree add --detach')).length).toBe(3)
+  expect(all).toContain(`git worktree add --detach ${DIR}/worktrees/4-item-4 ${BASE}`)
+  expect(all.filter(line => line.startsWith('git worktree remove --force')).length).toBe(3)
+  // What the three agents spent is in the day's total.
+  expect(todayOf(await jobsOf(w), NOW).minutes).toBe(3)
+})
+
+test('a risk above the limit is told in the plan; a second plan replaces the first; a run clears the plan', async () => {
+  const w = lineWorld()
+  w.state.list = JSON.stringify([{ number: 4, title: 'Item 4', state: 'OPEN', labels: [{ name: 'factory' }] }])
+  await startPlan(w.io, w.spawn, READY)
+  await ends(w, 'intake', 'ACCEPT risk=high surfaces=none')
+  expect(await planRows(w)).toEqual([['4', 'accept', 'high', 'above the limit (low)']])
+
+  await startPlan(w.io, w.spawn, READY)
+  expect(await planRows(w)).toEqual([['4', 'running', null, '']])
+  // A plan is refused while the line runs.
+  expect(await startPlan(w.io, w.spawn, READY)).toBe('The line runs. Wait for it to end, or stop it with /factory stop, before a plan.')
+  await ends(w, 'intake', 'ACCEPT risk=low surfaces=none')
+
+  await startRun(w.io, w.spawn, null, READY)
+  const jobs = await jobsOf(w)
+  expect([jobs.map(job => [job.itemId, job.stage, job.plan]), jobs[0]?.branch]).toEqual([[['4', 'intake', null]], 'factory/4-item-4'])
+})
+
+test('/factory plan needs a tracker and the agent types', async () => {
+  const noTracker = lineWorld({ settings: { tracker: undefined } })
+  expect(await startPlan(noTracker.io, noTracker.spawn, READY)).toBe('/factory plan needs a GitHub tracker in the settings.')
+  const noTypes = lineWorld()
+  expect(await startPlan(noTypes.io, noTypes.spawn, { hasAgentTypes: false })).toBe('The agent types of the line are not registered. Start a new session.')
 })
