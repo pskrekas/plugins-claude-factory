@@ -29,6 +29,11 @@ export const taskReader: Reader = {
     const ticket = ticketOf(branch, settings.ticketPattern)
     const host = prHostOf(await io.remote(), settings.prHost)
 
+    if (ctx.isLight) {
+      // No `gh` at session start: the branch and the ticket id are enough.
+      return { task: { id: ticket, branch, title: null, state: null, pr: null, note: null } }
+    }
+
     let note: string | null = null
     const issue =
       ticket !== null && settings.tracker?.kind === 'github' ? await readIssue(run, ticket) : null

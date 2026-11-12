@@ -1,5 +1,6 @@
 // One refresh: load the settings, run every reader, write the model.
-import { storeKey, approvedOf } from '../core/consent'
+import { alertsFor } from '../core/alerts'
+import { approvedOf, storeKey } from '../core/consent'
 import { statusText } from '../core/layout'
 import type { Consent, PanelModel } from '../core/model'
 import { agentRows } from '../core/work'
@@ -12,7 +13,15 @@ import { taskReader } from './readers/task'
 import { workReader } from './readers/work'
 import type { Loaded } from './readers/settings'
 
-export type Ctx = { root: string; settings: Settings; consent: Consent; now: number }
+// `isLight`: the read at session start. It must be quick, so a reader skips
+// what goes over the network (`gh`) and what the settings file asks to run.
+export type Ctx = {
+  root: string
+  settings: Settings
+  consent: Consent
+  now: number
+  isLight: boolean
+}
 
 // A reader fetches one part of the model. One that runs a command from the
 // settings file must answer {} unless `ctx.consent` is 'approved'.
@@ -23,18 +32,33 @@ export type Reader = {
 
 export const readers: Reader[] = [taskReader, progressReader, checksReader, workReader]
 
-export async function refresh(io: Io, given?: Loaded): Promise<PanelModel> {
-  const loaded = given ?? (await loadSettings(io))
+export async function refresh(
+  io: Io,
+  options: { loaded?: Loaded; isLight?: boolean; isListed?: boolean } = {},
+): Promise<PanelModel> {
+  const loaded = options.loaded ?? (await loadSettings(io))
   const now = await io.now()
   const prev = await io.getModel()
-  const ctx: Ctx = { root: loaded.root, settings: loaded.settings, consent: loaded.consent, now }
+  const ctx: Ctx = {
+    root: loaded.root,
+    settings: loaded.settings,
+    consent: loaded.consent,
+    now,
+    isLight: options.isLight === true,
+  }
   const results = await Promise.allSettled(readers.map(reader => reader.read(io, ctx, prev)))
 
   const notes: string[] = []
+  const pending = loaded.consent === 'needed' ? loaded.commands : []
+  // A command counts as shown only when the pane was open to draw it (or when
+  // /factory approve listed it, which `options.isListed` says). A read with the
+  // pane closed shows nothing to anyone.
+  const isDrawn = options.isListed === true || (await io.isPaneOpen())
   const patch: Partial<PanelModel> = {
     root: loaded.root,
     consent: loaded.consent,
-    pendingCommands: loaded.consent === 'needed' ? loaded.commands : [],
+    pendingCommands: pending,
+    shown: isDrawn ? pending : prev.root === loaded.root ? prev.shown.filter(line => pending.includes(line)) : [],
     settingsError: loaded.error,
     notes,
     readAt: now,
@@ -50,6 +74,9 @@ export async function refresh(io: Io, given?: Loaded): Promise<PanelModel> {
   // an agent that started meanwhile is not lost.
   const model = await io.updateModel(current => ({ ...current, ...patch }))
   io.status(statusText(model))
+  const alerts = alertsFor(prev, model)
+  for (const alert of alerts) io.toast(alert)
+  if (alerts.length > 0) io.sound()
 
   return model
 }
@@ -78,14 +105,15 @@ export async function approve(io: Io): Promise<string> {
   const onScreen = await io.getModel()
   const loaded = await loadSettings(io)
   if (loaded.consent !== 'needed') {
-    await refresh(io, loaded)
+    await refresh(io, { loaded })
 
     return 'Nothing to approve.'
   }
   const lines = loaded.commands
-  const wasShown = onScreen.root === loaded.root && onScreen.pendingCommands.length > 0
-  if (!wasShown || !sameLines(onScreen.pendingCommands, lines)) {
-    await refresh(io, loaded)
+  const wasShown = onScreen.root === loaded.root && onScreen.shown.length > 0
+  if (!wasShown || !sameLines(onScreen.shown, lines)) {
+    // The answer below lists every line: from now on they count as shown.
+    await refresh(io, { loaded, isListed: true })
     const why = wasShown
       ? `The settings file changed. It now names ${count(lines)}`
       : `Not approved yet. The settings file names ${count(lines)}`

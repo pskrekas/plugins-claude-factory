@@ -37,7 +37,7 @@ async function runCheck(io: Io, root: string, spec: CheckSpec): Promise<CheckSta
 export const checksReader: Reader = {
   name: 'checks',
   read: async (io, ctx) => {
-    if (ctx.consent !== 'approved') return {}
+    if (ctx.consent !== 'approved' || ctx.isLight) return {}
     const [checks, ports] = await Promise.all([
       Promise.all(ctx.settings.checks.map(spec => runCheck(io, ctx.root, spec))),
       Promise.all(

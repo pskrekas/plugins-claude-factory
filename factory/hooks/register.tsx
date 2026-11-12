@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
+import { briefOf } from '../core/brief'
 import { safePath } from '../core/checks'
 import { rowsOf } from '../core/layout'
 import type { Tone } from '../core/layout'
@@ -131,6 +132,10 @@ export const register: Register = (on, options) => {
       name: 'factory',
       description: 'Open the Factory work panel (close | init | approve)',
     })
+    // One quick read now, so the status line and the session brief have the
+    // branch and the progress before the first prompt. It runs no `gh` and no
+    // command from the settings file.
+    await refresh(ready, { isLight: true }).catch(() => undefined)
     if (options.openOnStart === true) {
       void $.ui.open({ id: PANE, title: TITLE }).then(() => refresh(ready))
     }
@@ -143,6 +148,19 @@ export const register: Register = (on, options) => {
     })
 
     return started
+  })
+
+  // The session brief: the last section of the system prompt, from the model
+  // as it is. It never reads anything itself: a brief must not delay a prompt.
+  on('prompt.compose', async ($, e, next) => {
+    const composed = await next(e)
+    const brief = briefOf(await read($, panel))
+    if (brief === null) return composed
+
+    return {
+      ...composed,
+      sections: [...composed.sections, { id: 'factory:brief', text: brief, scope: 'session' }],
+    }
   })
 
   // An agent that starts or ends shows at once: this reads the agent list only.

@@ -18,6 +18,7 @@ export function emptyModel(): PanelModel {
     root: null,
     consent: 'none',
     pendingCommands: [],
+    shown: [],
     settingsError: null,
     task: null,
     progress: [],

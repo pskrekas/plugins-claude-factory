@@ -120,6 +120,7 @@ export function engine(
 
     return { value: undefined }
   })
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'x', scope: 'shared' }] }) as never)
   on('agent.list', () => ({ value: seen.agents as never }))
   on('agent.spawn', () => ({ model: 'm', agentId: 'a1' }) as never)
   on('turn.complete', () => ({}) as never)
@@ -204,3 +205,13 @@ export async function paneText($: Engine, columns = 40): Promise<string[]> {
 export function settingsRuns(world: { ran: string[] }): string[] {
   return world.ran.filter(line => !line.startsWith('git ') && !line.startsWith('gh '))
 }
+
+// The whole input of `prompt.compose`, which a test must give.
+export const COMPOSE = {
+  model: 'm',
+  promptModel: 'm',
+  surfaces: ['terminal'],
+  tools: [],
+  outputStyle: null,
+  traits: [],
+} as never

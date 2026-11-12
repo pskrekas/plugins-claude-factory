@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 import { judgeCheck, judgeDisk, judgePort, parseDfFreeGb, safePath } from '../core/checks'
 import { START, cmd, engine, paneText, settingsRuns } from './kit'
@@ -81,7 +82,7 @@ const SETTINGS = JSON.stringify({
 
 const DF = 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/d1 1 1 34603008 93% /\n'
 
-async function approved($: Parameters<typeof paneText>[0]) {
+async function approved($: Engine) {
   await $.session.start(START)
   await $.command.run(cmd(''))
   await $.command.run(cmd('approve'))

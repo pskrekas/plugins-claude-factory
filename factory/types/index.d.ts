@@ -55,6 +55,9 @@ export type PanelModel = {
   root: string | null
   consent: Consent
   pendingCommands: string[]
+  // The pending command lines the person was shown: by the open pane, or by
+  // the answer of /factory approve. Only these can be approved.
+  shown: string[]
   settingsError: string | null
   task: TaskState | null
   progress: ProgressState[]

@@ -35,8 +35,9 @@ test('the pane is read again each minute, only while it is open', async ($, on) 
   const world = engine(on, { files: {} })
   await $.session.start(START)
 
+  const atStart = world.status.length
   await world.clock.advance(60_000)
-  expect(world.status.length).toBe(0)
+  expect(world.status.length).toBe(atStart)
 
   await $.command.run(cmd(''))
   const after = world.status.length
