@@ -4,6 +4,7 @@ import {
   closeIssue,
   commentIssue,
   ensureLabels,
+  inRepo,
   githubIssues,
   listIssues,
   setIssueState,
@@ -75,8 +76,9 @@ test('each state is one edit of the labels; rejected also closes the issue', asy
     'gh issue edit 12 --remove-label factory:in-progress --remove-label factory:needs-human',
   ])
   expect(await lines('rejected')).toEqual([
-    'gh issue edit 12 --remove-label factory:in-progress --remove-label factory:needs-human',
+    // Closed first: if the next step fails, the item still shows as claimed and the reject can be run again.
     'gh issue close 12 --reason not planned',
+    'gh issue edit 12 --remove-label factory:in-progress --remove-label factory:needs-human',
   ])
   const rec = recorder()
   await closeIssue(rec.run, '#7')
@@ -90,12 +92,22 @@ test('the adapter: five actions, a refused comment runs nothing, a failed comman
   await tracker.comment('12', 'Intake: accepted, risk low.')
   await tracker.setState('12', 'in-progress')
   await tracker.linkPr('12', 'https://github.com/a/b/pull/21')
+  await tracker.setState('12', 'needs-human')
   expect(ok.lines()).toEqual([
     'gh issue comment 12 --body-file -',
+    // The two state labels are made once, before the first state is written.
+    'gh label create factory:in-progress --force --description The factory works on this',
+    'gh label create factory:needs-human --force --description The factory waits for a person',
     'gh issue edit 12 --add-label factory:in-progress --remove-label factory:needs-human',
     'gh issue comment 12 --body-file -',
+    'gh issue edit 12 --add-label factory:needs-human --remove-label factory:in-progress',
   ])
-  expect(ok.calls[2]?.stdin).toBe('Pull request: https://github.com/a/b/pull/21')
+  expect(ok.calls[4]?.stdin).toBe('Pull request: https://github.com/a/b/pull/21')
+  // In a fork gh would pick the upstream project: every call names the repository.
+  const named = recorder()
+  await inRepo(named.run, 'a/b')(['gh', 'issue', 'close', '12'])
+  await inRepo(named.run, 'a/b')(['git', 'status'])
+  expect(named.lines()).toEqual(['gh issue close 12 -R a/b', 'git status'])
 
   const refused = recorder()
   let error: unknown = null

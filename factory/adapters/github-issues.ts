@@ -96,6 +96,12 @@ export async function listIssues(
   }
 }
 
+// The same runner, with every `gh` call told which repository it is for.
+export const inRepo =
+  (run: Run, repo: string): Run =>
+  (argv, stdin) =>
+    run(argv[0] === 'gh' ? [...argv, '-R', repo] : argv, stdin)
+
 export const stateLabel = (mark: string, state: 'in-progress' | 'needs-human') => `${mark}:${state}`
 
 const NOTHING_RAN: RunResult = { failed: 'other' }
@@ -130,7 +136,9 @@ export async function closeIssue(run: Run, id: string): Promise<RunResult> {
 }
 
 // A state is the two labels: one, the other, or neither. `rejected` also
-// closes the issue as not planned; `done` leaves that to the merged pull request.
+// closes the issue as not planned, and does that first: if the label step
+// then fails, the item still shows as claimed and the reject can be run
+// again. `done` leaves the closing to the merged pull request.
 export async function setIssueState(run: Run, id: string, mark: string, state: TrackerState): Promise<RunResult> {
   const n = digitsOf(id)
   if (n === '' || !MARK.test(mark)) return NOTHING_RAN
@@ -142,10 +150,12 @@ export async function setIssueState(run: Run, id: string, mark: string, state: T
       : state === 'needs-human'
         ? ['--add-label', waiting, '--remove-label', working]
         : ['--remove-label', working, '--remove-label', waiting]
-  const edited = await run(['gh', 'issue', 'edit', n, ...labels])
-  if (state !== 'rejected' || 'failed' in edited || edited.exitCode !== 0) return edited
+  if (state === 'rejected') {
+    const closed = await closeIssue(run, id)
+    if ('failed' in closed || closed.exitCode !== 0) return closed
+  }
 
-  return closeIssue(run, id)
+  return run(['gh', 'issue', 'edit', n, ...labels])
 }
 
 // The five actions of the tracker contract on GitHub Issues. A method throws
@@ -155,6 +165,7 @@ export function githubIssues(run: Run, mark: string, forbidden: string[]): Track
   const must = (result: RunResult) => {
     if ('failed' in result || result.exitCode !== 0) throw new Error(failureText('gh', result))
   }
+  let hasLabels = false
   const comment = async (id: string, markdown: string) => {
     const text = commentOf(markdown, forbidden)
     if ('no' in text) throw new Error(`the comment was not sent: ${text.no}`)
@@ -165,7 +176,13 @@ export function githubIssues(run: Run, mark: string, forbidden: string[]): Track
     list: async () => (await listIssues(run, mark)).items ?? [],
     read: async id => (await readIssue(run, id)).item,
     comment,
-    setState: async (id, state) => must(await setIssueState(run, id, mark, state)),
+    // gh refuses a label the repository does not have, also one it is asked
+    // to remove: the two state labels are made before the first state is set.
+    setState: async (id, state) => {
+      if (!hasLabels) must(await ensureLabels(run, mark))
+      hasLabels = true
+      must(await setIssueState(run, id, mark, state))
+    },
     linkPr: async (id, url) => {
       if (!/^https:\/\/\S+$/.test(url)) throw new Error('not a pull request address')
       await comment(id, `Pull request: ${url}`)

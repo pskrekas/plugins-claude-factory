@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { parseGhIssue } from '../adapters/github-issues'
 import { parseGhPr } from '../adapters/github-pr'
-import { prHostOf, ticketOf, toolNote } from '../core/task'
+import { prHostOf, repoOf, ticketOf, toolNote } from '../core/task'
 import { START, cmd, engine, paneText } from './kit'
 
 test('ticket id from a branch', async () => {
@@ -10,6 +10,16 @@ test('ticket id from a branch', async () => {
   expect(ticketOf('issue-12-x', 'issue-(\\d+)')).toBe('12')
   expect(ticketOf('main', 'PROJ-\\d+')).toBe(null)
   expect(ticketOf('x', null)).toBe(null)
+})
+
+test('the GitHub repository of a remote, as owner/name', async () => {
+  expect(repoOf('git@github.com:a/b.git')).toBe('a/b')
+  expect(repoOf('https://github.com/Some-Org/my.repo')).toBe('Some-Org/my.repo')
+  expect(repoOf('ssh://git@github.com/a/b.git')).toBe('a/b')
+  expect(repoOf('https://user@github.com/a/b.git/')).toBe('a/b')
+  for (const remote of ['https://example.com/a/b.git', 'git@github.com:a.git', 'git@github.com:-x/b.git', 'https://github.com/a/b/c', 'https://github.com.evil.example/a/b', '', null]) {
+    expect(repoOf(remote)).toBe(null)
+  }
 })
 
 test('PR host from the remote', async () => {

@@ -1,14 +1,15 @@
 // The person's commands on the line and on a job: stop, answer, reject.
 // Each takes the lock first, so two sessions never change one job.
 import { closePr, readPrByNumber } from '../adapters/github-pr'
-import { githubIssues, listIssues } from '../adapters/github-issues'
+import { githubIssues, inRepo, listIssues } from '../adapters/github-issues'
 import type { Run, Tracker } from '../adapters/tracker'
 import { failureText } from '../core/comment'
 import type { FactorySettings } from '../core/factory-settings'
 import { grant, isFinished, move, reject, resume } from '../core/job'
 import type { Job } from '../core/job'
+import { limitOf } from '../core/limits'
 import { clean } from '../core/rows'
-import { prHostOf } from '../core/task'
+import { prHostOf, repoOf } from '../core/task'
 import type { Io } from './io'
 import {
   addFeedback,
@@ -40,18 +41,23 @@ type Ctx = {
 }
 
 async function context(io: Io): Promise<Ctx> {
-  const loaded = await loadSettings(io)
-  const { settings, root } = loaded
-  const run: Run = (argv, stdin) => io.run(argv, { cwd: root, timeoutMs: GH_TIMEOUT_MS, stdin })
-  const isGitHub = settings.tracker?.kind === 'github' && prHostOf(await io.remote(), settings.prHost) === 'github'
+  const { settings, root } = await loadSettings(io)
+  const remote = await io.remote()
+  // Every gh call names the repository of `origin`. A remote that names none
+  // gives no tracker: nothing is written to a project gh would pick itself.
+  const repo = repoOf(remote)
+  const plain: Run = (argv, stdin) => io.run(argv, { cwd: root, timeoutMs: GH_TIMEOUT_MS, stdin })
+  const run = repo === null ? plain : inRepo(plain, repo)
+  const tracker = settings.tracker
+  const isGitHub = tracker?.kind === 'github' && prHostOf(remote, settings.prHost) === 'github' && repo !== null
 
   return {
     root,
     now: await io.now(),
     f: settings.factory,
     run,
-    tracker: isGitHub && settings.tracker ? githubIssues(run, settings.tracker.mark, settings.factory.forbiddenCommentWords) : null,
-    mark: isGitHub && settings.tracker ? settings.tracker.mark : null,
+    tracker: isGitHub && tracker ? githubIssues(run, tracker.mark, settings.factory.forbiddenCommentWords) : null,
+    mark: isGitHub && tracker ? tracker.mark : null,
   }
 }
 
@@ -71,35 +77,32 @@ async function locked(io: Io, ctx: Ctx, work: () => Promise<string>): Promise<st
 }
 
 const why = (error: unknown) => clean(String(error instanceof Error ? error.message : error)).slice(0, 200)
-
-// The job of an item that is still alive, or null.
-async function jobOf(io: Io, ctx: Ctx, itemId: string): Promise<Job | null> {
-  if (!ITEM_ID.test(itemId)) return null
-  const { jobs } = await readJobs(io, ctx.root)
-
-  return findJob(jobs.filter(job => !isFinished(job)), itemId)
-}
-
 const none = (itemId: string) => `No job for ${clean(itemId).slice(0, 40)}.`
 
-export async function stopLine(io: Io): Promise<string> {
-  const ctx = await context(io)
+// The jobs that are still alive, and the one of an item among them.
+async function alive(io: Io, ctx: Ctx, itemId: string): Promise<{ jobs: Job[]; job: Job | null }> {
+  const jobs = (await readJobs(io, ctx.root)).jobs.filter(job => !isFinished(job))
 
-  return locked(io, ctx, async () => {
-    await setStop(io, ctx.root, true)
-
-    return 'The line starts no new station. Running agents finish theirs.'
-  })
+  return { jobs, job: ITEM_ID.test(itemId) ? findJob(jobs, itemId) : null }
 }
 
-// What a person's "go on" grants a job that a limit stopped: the limit's own
-// measure again. The question of such a stop starts with the limit's name.
+// The brake. It changes no job, so it needs no lock: it works also from a
+// session that does not run the line.
+export async function stopLine(io: Io): Promise<string> {
+  await setStop(io, (await loadSettings(io)).root, true)
+
+  return 'The line starts no new station. Running agents finish theirs.'
+}
+
+// What a person's "go on" grants a job that a limit of its own stopped: that
+// limit's measure once more. The question of such a stop is the limit's name
+// (`limitOf`). A limit of the day is not the job's to lift.
 function granted(job: Job, f: FactorySettings, now: number): Job {
   const asked = job.question ?? ''
   if (job.asker !== 'limit') return job
   if (asked.startsWith('round limit')) return grant(job, { rounds: 1 }, now)
-  if (asked.startsWith('cost limit')) return grant(job, { usd: f.costLimitUsd.job }, now)
-  if (asked.startsWith('time limit')) return grant(job, { minutes: f.timeLimitMin.job }, now)
+  if (asked.startsWith('cost limit for the job')) return grant(job, { usd: f.costLimitUsd.job }, now)
+  if (asked.startsWith('time limit for the job')) return grant(job, { minutes: f.timeLimitMin.job }, now)
 
   return job
 }
@@ -108,7 +111,7 @@ export async function answerJob(io: Io, itemId: string, text: string): Promise<s
   const ctx = await context(io)
 
   return locked(io, ctx, async () => {
-    const job = await jobOf(io, ctx, itemId)
+    const { jobs, job } = await alive(io, ctx, itemId)
     if (job === null) return none(itemId)
     const said = text.trim().slice(0, MAX_TEXT)
     const isAsking = job.stage === 'needs-info' || job.stage === 'needs-human'
@@ -116,43 +119,68 @@ export async function answerJob(io: Io, itemId: string, text: string): Promise<s
       return `${itemId} is ready. Merge its pull request, or give it text to change something.`
     }
     if (!isAsking && job.stage !== 'ready') return `${itemId} does not wait for you (it is in ${job.stage}).`
+    // A question for the item's author has no answer without text.
+    if (job.stage === 'needs-info' && said === '') return `Give the answer as text: /factory answer ${itemId} <text>`
+    const allowed = granted(job, ctx.f, ctx.now)
+    const limit = job.asker === 'limit' ? limitOf(allowed, jobs, ctx.f, ctx.now) : null
+    if (limit !== null) return `${itemId} is still at a limit (${limit}). Nothing was changed.`
 
-    // What the person said is a file of the job: the next agent reads it as data.
-    const withText = said === '' ? job : await addFeedback(io, ctx.root, job, said)
-    const next = isAsking
-      ? resume(granted(withText, ctx.f, ctx.now), 'the person answered', ctx.now)
-      : move(withText, 'build', 'the person asked for a change', ctx.now, { sentBack: { by: 'you', why: said } })
+    // What the person said is a file of the job: the next agent reads it as
+    // data. The job is written last, so a step that fails leaves it as it was
+    // (a second run writes the same file again).
+    const steps = { now: 'write the answer' }
     try {
+      const withText = said === '' ? allowed : await addFeedback(io, ctx.root, allowed, said)
+      const next = isAsking
+        ? resume(withText, 'the person answered', ctx.now)
+        : move(withText, 'build', 'the person asked for a change', ctx.now, { sentBack: { by: 'you', why: said } })
+      steps.now = 'set the tracker state'
       await ctx.tracker?.setState(itemId, 'in-progress')
-    } catch (error) {
-      return `${itemId} was not changed: set the tracker state failed (${why(error)}). Run the command again.`
-    }
-    await writeJob(io, ctx.root, next)
-    const done = isAsking ? `${itemId} goes on in ${next.stage}.` : `${itemId} goes back to Build, round ${next.round}.`
+      steps.now = 'write the job'
+      await writeJob(io, ctx.root, next)
+      const done = isAsking ? `${itemId} goes on in ${next.stage}.` : `${itemId} goes back to Build, round ${next.round}.`
 
-    return done + (ctx.tracker === null ? NO_TRACKER : '')
+      return done + (ctx.tracker === null ? NO_TRACKER : '')
+    } catch (error) {
+      return `${itemId} was not changed: ${steps.now} failed (${why(error)}). Run the command again.`
+    }
   })
+}
+
+type Step = [string, () => Promise<void>]
+
+// Runs the steps in order. The name and the reason of the first that fails, or null.
+async function firstFailure(steps: Step[]): Promise<string | null> {
+  for (const [name, step] of steps) {
+    try {
+      await step()
+    } catch (error) {
+      return `${name} failed (${why(error)})`
+    }
+  }
+
+  return null
 }
 
 // An item the tracker says is in progress, with no job here (a lost state
 // folder): the person drops it on the tracker. There is nothing here to change.
 async function rejectClaimed(ctx: Ctx, itemId: string, said: string): Promise<string> {
   if (ctx.tracker === null || ctx.mark === null || !ITEM_ID.test(itemId)) return none(itemId)
-  const { claimed } = await listIssues(ctx.run, ctx.mark)
-  if (!claimed.some(item => item.id === itemId)) return none(itemId)
-  const steps: [string, () => Promise<void>][] = [
+  const listed = await listIssues(ctx.run, ctx.mark)
+  if (listed.items === null) {
+    const reason = listed.result === null ? 'not a label' : failureText('gh', listed.result)
+
+    return `${itemId} was not rejected: read the tracker failed (${clean(reason).slice(0, 200)}). Run the command again.`
+  }
+  if (!listed.claimed.some(item => item.id === itemId)) return none(itemId)
+  const failed = await firstFailure([
     ['comment on the item', async () => ctx.tracker?.comment(itemId, `The factory dropped this: ${said}`)],
     ['set the tracker state', async () => ctx.tracker?.setState(itemId, 'rejected')],
-  ]
-  for (const [name, step] of steps) {
-    try {
-      await step()
-    } catch (error) {
-      return `${itemId} was not rejected: ${name} failed (${why(error)}). Run the command again.`
-    }
-  }
+  ])
 
-  return `${itemId} is rejected. The reason is on the item.`
+  return failed === null
+    ? `${itemId} is rejected. The reason is on the item.`
+    : `${itemId} was not rejected: ${failed}. Run the command again.`
 }
 
 export async function rejectJob(io: Io, itemId: string, reason: string): Promise<string> {
@@ -161,13 +189,13 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
   const ctx = await context(io)
 
   return locked(io, ctx, async () => {
-    const job = await jobOf(io, ctx, itemId)
+    const { job } = await alive(io, ctx, itemId)
     if (job === null) return rejectClaimed(ctx, itemId, said)
 
     // In this order; the first step that fails stops the rest, and the job is
-    // written only at the end, so a failed reject leaves it as it was. Every
+    // written last of them, so a failed reject leaves it as it was. Every
     // step is safe to run a second time.
-    const steps: [string, () => Promise<void>][] = [
+    const failed = await firstFailure([
       ['comment on the item', async () => ctx.tracker?.comment(itemId, `The factory dropped this: ${said}`)],
       [
         'close the pull request',
@@ -180,6 +208,14 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
         },
       ],
       ['set the tracker state', async () => ctx.tracker?.setState(itemId, 'rejected')],
+      ['write the job', async () => writeJob(io, ctx.root, reject(job, said, ctx.now))],
+    ])
+    if (failed !== null) return `${itemId} was not rejected: ${failed}. Run the command again.`
+
+    // The job is rejected now, here and on the tracker. What follows only
+    // tidies up: a step that fails is named, and does not undo the reject.
+    const left: string[] = []
+    const tidy: Step[] = [
       [
         'remove the worktree',
         async () => {
@@ -189,17 +225,20 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
           if (!removed.ok) throw new Error(removed.why ?? 'git failed')
         },
       ],
-      ['write the job', async () => writeJob(io, ctx.root, reject(job, said, ctx.now))],
       ['retire the job', async () => retireJob(io, ctx.root, job.id, ctx.now)],
     ]
-    for (const [name, step] of steps) {
+    for (const [name, step] of tidy) {
       try {
         await step()
       } catch (error) {
-        return `${itemId} was not rejected: ${name} failed (${why(error)}). Run the command again.`
+        left.push(`${name} (${why(error)})`)
       }
     }
 
-    return `${itemId} is rejected.` + (ctx.tracker === null ? NO_TRACKER : ' The reason is on the item.')
+    return (
+      `${itemId} is rejected.` +
+      (ctx.tracker === null ? NO_TRACKER : ' The reason is on the item.') +
+      (left.length === 0 ? '' : ` Not cleaned up: ${left.join('; ')}.`)
+    )
   })
 }

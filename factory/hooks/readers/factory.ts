@@ -1,13 +1,15 @@
 // The factory line for the pane: the jobs on disk and the size of the queue.
 // It runs `gh` and reads the state folder: no command from the settings file,
 // so it needs no approval.
-import { listIssues } from '../../adapters/github-issues'
+import { inRepo, listIssues } from '../../adapters/github-issues'
+import type { Run } from '../../adapters/tracker'
 import type { FactorySettings } from '../../core/factory-settings'
 import { isActive, isWaiting } from '../../core/job'
 import type { Job } from '../../core/job'
 import { todayOf } from '../../core/limits'
 import { countsFor } from '../../core/line'
 import type { FactoryView, JobView } from '../../core/model'
+import { repoOf } from '../../core/task'
 import { isStopped, lockInfo, readJobs } from '../jobs'
 import type { Reader } from '../refresh'
 
@@ -87,10 +89,10 @@ export const factoryReader: Reader = {
     let claimed: string[] = []
     // The quick read at session start asks no tracker.
     if (!ctx.isLight && tracker?.kind === 'github') {
-      const listed = await listIssues(
-        argv => io.run(argv, { cwd: ctx.root, timeoutMs: GH_TIMEOUT_MS }),
-        tracker.mark,
-      )
+      // The list is of the repository `origin` names, as the writes are.
+      const plain: Run = argv => io.run(argv, { cwd: ctx.root, timeoutMs: GH_TIMEOUT_MS })
+      const repo = repoOf(await io.remote())
+      const listed = await listIssues(repo === null ? plain : inRepo(plain, repo), tracker.mark)
       queue = listed.items === null ? null : listed.items.length
       claimed = listed.claimed.map(item => item.id)
     }

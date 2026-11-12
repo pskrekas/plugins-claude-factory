@@ -50,11 +50,11 @@ The status line shows the task id, the first progress percent, the checks and a 
 | `/factory init` | looks at the repo and writes a first `.claude/factory.json`; it never overwrites one |
 | `/factory where` | says where the factory keeps its state for this repository |
 | `/factory approve` | opens the pane and allows the commands it shows (see below). Only your own Enter at the prompt counts |
-| `/factory stop` | the line starts no new station. Agents that run finish theirs |
-| `/factory answer <id> [text]` | lets a job that waits for you go on. The text is given to the next agent. For a job that a limit stopped, it grants that limit once more (one round, or the job's cost or time limit again). For a ready job, text sends it back to Build |
-| `/factory reject <id> <reason>` | drops a job: a comment with the reason on the item, the pull request closed, the item closed as not planned, the worktree removed |
+| `/factory stop` | the line starts no new station. Agents that run finish theirs. It works from any session |
+| `/factory answer <id> [text]` | lets a job that waits for you go on. The text is given to the next agent; a question for the item's author needs text. For a job that one of its own limits stopped, it grants that limit once more (one round, or the job's cost or time limit again). A limit of the day is not lifted: raise it in the settings, or wait for the next day. For a ready job, text sends it back to Build |
+| `/factory reject <id> <reason>` | drops a job: a comment with the reason on the item, the pull request closed, the item closed as not planned, the worktree removed. It also drops an item that the tracker says is in progress and that has no job on this machine |
 
-`stop`, `answer` and `reject` change things, so only your own Enter at the prompt counts for them too. Two sessions never change one job: a command first takes the lock, and says so when another session holds it.
+`stop`, `answer` and `reject` change things, so only your own Enter at the prompt counts for them too. Two sessions never change one job: `answer` and `reject` first take the lock, and say so when another session holds it.
 
 While the pane is on screen it reads again once a minute.
 
@@ -96,17 +96,18 @@ cp -R docs/examples/factory-jobs/* "<the folder /factory where printed>/jobs/"
 
 The gate is the set of commands a job's branch must pass. Code runs it, no agent. `gate.fast` runs on every round; `gate.full` runs once, before a job becomes ready.
 
-- **The commands come from the base branch.** They are read from `.claude/factory.json` as it is on `origin/<baseBranch>`, never from the job's branch, so a job cannot change the checks it is judged by.
+- **The commands come from the base branch.** The gate fetches `<baseBranch>` from `origin`, reads its last commit once, and reads `.claude/factory.json` of that commit: never the job's branch, never a file of a folder. The protected paths come from the same file. From then on it uses commit ids only, so a branch or a tag with a look-alike name is not read in the base's place.
 - **You approve them.** The pane lists them as `[gate] npm test`, and `/factory approve` allows them. An approval as a gate command does not make the command a check of the panel, and the other way round.
 - **It runs in a clean copy.** The gate reads the last commit of the job's branch `factory/<job>`, and runs the commands in a fresh working tree at that commit (`gate/<job>` in the state folder), which it removes after. A file that is not committed, a file git ignores, or a file git was told to overlook is not there. The copy holds no installed packages, so **the first command of each list must install them** (`["npm", "install"]`). `/factory init` writes it so for an npm repo.
-- **Files that are not committed stop it.** If the job's worktree holds changed or new files that are not committed, the gate runs nothing and says how many: they would not be in the pull request.
-- **Protected paths stop it.** A branch that changes, moves or deletes a protected path (`factory.protectedPaths`; the settings file is always one) runs no command and waits for you.
+- **It runs the branch's code.** A gate command (a test run, a build) runs code that an agent wrote, with your rights on this machine, before any reviewer has read it. The gate checks which files changed, not what the code does.
+- **Files that are not committed are named.** If the job's worktree holds changed or new files that are not committed, the report lists them: the gate did not check them, and they are not in the pull request.
+- **Protected paths stop it.** A branch that changes, moves or deletes a protected path (`factory.protectedPaths`: a file, or a folder with everything under it; the settings file is always one) runs no command and waits for you.
 - **A command has ten minutes.** One that runs longer is a failure. The first command that fails ends the run.
-- **The report** is a file of the job, `round-<n>/checks.md` (or `merge-checks.md` for the full gate): a short summary, the end of each command's output, and the test files and test or build settings the branch changed, for the reviewers and for you.
+- **The report** is a file of the job, `round-<n>/checks.md` (or `merge-checks.md` for the full gate): a short summary, the end of each command's output (the engine keeps the first 4 MiB of what a command prints; the report says when the end is missing), and the test files and test or build settings the branch changed, for the reviewers and for you.
 
 ### What it writes on GitHub
 
-Only for a repo whose settings say `"tracker": { "kind": "github" }` and whose remote is GitHub.
+Only for a repo whose settings say `"tracker": { "kind": "github" }` and whose remote `origin` is a GitHub repository. Every `gh` call that writes names that repository (`-R <owner>/<name>`), so in a fork nothing is written to the project the fork came from.
 
 - **Labels.** It makes two labels, `<mark>:in-progress` and `<mark>:needs-human`, and sets or removes them on an item. The mark itself (`factory` by default) is yours: only you put it on an item.
 - **Comments.** On the item and on the pull request. The text goes to `gh` on standard input, never as an argument. A comment that holds one of `factory.forbiddenCommentWords` is not sent.
@@ -184,15 +185,16 @@ The line can also make these calls, and no other. `<job>` is a job's id, `<state
 
 ```
 git fetch origin <base>
-git worktree add <state>/worktrees/<job> -b factory/<job> origin/<base>
+git worktree add <state>/worktrees/<job> -b factory/<job> refs/remotes/origin/<base>
 git worktree add --detach <state>/gate/<job> <commit>
 git worktree remove --force <state>/worktrees/<job>      (or <state>/gate/<job>)
 git push -u origin factory/<job>:factory/<job>
-git merge --no-edit origin/<base>                        (in the job's worktree)
+git merge --no-edit refs/remotes/origin/<base>           (in the job's worktree)
 git merge --abort
-git show origin/<base>:.claude/factory.json
+git rev-parse --verify refs/remotes/origin/<base>^{commit}
 git rev-parse --verify refs/heads/factory/<job>^{commit}
-git diff --name-only --no-renames -z origin/<base>...<commit>
+git show <commit>:.claude/factory.json
+git diff --name-only --no-renames -z <commit>...<commit>
 git status --porcelain --no-renames --untracked-files=all -z
 
 gh label create <mark>:in-progress --force --description …
@@ -207,9 +209,11 @@ gh pr comment <n> --body-file -
 gh pr close <n>
 ```
 
+Each `gh` call of the second list ends with `-R <owner>/<name>`. The line's `git` calls run with `GIT_NO_REPLACE_OBJECTS=1`.
+
 In this version only `/factory answer` and `/factory reject` make calls of the second list (the label, comment and close calls, and the removal of a worktree). The others wait for the line.
 
-`git` runs the repository's own git settings and hooks, as it does when you type the command.
+`git` reads the repository's own git settings, as it does when you type the command.
 
 `claude plugin validate factory` prints exactly what it hooks and calls.
 
@@ -225,7 +229,7 @@ In this version only `/factory answer` and `/factory reject` make calls of the s
 
 **`No job for <id>.`** There is no job of that item on this machine, and the tracker does not say it is in progress.
 
-**The gate says `files not committed`.** The job's worktree holds files that are not in a commit. Commit them or remove them.
+**`<id> is still at a limit (…)`.** A limit of the day stopped the job. Raise `factory.costLimitUsd.day` or `factory.timeLimitMin.day`, or answer again the next day.
 
 **The gate fails at once with `not found`.** The gate runs in a clean copy with no installed packages. Put the install command first in `gate.fast` and `gate.full`.
 
