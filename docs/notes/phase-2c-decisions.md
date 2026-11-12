@@ -42,7 +42,10 @@ was confirmed on real git 2.50.1 and Docker Desktop 29.5.3, fixed, and tried aga
    that does not point back. And after each command, when its container is gone, the
    plugin puts the folder's own `.git` file back as git made it (`healGitFile`), and
    removes any other entry named `.git` at the top: a `git` that a person, the engine
-   or a tool runs in that folder must not read a repository the builder put there.
+   or a tool runs in that folder must not read a repository the builder put there. The
+   repair fails closed: it writes the pointer in the plugin's own folder and renames it
+   into place, only when nothing is at the name, and it writes nothing when what is in
+   the way cannot be removed or the folder cannot be listed.
 2. **No git call on a folder that holds a git repository of its own.** Git starts a
    second git inside such a repository (`status`, `add`, `commit`), and that one reads
    the inner repository's own settings: a `filter` there is a program on the person's

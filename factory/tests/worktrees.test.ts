@@ -426,8 +426,21 @@ test("the folder's own .git file is put back when a command changed it", async (
     expect([what, Object.keys(io.files).filter(name => name.toLowerCase().startsWith(`${WT}/.git/`.toLowerCase()))]).toEqual([what, []])
     // The builder's other files are not touched, and no link is followed (the name has no `/` at its end).
     expect(io.files[`${WT}/src/a.ts`]).toBe('x')
-    expect(io.ran.every(line => line.startsWith(`rm -r -f ${WT}/.`) && !line.endsWith('/'))).toBe(true)
+    expect(io.ran.filter(line => line.startsWith('rm -r')).every(line => line.startsWith(`rm -r -f ${WT}/.`) && !line.endsWith('/'))).toBe(true)
+    // The pointer is never written to the name itself (a write follows a link): it is written in the plugin's own folder and moved into place.
+    expect([what, io.written.every(path => path.startsWith(`${WT.slice(0, WT.indexOf('/worktrees/'))}/tmp/`))]).toEqual([what, true])
   }
+
+  // Fail closed. What is in the way cannot be removed: nothing is written.
+  const stays = fakeIo({ files: { ...LINKED, [`${WT}/.git`]: 'x' }, links: new Set([`${WT}/.git`]) })
+  stays.failNext = 'rm'
+  expect(await healGitFile(stays, '/r', WT)).toBe(false)
+  expect([stays.written, stays.files[`${WT}/.git`], stays.ran.some(line => line.startsWith('mv '))]).toEqual([[], 'x', false])
+  // The folder cannot be listed, and a link is at the name: nothing is removed and nothing is written.
+  const unlisted = fakeIo({ files: { ...LINKED, [`${WT}/.git`]: 'x' }, links: new Set([`${WT}/.git`]) })
+  unlisted.listDir = async path => (path === WT ? [] : ['12-add-dark-mode/'])
+  expect(await healGitFile(unlisted, '/r', WT)).toBe(false)
+  expect([unlisted.written, unlisted.files[`${WT}/.git`], unlisted.ran]).toEqual([[], 'x', []])
 
   // A folder that git does not know (no folder of the repo names it): a hostile `.git` is still removed, and none is written.
   const unknown = fakeIo({ files: { '/r/.git/HEAD': 'x', [`${WT}/.git/config`]: 'x', [`${WT}/a.ts`]: 'x' } })

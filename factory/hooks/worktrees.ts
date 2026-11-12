@@ -138,7 +138,12 @@ export async function healGitFile(io: Io, root: string, folder: string): Promise
   }
   const dot = `${folder}/.git`
   let isWhole = false
-  for (const entry of await io.listDir(folder)) {
+  const entries = await io.listDir(folder)
+  // A list that does not show what is at the name cannot be trusted (the
+  // folder could not be listed): nothing is removed and nothing is written.
+  const isThere = (await io.isLink(dot)) || (await io.stat(dot)) !== null
+  if (isThere && !entries.some(entry => (entry.endsWith('/') ? entry.slice(0, -1) : entry).toLowerCase() === '.git')) return false
+  for (const entry of entries) {
     const name = entry.endsWith('/') ? entry.slice(0, -1) : entry
     if (name.toLowerCase() !== '.git') continue
     const info = name === '.git' && !entry.endsWith('/') && !(await io.isLink(dot)) ? await io.stat(dot) : null
@@ -150,10 +155,27 @@ export async function healGitFile(io: Io, root: string, folder: string): Promise
       continue
     }
     // By its name with no `/` at the end: a link is removed, not followed.
-    await io.run(['rm', '-r', '-f', `${folder}/${name}`], { timeoutMs: GIT_TIMEOUT_MS })
+    const removed = await io.run(['rm', '-r', '-f', `${folder}/${name}`], { timeoutMs: GIT_TIMEOUT_MS })
+    if ('failed' in removed || removed.exitCode !== 0) return false
   }
   if (expected === null) return false
-  if (!isWhole) await io.writeFile(dot, expected)
+  if (isWhole) return true
+  // The pointer is never written to the name itself: a write follows a link.
+  // It is written in the plugin's own folder and put in place by one rename,
+  // and only when nothing is at the name; then what is there is checked.
+  const dir = await stateDirOf(io, root)
+  if (dir === null || (await io.isLink(dot)) || (await io.stat(dot)) !== null) return false
+  const fresh = () => Math.random().toString(36).slice(2)
+  const temp = `${dir}/tmp/${fresh()}${fresh()}.tmp`
+  await io.run(['mkdir', '-p', `${dir}/tmp`])
+  await io.writeFile(temp, expected)
+  const moved = await io.run(['mv', '-f', temp, dot])
+  const after = 'failed' in moved || moved.exitCode !== 0 || (await io.isLink(dot)) ? null : await io.stat(dot)
+  if (after === null || after.kind !== 'file' || after.realPath !== `${here.realPath}/.git` || (await io.readFile(dot)) !== expected) {
+    await io.run(['rm', '-f', temp])
+
+    return false
+  }
 
   return true
 }
