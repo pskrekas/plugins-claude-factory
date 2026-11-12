@@ -53,6 +53,10 @@ test('ways around the words are refused too', async () => {
     'export "$A$B"=/x', 'declare -x "GI""T_DIR"=/x', 'read -r "$NAME" < f', 'printf -v "$NAME" /x', 'export {A,B}=1',
     // The git folder spelled with quotes, a backslash or a variable.
     'cd .g""it', 'cd .gi\\t', 'cd "$X"', 'pushd ~/x', 'rm -rf .g""it', 'echo x > ".git"/config', "cp evil '.git'/hooks/x", 'mv x .gi\\t/config',
+    // The shell's own ways to be in another folder than the one it shows.
+    'CDPATH=.git cd hooks', 'export CDPATH=/x', 'cd -', 'cd', 'popd', 'cd "$OLDPWD"', 'HOME=/x/.config cd', 'PWD=/x ls',
+    // A write to a place that only the shell knows.
+    'echo x > "$TARGET"', 'cp evil ~/x', 'rm -rf $DIR', 'tee "$F" < x', 'mv a "${B}"',
     // Into the git folder, then a write with no path.
     'cd .git && echo x > config', 'cd ./.git/hooks; cp /tmp/x pre-commit', `cd ${WT}/.git`, 'pushd .git',
   ]
@@ -60,7 +64,7 @@ test('ways around the words are refused too', async () => {
   expect(bash('GIT_DIR=/x/.git git status')).toEqual({ decision: 'deny', reason: "Git settings and refs are not an agent's to change.", command: 'GIT_DIR=/x/.git git status' })
   // Ordinary variables and folders are still fine.
   for (const ok of ['NODE_ENV=test npm test', 'CI=1 npm run build', 'cd src && npm test', 'cd .github && ls', 'bash -c "npm test"', 'bash scripts/build.sh',
-    'rm -rf dist/*', 'cp src/*.ts out/', 'export NODE_ENV=test', 'ls .github/*.yml', 'printf "%s" x'])
+    'rm -rf dist/*', 'cp src/*.ts out/', 'export NODE_ENV=test', 'ls .github/*.yml', 'printf "%s" x', 'echo "$PATH"', 'npm test -- --dir="$PWD"', 'echo done > out.txt'])
     expect([ok, bash(ok)]).toEqual([ok, ALLOW])
 })
 
@@ -75,7 +79,9 @@ test("a repo's forbidden commands are refused, with or without what follows them
 test('the git folder is not written to', async () => {
   for (const command of ['echo x > .git/config', `rm -rf ${WT}/.git`, 'rm .git', 'mv .git .git2', 'cp evil .git/hooks/pre-commit', 'ln -s /x .git/hooks', 'echo x | tee .git/info/exclude', "sed -i '' s/a/b/ .git/config", 'chmod +x .git/hooks/x'])
     expect([command, bash(command)?.decision]).toEqual([command, 'deny'])
-  expect(bash('cat .git/HEAD')).toEqual(ALLOW)
+  // The git folder is not named at all, also not to read it: git's own commands say what is in it.
+  for (const command of ['cat .git/HEAD', 'ls .git', 'tar cf x.tar --directory=.git .', 'env -C .git ls', 'builtin cd .git', 'find . -path ./.git/hooks'])
+    expect([command, bash(command)?.decision]).toEqual([command, 'deny'])
   expect(bash('ls .github')).toEqual(ALLOW)
   expect(bash('echo node_modules >> .gitignore')).toEqual(ALLOW)
 })

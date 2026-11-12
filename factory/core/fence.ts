@@ -103,7 +103,7 @@ function writeVerdict(input: Record<string, unknown>, who: Who): Verdict {
   return inCode || full === who.outFile ? ALLOW : deny(NOT_HERE, file)
 }
 
-const PREFIXES = ['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'xargs']
+const PREFIXES = ['sudo', 'env', 'command', 'builtin', 'exec', 'nohup', 'time', 'nice', 'xargs']
 const SHELLS = ['sh', 'bash', 'zsh', 'dash', 'ksh']
 const GIT_SETTINGS = ['config', 'replace', 'update-ref', 'remote', 'worktree', 'symbolic-ref']
 const GIT_SENDS = ['push', 'send-pack', 'http-push']
@@ -173,7 +173,15 @@ function gitVerdict(words: string[], simple: string): Deny | null {
 function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
   // Git told where to look, or what to run, through the environment.
   // Any mention of one of git's own variables is refused, however it is set.
-  if (/GIT_[A-Z0-9_]+/.test(simple.replace(/['"\\]/g, ''))) return deny(SETTINGS, simple)
+  const bare = simple.replace(/['"\\]/g, '')
+  if (/GIT_[A-Z0-9_]+/.test(bare)) return deny(SETTINGS, simple)
+  // The variables through which the shell is in another folder than it shows.
+  if (/\b(CDPATH|OLDPWD)\b/.test(bare) || /(^|\s)(HOME|PWD)=/.test(bare)) return deny(NOT_PLAIN, simple)
+  // The git folder is not named at all, in any word or option value: git's
+  // own commands say what is in it, and a text check cannot tell a read from
+  // a write.
+  const raw = simple.trim().split(/\s+/)
+  if (raw.some(word => word.split('=').some(namesGitFolder))) return deny(GIT_FOLDER, simple)
   const words = wordsOf(simple)
   const program = baseName(words[0] ?? '')
   if (program === '') return null
@@ -191,10 +199,12 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
     }
   }
   // Into the git folder: what follows would write there with no path to see.
-  // A folder the fence cannot read (a variable, a pattern, a home folder) is refused too.
-  if ((program === 'cd' || program === 'pushd') && words.slice(1).some(word => namesGitFolder(word) || isOdd(word))) {
-    return deny(GIT_FOLDER, simple)
+  // A change of folder that the fence cannot follow: to a folder it cannot
+  // read (a variable, a pattern, a home folder), back to the last one, or home.
+  if (['cd', 'pushd'].includes(program) && (words.length === 1 || words.slice(1).some(word => word === '-' || isOdd(word)))) {
+    return deny(NOT_PLAIN, simple)
   }
+  if (program === 'popd' || program === 'dirs') return deny(NOT_PLAIN, simple)
   if (SETTERS.includes(program) && words.slice(1).some(isOdd)) return deny(NOT_PLAIN, simple)
   if (program === 'printf' && words.includes('-v')) return deny(NOT_PLAIN, simple)
   if (program === 'git') {
@@ -206,11 +216,10 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
     const [first = '', ...more] = list
     if (program === baseName(first) && more.every((word, i) => words[i + 1] === word)) return deny(FORBIDDEN, simple)
   }
-  // The words as typed: `wordsOf` took the quotes off their ends only.
-  const namesGit = simple.trim().split(/\s+/).some(namesGitFolder)
+  // A write to a place that only the shell knows (a variable, a home folder) cannot be judged.
   const writes = simple.includes('>') || WRITERS.includes(program) || (program === 'sed' && words.some(word => word.startsWith('-i')))
 
-  return namesGit && writes ? deny(GIT_FOLDER, simple) : null
+  return writes && raw.some(word => /[$~]/.test(word)) ? deny(NOT_PLAIN, simple) : null
 }
 
 function commandVerdict(command: string, who: Who, depth: number): Deny | null {
