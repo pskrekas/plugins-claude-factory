@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { FACTORY_DEFAULTS, containerLine } from '../core/factory-settings'
-import { DEFAULTS, commandsOf, parseSettings } from '../core/settings'
+import { DEFAULTS, commandsOf, parseSettings, trackerLine } from '../core/settings'
 
 test('no factory key gives the defaults', async () => {
   expect(parseSettings('{}').settings.factory).toEqual(FACTORY_DEFAULTS)
@@ -146,4 +146,16 @@ test('the container is approved as its own line, also the choice to run on this 
   expect(commandsOf(settings({}))).toEqual(['x y', '[gate] npm test'])
   // Another image, or the network turned on, is another line: it asks again.
   expect(commandsOf(settings({ container: { image: 'node:23' } })).at(-1)).toBe('[container] node:23 · network on · memory 4g · cpus 2')
+})
+
+test('a tracker place that the settings name, and not the remote, is a line to approve', async () => {
+  const tracker = (kind: 'github' | 'azure-boards', project: string | null) => ({ kind, mark: 'factory', project })
+  expect(trackerLine(tracker('azure-boards', 'acme/Shop'))).toBe('[tracker] azure-boards acme/Shop')
+  expect(trackerLine(tracker('github', 'a/b'))).toBe('[tracker] github a/b')
+  // A project of the remote's own organization, or no project, is the remote's place: nothing to approve.
+  expect([trackerLine(tracker('azure-boards', 'Shop')), trackerLine(tracker('azure-boards', null)), trackerLine(tracker('github', null)), trackerLine(null)]).toEqual([null, null, null, null])
+  // Text that could hide in a line is not shown as one.
+  expect(trackerLine(tracker('azure-boards', 'acme/Shop\n[gate] rm -rf /'))).toBe(null)
+  const { settings } = parseSettings('{"tracker": {"kind": "azure-boards", "project": "acme/Shop"}, "gate": {"fast": [["npm", "test"]]}}')
+  expect(commandsOf(settings)).toEqual(['[gate] npm test', '[tracker] azure-boards acme/Shop'])
 })

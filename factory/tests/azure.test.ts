@@ -51,7 +51,7 @@ const EVERY: AzCall[] = [
 test('every az call of the factory, word for word', async () => {
   expect(EVERY.map(line)).toEqual([
     `az boards work-item show --id 12 --expand fields ${TAIL}`,
-    `az devops invoke --area wit --resource comments --route-parameters project=Shop workItemId=12 --api-version 7.1-preview.4 ${TAIL}`,
+    `az devops invoke --area wit --resource comments --route-parameters project=Shop workItemId=12 --query-parameters $top=50 order=desc --api-version 7.1-preview ${TAIL}`,
     `az boards query --wiql SELECT [System.Id], [System.Title], [System.State], [System.Tags] FROM WorkItems WHERE [System.TeamProject] = 'Shop' AND [System.Tags] CONTAINS 'factory' AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') ORDER BY [System.Id] --project Shop ${TAIL}`,
     `az boards work-item update --id 12 --fields=System.Tags=bug; factory; factory:in-progress ${TAIL}`,
     `az boards work-item update --id 12 --discussion=@${FILE} ${TAIL}`,
@@ -117,6 +117,10 @@ test('the factory cannot complete a pull request, and az reads no outside text a
       expect(list[list.indexOf('--detect') + 1]).toBe('false')
     }
   }
+  // The extension reads a version as a number, after it takes `-preview` out: `7.1-preview.4` stops the call.
+  for (const version of lists.flatMap(list => list.filter((_, i) => list[i - 1] === '--api-version'))) {
+    expect([version, Number.isFinite(Number(version.replace('-preview', '')))]).toEqual([version, true])
+  }
   // The only words after `--status` are `abandoned` (a dropped job) and `all` (a list).
   expect(lists.flatMap(list => list.filter((_, i) => list[i - 1] === '--status'))).toEqual(['all', 'abandoned'])
   expect(lists.flatMap(list => list.filter((_, i) => list[i - 1] === '--draft'))).toEqual(['true', 'false'])
@@ -153,8 +157,21 @@ test('where the work items are: the remote says it, or the settings do', async (
   expect(boardsPlaceOf(azure, 'Board Room')).toEqual({ ...PLACE, project: 'Board Room' })
   // Code on GitHub, work items on Azure DevOps: the settings name the organization and the project.
   expect(boardsPlaceOf('git@github.com:a/b.git', 'acme/Shop')).toEqual({ org: 'https://dev.azure.com/acme', project: 'Shop', repo: 'Shop' })
-  expect(boardsPlaceOf(azure, 'other/Shop')?.org).toBe('https://dev.azure.com/other')
+  // The same organization as the remote may be named in full. Another one is not taken: the remote says where the person works.
+  expect(boardsPlaceOf(azure, 'acme/Board Room')).toEqual({ ...PLACE, project: 'Board Room' })
+  expect(boardsPlaceOf(azure, 'other/Shop')).toBe(null)
   for (const [remote, project] of [['git@github.com:a/b.git', null], ['git@github.com:a/b.git', 'Shop'], [null, null], [azure, "Sh'op"], [azure, 'a/b/c'], [azure, '-x/Shop'], [azure, 'acme/--help']] as const) {
     expect([remote, project, boardsPlaceOf(remote, project)]).toEqual([remote, project, null])
   }
+})
+
+test('hostile HTML does not hold up the session: the text is made in one pass', async () => {
+  const started = Date.now()
+  // Many tags that never close, many scripts that never end, a script inside a script.
+  expect(htmlToText('<'.repeat(200_000))).toBe('<'.repeat(20_000))
+  expect(htmlToText('<script>'.repeat(25_000))).toBe('')
+  expect(htmlToText('a<style>b'.repeat(20_000))).toBe('a')
+  expect(htmlToText('x<SCRIPT type="a">one</script>y<script>two</SCRIPT >z<script>never ends')).toBe('xyz')
+  expect(htmlToText('a < b and c > d <e>f')).toBe('a < b and c > d f')
+  expect(Date.now() - started).toBeLessThan(2_000)
 })

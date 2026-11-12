@@ -62,9 +62,13 @@ export function boardsPlaceOf(remote: string | null, project: string | null): Az
   if (parts.length === 1) return place !== null && PART.test(project) ? { ...place, project } : null
   const [org = '', name = ''] = parts
   if (parts.length !== 2 || !ORG.test(org) || !PART.test(name)) return null
+  const url = `https://dev.azure.com/${org}`
+  // An Azure DevOps remote says which organization the person works in: the
+  // settings file cannot name another one.
+  if (place !== null) return place.org === url ? { ...place, project: name } : null
 
   // The repository is not used for work items; a pull request elsewhere is linked by a comment.
-  return { org: `https://dev.azure.com/${org}`, project: name, repo: place?.repo ?? name }
+  return { org: url, project: name, repo: name }
 }
 
 export type AzCall =
@@ -115,7 +119,8 @@ export function azArgs(call: AzCall): string[] | null {
     case 'item':
       return ['az', 'boards', 'work-item', 'show', '--id', call.id, '--expand', 'fields', ...tail]
     case 'item-comments':
-      return ['az', 'devops', 'invoke', '--area', 'wit', '--resource', 'comments', '--route-parameters', `project=${project}`, `workItemId=${call.id}`, '--api-version', '7.1-preview.4', ...tail]
+      // The newest fifty. The version has no number after `-preview`: the extension reads it as a number (az-check.md).
+      return ['az', 'devops', 'invoke', '--area', 'wit', '--resource', 'comments', '--route-parameters', `project=${project}`, `workItemId=${call.id}`, '--query-parameters', '$top=50', 'order=desc', '--api-version', '7.1-preview', ...tail]
     case 'query':
       // The mark holds no `'` (a mark's own rule), nor does a project's name.
       return isMark(call.mark) ? ['az', 'boards', 'query', '--wiql', wiqlOf(project, call.mark), '--project', project, ...tail] : null
@@ -152,14 +157,36 @@ export function azArgs(call: AzCall): string[] | null {
 const MAX_HTML = 200_000
 const ENTITIES: Record<string, string> = { lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }
 
+// The HTML with every `<script>…</script>` and `<style>…</style>` taken out,
+// in one pass: text from outside must not make the plugin wait. A block that
+// never ends takes the rest with it.
+function withoutBlocks(html: string): string {
+  const lower = html.toLowerCase()
+  const next = { script: lower.indexOf('<script'), style: lower.indexOf('<style') }
+  let out = ''
+  let at = 0
+  for (;;) {
+    // Each name is looked for again only from where the last one was found.
+    for (const name of ['script', 'style'] as const) if (next[name] >= 0 && next[name] < at) next[name] = lower.indexOf(`<${name}`, at)
+    const name = next.script >= 0 && (next.style < 0 || next.script < next.style) ? 'script' : 'style'
+    const open = next[name]
+    if (open < 0) return out + html.slice(at)
+    out += html.slice(at, open)
+    const close = lower.indexOf(`</${name}`, open)
+    const end = close < 0 ? -1 : lower.indexOf('>', close)
+    if (end < 0) return out
+    at = end + 1
+  }
+}
+
 // The text of a work item's HTML, for an agent to read as data: no tag, no
 // script, no control character but a line end. Cut at `max` characters.
+// Every step is one pass over the text.
 export function htmlToText(html: string, max = 20_000): string {
-  const text = html
-    .slice(0, MAX_HTML)
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+  const text = withoutBlocks(html.slice(0, MAX_HTML))
     .replace(/<br\s*\/?>|<\/(p|div|li|tr|h[1-6])\s*>/gi, '\n')
-    .replace(/<[^>]*>/g, '')
+    // A tag starts with a letter, `/` or `!`. A `<` that starts none is text.
+    .replace(/<[A-Za-z/!][^<>]*>/g, '')
     .replace(/&#x([0-9a-f]{1,6});|&#([0-9]{1,7});|&([a-z]{2,6});/gi, (whole, hex: string | undefined, dec: string | undefined, name: string | undefined) => {
       if (name !== undefined) return name.toLowerCase() === 'amp' ? whole : (ENTITIES[name.toLowerCase()] ?? whole)
       const code = hex !== undefined ? parseInt(hex, 16) : Number(dec)

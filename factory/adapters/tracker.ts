@@ -35,7 +35,8 @@ export interface Tracker {
   hasMark(id: string): Promise<boolean>
   // The person who runs the line, as the tracker names an author; null when it is not known.
   me(): Promise<string | null>
-  read(id: string): Promise<TrackerItem | null>
+  // `withComments: false` reads the item alone (the panel shows no comment).
+  read(id: string, withComments?: boolean): Promise<TrackerItem | null>
   comment(id: string, markdown: string): Promise<void>
   setState(id: string, state: TrackerState): Promise<void>
   linkPr(id: string, url: string): Promise<void>

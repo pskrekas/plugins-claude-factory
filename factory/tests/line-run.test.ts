@@ -34,7 +34,7 @@ type World = ReturnType<typeof lineWorld>
 function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: { factory?: object; [key: string]: unknown }; remote?: string } = {}) {
   const settings = JSON.stringify({ ...SETTINGS, ...opts.settings, factory: { ...SETTINGS.factory, ...opts.settings?.factory } })
   const io = fakeIo({ files: { '/r/.git/HEAD': 'x', '/r/.claude/factory.json': settings }, remote: opts.remote ?? 'git@github.com:a/b.git', now: NOW })
-  io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE, BOX_LINE])
+  io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE, BOX_LINE, '[tracker] azure-boards acme/Shop', '[tracker] github a/b'])
   // What the fake git, gh and npm answer; a test changes it as it goes.
   const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isDirty: false, hasDocker: false, hasAz: true, azTags: 'bug; factory', azSent: [] as string[], containers: '', isMerged: false, fail: [] as string[], failText: 'it broke', list: '[]', labels: ['factory'], comments: [] as { author: { login: string }; body: string }[], onRun: null as ((line: string) => void) | null }
   const link = (path: string) => {
@@ -986,6 +986,10 @@ test('on Azure DevOps one work item goes from the queue to a ready pull request,
   expect(w.state.azSent[0]).toBe('The factory started on this.')
   expect(w.state.azSent).toContain('12: Item 12')
   expect(w.state.azSent.some(text => text.startsWith('The factory finished this. The pull request is ready for you to merge: https://dev.azure.com/acme/Shop/_git/web/pullrequest/7<br>'))).toBe(true)
+  // az is told not to install anything by itself: with no extension it says so at once.
+  const azAt = w.io.ran.map((line, i) => (line.startsWith('az ') ? i : -1)).filter(i => i >= 0)
+  expect(azAt.every(i => w.io.envs[i]?.AZURE_EXTENSION_USE_DYNAMIC_INSTALL === 'no')).toBe(true)
+  expect(w.io.envs[w.io.ran.findIndex(line => line.startsWith('git fetch'))]?.AZURE_EXTENSION_USE_DYNAMIC_INSTALL).toBe(undefined)
   // No file of the plugin's is left, no gh ran, and nothing completes the pull request.
   expect(Object.keys(w.io.files).filter(name => name.startsWith(`${DIR}/tmp/`))).toEqual([])
   expect(w.io.ran.some(line => line.startsWith('gh '))).toBe(false)
@@ -1017,6 +1021,13 @@ test('/factory run on Azure DevOps: what it needs', async () => {
   expect(await startRun(other.io, other.spawn, null, READY)).toBe('The line runs: 2 items in the queue, 0 jobs go on. /factory stop stops it.')
   expect(other.io.ran.find(line => line.startsWith('gh issue list'))?.endsWith('-R a/b')).toBe(true)
 
+  // A place that the settings file names, and not the remote, counts only when the person approved it.
+  for (const settings of [{ tracker: { kind: 'azure-boards', project: 'acme/Shop' } }, { tracker: { kind: 'github', project: 'a/b' } }]) {
+    const quiet = lineWorld({ remote: settings.tracker.kind === 'github' ? AZ.remote : undefined, settings })
+    quiet.io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE])
+    expect(await startRun(quiet.io, quiet.spawn, null, READY)).toBe(`The tracker's place (${settings.tracker.project}) is named by the settings file, not by the remote. Approve it with /factory approve.`)
+    expect(quiet.io.ran.some(line => line.startsWith('az ') || line.startsWith('gh '))).toBe(false)
+  }
   // Azure Boards with a remote that names no organization, and no project in the settings that does.
   const lost = lineWorld({ settings: { tracker: { kind: 'azure-boards' } } })
   expect(await startRun(lost.io, lost.spawn, null, READY)).toBe('The remote origin names no Azure DevOps project. Set tracker.project to <organization>/<project>, or use a dev.azure.com remote.')

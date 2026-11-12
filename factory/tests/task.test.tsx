@@ -239,3 +239,19 @@ test('outside a git repo there is no task section', async ($, on) => {
 
   expect(await paneText($, 60)).not.toContain('TASK')
 })
+
+test('a GitHub host that the settings force still shows the pull request, whatever the remote is', async ($, on) => {
+  const world = engine(on, { files: { '/r/.claude/factory.json': '{"prHost": "github"}' }, remote: 'git@github.example.com:a/b.git', run: gh })
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+  expect((await paneText($, 60)).find(row => row.startsWith('PR 51'))).toBeDefined()
+  expect(world.ran).toContain('gh pr view --json number,state,isDraft,reviewDecision,statusCheckRollup,url')
+})
+
+test('the panel asks Azure DevOps for a work item with no comments', async ($, on) => {
+  const world = engine(on, { files: { '/r/.claude/factory.json': AZ_SETTINGS }, remote: AZ_REMOTE, run: az })
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+  expect(world.ran.some(line => line.startsWith('az boards work-item show --id 12 '))).toBe(true)
+  expect(world.ran.some(line => line.startsWith('az devops invoke'))).toBe(false)
+})

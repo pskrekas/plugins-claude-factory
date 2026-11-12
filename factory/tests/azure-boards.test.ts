@@ -89,6 +89,13 @@ test('a work item, its comments and a query as the line reads them', async () =>
   expect(parseAzItem(item({ 'System.CreatedBy': 'A Person <Old@Example.com>' }), PLACE)?.author).toBe('old@example.com')
   expect(parseAzItem(item({ 'System.Description': undefined, 'System.CreatedBy': undefined }), PLACE)).toEqual(expect.objectContaining({ text: '', author: '' }))
   expect(parseAzItem(item({ 'System.Description': '<p>' + 'x'.repeat(50_000) + '</p>' }), PLACE)?.text.length).toBe(20_000)
+  // A bug's text is its steps; a story has what must be true when it is done. An agent reads them too.
+  expect(parseAzItem(item({ 'System.Description': '', 'Microsoft.VSTS.TCM.ReproSteps': '<div>1. Open the page</div>', 'Microsoft.VSTS.Common.AcceptanceCriteria': '<ul><li>It is dark</li></ul>' }), PLACE)?.text).toBe('Steps to reproduce:\n1. Open the page\n\nAcceptance criteria:\nIt is dark')
+  expect(parseAzItem(item({ 'Microsoft.VSTS.Common.AcceptanceCriteria': 'It is dark' }), PLACE)?.text).toBe('Make the page dark.\nKeep it simple & fast.\n\nAcceptance criteria:\nIt is dark')
+  // Ids are the organization's: an item of another project is not this tracker's.
+  expect(parseAzItem(item({ 'System.TeamProject': 'Other' }), PLACE)).toBe(null)
+  expect(parseAzItem(item({ 'System.TeamProject': 'my shop' }), PLACE)?.id).toBe('12')
+  expect(parseAzItem(item({ 'System.TeamProject': undefined }), PLACE)?.id).toBe('12')
   for (const bad of ['{ nope', '[]', '{"id": "12", "fields": {}}', '{"id": 12}', '{"id": 12, "fields": {"System.Title": 7}}']) expect([bad, parseAzItem(bad, PLACE)]).toEqual([bad, null])
 
   expect(parseAzComments(COMMENTS)).toEqual([
@@ -144,16 +151,20 @@ test('an item is read with its comments, as plain text; the mark is a tag', asyn
   const tracker = azureBoards(w.run, w.put, PLACE, 'factory', [])
   const read = await tracker.read('#12')
   expect([read?.id, read?.text, read?.comments.map(comment => comment.author)]).toEqual(['12', 'Make the page dark.\nKeep it simple & fast.', ['author@example.com', 'stranger@example.com']])
-  expect(w.az()).toEqual([`${SHOW} --expand fields ${TAIL}`, `az devops invoke --area wit --resource comments --route-parameters project=My Shop workItemId=12 --api-version 7.1-preview.4 ${TAIL}`])
+  expect(w.az()).toEqual([`${SHOW} --expand fields ${TAIL}`, `az devops invoke --area wit --resource comments --route-parameters project=My Shop workItemId=12 --query-parameters $top=50 order=desc --api-version 7.1-preview ${TAIL}`])
+  // The panel needs no comment: it asks for none.
+  const before = w.az().length
+  expect((await tracker.read('12', false))?.comments).toEqual([])
+  expect(w.az().slice(before)).toEqual([`${SHOW} --expand fields ${TAIL}`])
   expect([await tracker.hasMark('12'), await tracker.hasMark('x')]).toEqual([true, false])
   // Who runs the line, as an author is named: asked once.
   expect([await tracker.me(), await tracker.me()]).toEqual(['me@example.com', 'me@example.com'])
   expect(w.az().filter(line => line.startsWith('az account')).length).toBe(1)
 
-  // Comments that cannot be read leave the item; an item that cannot be read is null.
+  // An item whose comments cannot be read is not read at all: its author may have answered there.
   const quiet = world({ [SHOW]: { exitCode: 0, stdout: item({ 'System.Tags': 'bug' }) } })
   const other = azureBoards(quiet.run, quiet.put, PLACE, 'factory', [])
-  expect([(await other.read('12'))?.comments, await other.hasMark('12'), await other.me()]).toEqual([[], false, null])
+  expect([await other.read('12'), (await other.read('12', false))?.id, await other.hasMark('12'), await other.me()]).toEqual([null, '12', false, null])
   expect(await azureBoards(world({}).run, world({}).put, PLACE, 'factory', []).read('12')).toBe(null)
 })
 

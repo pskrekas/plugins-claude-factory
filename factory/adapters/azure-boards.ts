@@ -15,6 +15,11 @@ export type Put = (text: string, ext: 'txt' | 'json') => Promise<string | null>
 
 const MAX_COMMENTS = 50
 const MAX_COMMENT = 5_000
+const MAX_TEXT = 20_000
+const EXTRA = [
+  ['Microsoft.VSTS.TCM.ReproSteps', 'Steps to reproduce'],
+  ['Microsoft.VSTS.Common.AcceptanceCriteria', 'Acceptance criteria'],
+] as const
 const NOTHING_RAN: RunResult = { failed: 'other' }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -53,12 +58,20 @@ function fieldsOf(json: string): { id: number; fields: Record<string, unknown> }
 export function parseAzItem(json: string, place: AzPlace): TrackerItem | null {
   const item = fieldsOf(json)
   if (item === null || typeof item.fields['System.Title'] !== 'string') return null
+  // Ids are the organization's: an item of another project is not this tracker's.
+  const home = text(item.fields['System.TeamProject'])
+  if (home !== '' && home.toLowerCase() !== place.project.toLowerCase()) return null
+  // A bug's text is its steps, and a story says what must be true when it is done.
+  const parts = [
+    htmlToText(text(item.fields['System.Description'])),
+    ...EXTRA.map(([field, title]) => [title, htmlToText(text(item.fields[field]))] as const).filter(([, body]) => body !== '').map(([title, body]) => `${title}:\n${body}`),
+  ].filter(part => part !== '')
 
   return {
     id: String(item.id),
     title: item.fields['System.Title'],
     state: text(item.fields['System.State']).toLowerCase(),
-    text: htmlToText(text(item.fields['System.Description'])),
+    text: parts.join('\n\n').slice(0, MAX_TEXT),
     author: personOf(item.fields['System.CreatedBy']),
     url: `${place.org}/${encodeURIComponent(place.project)}/_workitems/edit/${item.id}`,
     comments: [],
@@ -152,13 +165,15 @@ export function azureBoards(run: Run, put: Put, place: AzPlace, mark: string, fo
 
       return me
     },
-    read: async id => {
+    read: async (id, withComments = true) => {
       const shown = await az({ do: 'item', place, id: digitsOf(id) })
       const item = passed(shown) ? parseAzItem(shown.stdout, place) : null
-      if (item === null) return null
+      if (item === null || !withComments) return item
+      // An item whose comments cannot be read is not read at all: its author
+      // may have answered a question there, and an agent must not miss it.
       const said = await az({ do: 'item-comments', place, id: item.id })
 
-      return { ...item, comments: passed(said) ? parseAzComments(said.stdout) : [] }
+      return passed(said) ? { ...item, comments: parseAzComments(said.stdout) } : null
     },
     comment,
     // The tags are read just before they are written: a tag that a person

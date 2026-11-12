@@ -23,7 +23,7 @@ test('the builder cannot push, merge on the host, or change git settings', async
     'git config core.hooksPath /tmp/x', 'git replace a b', 'git update-ref refs/heads/main HEAD', 'git remote add evil http://example.com/x', 'git worktree add ../x',
     'git symbolic-ref HEAD refs/heads/main', 'git -c core.fsmonitor=/tmp/x status', 'git -C /somewhere status', 'git --git-dir=/x/.git log', 'git --work-tree /x status',
     'git branch origin/main HEAD', 'git tag refs/x', 'git checkout -b origin/main', 'git switch -c refs/remotes/origin/main',
-    'gh pr merge 3', 'gh api repos/a/b/pulls/3/merge -X PUT', '/opt/homebrew/bin/gh pr create', 'az repos pr update --id 3 --status completed', 'az boards work-item update --id 3 --state Closed', 'az devops invoke --area git', 'az rest --method post --url https://dev.azure.com/x', '/opt/homebrew/bin/az repos pr list',
+    'gh pr merge 3', 'gh api repos/a/b/pulls/3/merge -X PUT', '/opt/homebrew/bin/gh pr create', 'az repos pr update --id 3 --status completed', 'az boards work-item update --id 3 --state Closed', 'az devops invoke --area git', 'az rest --method post --url https://dev.azure.com/x', '/opt/homebrew/bin/az repos pr list', 'az --debug repos pr update --id 3 --status completed', 'az account get-access-token', 'az login', 'az pipelines run --name x', 'az config set extension.use_dynamic_install=yes_without_prompt',
     'bash -c "git push origin main"', 'sh -c \'gh pr merge 3\'', 'eval "git push"', 'env GIT_DIR=/x git push', 'command git push', 'nohup git push &',
   ]
   for (const command of bad) expect([command, bash(command)?.decision]).toEqual([command, 'deny'])
