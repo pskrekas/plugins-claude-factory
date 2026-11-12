@@ -1,0 +1,56 @@
+// Every git call the factory makes, as a plain argument list. Pure.
+//
+// This is the whole list. The factory never forces a push, never pushes a
+// branch that is not a job's own, never merges a job into the base branch, and
+// never rewrites history: no function here can build such a call, and a test
+// checks every list this file can answer against those rules.
+import { isJobId } from './job'
+import { isBranchName } from './settings'
+
+export const branchOf = (jobId: string): string => `factory/${jobId}`
+
+export type GitCall =
+  | { do: 'fetch'; base: string }
+  | { do: 'add'; path: string; jobId: string; base: string }
+  | { do: 'remove'; path: string }
+  | { do: 'push'; jobId: string }
+  | { do: 'merge-base'; base: string }
+  | { do: 'abort-merge' }
+  | { do: 'changed'; base: string }
+  | { do: 'head' }
+
+// An absolute path with no `..` in it and no control character.
+const isPlainPath = (path: string) =>
+  path.startsWith('/') && !path.split('/').includes('..') && !/[\u0000-\u001f\u007f]/.test(path)
+
+// The argument list of a call, or null when one of its values breaks a rule:
+// a job id that is not one, a base that is not a branch name, a path that is
+// not plain. A value is never the first word, and none can start with `-`.
+export function gitArgs(call: GitCall): string[] | null {
+  const hasBase = 'base' in call
+  if (hasBase && !isBranchName(call.base)) return null
+  if ('jobId' in call && !isJobId(call.jobId)) return null
+  if ('path' in call && !isPlainPath(call.path)) return null
+
+  switch (call.do) {
+    case 'fetch':
+      return ['git', 'fetch', 'origin', call.base]
+    case 'add':
+      return ['git', 'worktree', 'add', call.path, '-b', branchOf(call.jobId), `origin/${call.base}`]
+    case 'remove':
+      // The worktree's own flag: the folder of a job that ended goes with what it holds.
+      return ['git', 'worktree', 'remove', '--force', call.path]
+    case 'push':
+      // Source and target are both spelled: this can only push the job's branch to itself.
+      return ['git', 'push', '-u', 'origin', `${branchOf(call.jobId)}:${branchOf(call.jobId)}`]
+    case 'merge-base':
+      // Run in the job's worktree: it brings the base into the job's branch.
+      return ['git', 'merge', '--no-edit', `origin/${call.base}`]
+    case 'abort-merge':
+      return ['git', 'merge', '--abort']
+    case 'changed':
+      return ['git', 'diff', '--name-only', '-z', `origin/${call.base}...HEAD`]
+    case 'head':
+      return ['git', 'rev-parse', 'HEAD']
+  }
+}
