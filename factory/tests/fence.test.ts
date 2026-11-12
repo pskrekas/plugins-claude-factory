@@ -51,6 +51,8 @@ test('ways around the words are refused too', async () => {
     'rm -rf .gi?', 'echo x > .g*/config', 'cp evil .[g]it/hooks/pre-commit', 'mv x .{git}/config', 'rm -rf .*', 'cd [.]git',
     // A variable whose name is built from pieces.
     'export "$A$B"=/x', 'declare -x "GI""T_DIR"=/x', 'read -r "$NAME" < f', 'printf -v "$NAME" /x', 'export {A,B}=1',
+    // The git folder spelled with quotes, a backslash or a variable.
+    'cd .g""it', 'cd .gi\\t', 'cd "$X"', 'pushd ~/x', 'rm -rf .g""it', 'echo x > ".git"/config', "cp evil '.git'/hooks/x", 'mv x .gi\\t/config',
     // Into the git folder, then a write with no path.
     'cd .git && echo x > config', 'cd ./.git/hooks; cp /tmp/x pre-commit', `cd ${WT}/.git`, 'pushd .git',
   ]

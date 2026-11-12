@@ -12,7 +12,7 @@ import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
 import { ROLES } from '../core/factory-settings'
 import { ancestorsOf, confirmedTop } from '../core/top'
-import { isOwnReport, onSpawn, onToolCheck, onTurn, rememberAgent } from './agent-events'
+import { isOwnReport, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
 import type { Io } from './io'
 import { answerJob, rejectJob, stopLine } from './commands'
 import { init } from './init'
@@ -257,8 +257,15 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     const ours = io === null ? (AGENT_TYPES.includes(e.subagentType) ? { deny: NOT_READY } : null) : await onSpawn(io, e)
     if (ours !== null && 'deny' in ours) return { deny: ours.deny }
-    const spawned = await next(ours === null ? e : { ...e, cwd: ours.cwd })
-    if (ours !== null && spawned.agentId !== undefined) rememberAgent(spawned.agentId, ours)
+    if (ours === null) {
+      const other = await next(e)
+      if (io !== null) void refreshAgents(io).catch(() => undefined)
+
+      return other
+    }
+    // From here until the agent's id is known, the fence refuses an agent it does not know.
+    const spawned = await next({ ...e, cwd: ours.cwd }).finally(spawnSettled)
+    if (spawned.agentId !== undefined) rememberAgent(spawned.agentId, ours)
     if (io !== null) void refreshAgents(io).catch(() => undefined)
 
     return spawned

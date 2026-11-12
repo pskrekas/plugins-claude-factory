@@ -114,7 +114,8 @@ const isOdd = (word: string | undefined) => word !== undefined && /['"\\$*?[\]{}
 // Also a part that starts with a dot and holds a pattern (`.g*`, `.gi?`,
 // `.{git}`, `.*`): the shell could fill it in as the git folder.
 const namesGitFolder = (text: string) => {
-  const word = text.toLowerCase()
+  // As the shell reads it: with no quotes and no backslashes.
+  const word = text.replace(/['"\\]/g, '').toLowerCase()
   if (word === '.git' || word.endsWith('/.git') || word.includes('.git/')) return true
 
   return word.split('/').some(part => /^[.[{]/.test(part) && /[*?[\]{}]/.test(part))
@@ -190,7 +191,10 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
     }
   }
   // Into the git folder: what follows would write there with no path to see.
-  if ((program === 'cd' || program === 'pushd') && words.slice(1).some(namesGitFolder)) return deny(GIT_FOLDER, simple)
+  // A folder the fence cannot read (a variable, a pattern, a home folder) is refused too.
+  if ((program === 'cd' || program === 'pushd') && words.slice(1).some(word => namesGitFolder(word) || isOdd(word))) {
+    return deny(GIT_FOLDER, simple)
+  }
   if (SETTERS.includes(program) && words.slice(1).some(isOdd)) return deny(NOT_PLAIN, simple)
   if (program === 'printf' && words.includes('-v')) return deny(NOT_PLAIN, simple)
   if (program === 'git') {
@@ -202,7 +206,8 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
     const [first = '', ...more] = list
     if (program === baseName(first) && more.every((word, i) => words[i + 1] === word)) return deny(FORBIDDEN, simple)
   }
-  const namesGit = words.some(namesGitFolder)
+  // The words as typed: `wordsOf` took the quotes off their ends only.
+  const namesGit = simple.trim().split(/\s+/).some(namesGitFolder)
   const writes = simple.includes('>') || WRITERS.includes(program) || (program === 'sed' && words.some(word => word.startsWith('-i')))
 
   return namesGit && writes ? deny(GIT_FOLDER, simple) : null

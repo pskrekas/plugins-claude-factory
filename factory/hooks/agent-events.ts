@@ -33,7 +33,14 @@ const agents = new Map<string, AgentRef>()
 const known = new Set<string>()
 // The spawns the `agent.spawn` hook saw, by description, until they are checked.
 const seenSpawns = new Set<string>()
-let lastRead = Number.NEGATIVE_INFINITY
+// When an id was last looked up and not found, so that an agent that is not
+// the line's does not make every one of its tool calls read the job files.
+const misses = new Map<string, number>()
+const MAX_MISSES = 200
+// Spawns of the line that the hook saw and whose agent id is not known yet.
+let unsettled = 0
+const FENCED_TOOLS = ['Bash', 'Write', 'Edit', 'Read', 'Glob', 'Grep']
+const NOT_YET = 'The fence does not know this agent yet. Try again in a moment.'
 let forbidden: { at: number; commands: string[][] } | null = null
 
 // `factory <role> <job id>`, or `factory reviewer:<focus> <job id>`.
@@ -51,6 +58,11 @@ function parseDescription(text: string): AgentRef | null {
   return { jobId: found[3] ?? '', role, focus }
 }
 
+// A spawn that `onSpawn` let through ended: its agent is known, or it did not start.
+export function spawnSettled(): void {
+  unsettled = Math.max(0, unsettled - 1)
+}
+
 export function rememberAgent(agentId: string, ref: AgentRef): void {
   agents.set(agentId, ref)
   known.add(agentId)
@@ -61,15 +73,21 @@ export async function agentOf(io: Io, root: string, agentId: string | undefined)
   if (agentId === undefined || agentId === '') return null
   const hit = agents.get(agentId)
   if (hit !== undefined) return hit
-  // A miss reads the job files again, at most once a second.
+  // An id that is not known is looked up in the job files at once (after a
+  // reload the map is empty). The same id is not looked up again for a second.
   const now = await io.now()
-  if (now - lastRead < REREAD_MS && now >= lastRead) return null
-  lastRead = now
+  const missed = misses.get(agentId)
+  if (missed !== undefined && now >= missed && now - missed < REREAD_MS) return null
   for (const job of (await readJobs(io, root)).jobs) {
     for (const work of job.work) rememberAgent(work.agentId, { jobId: job.id, role: work.role, focus: work.focus })
   }
+  const found = agents.get(agentId) ?? null
+  if (found === null) {
+    if (misses.size >= MAX_MISSES) misses.clear()
+    misses.set(agentId, now)
+  }
 
-  return agents.get(agentId) ?? null
+  return found
 }
 
 // A spawn of one of the line's agent types: the folder it runs in, or a
@@ -87,6 +105,7 @@ export async function onSpawn(
   const tree = await io.stat(`${dir}/worktrees/${ref.jobId}`)
   if (tree === null || tree.kind !== 'dir') return { deny: NOT_THE_LINE }
   seenSpawns.add(e.description)
+  unsettled += 1
 
   return { ...ref, cwd: tree.realPath }
 }
@@ -164,7 +183,13 @@ export async function onToolCheck(
 ): Promise<{ decision: 'allow' } | { decision: 'deny'; reason: string } | null> {
   const root = await io.root()
   const agent = await agentOf(io, root, e.agentId)
-  if (agent === null || e.agentId === undefined) return null
+  if (e.agentId === undefined) return null
+  if (agent === null) {
+    // Between the start of one of the line's agents and the moment its id is
+    // known, an agent that is not known could be that one: it is refused, not
+    // passed on. (The hand-back is never the fence's to answer.)
+    return unsettled > 0 && FENCED_TOOLS.includes(e.tool) ? { decision: 'deny', reason: NOT_YET } : null
+  }
   const dir = await stateDirOf(io, root)
   const [tree, folder] = dir === null ? [null, null] : await Promise.all([io.stat(`${dir}/worktrees/${agent.jobId}`), io.stat(`${dir}/jobs/${agent.jobId}`)])
   if (tree === null || folder === null) return { decision: 'deny', reason: 'The job of this agent has no folder.' }
