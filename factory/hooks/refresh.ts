@@ -4,6 +4,7 @@ import { statusText } from '../core/layout'
 import type { Consent, PanelModel } from '../core/model'
 import type { Settings } from '../core/settings'
 import type { Io } from './io'
+import { progressReader } from './readers/progress'
 import { loadSettings } from './readers/settings'
 
 export type Ctx = { root: string; settings: Settings; consent: Consent; now: number }
@@ -15,7 +16,7 @@ export type Reader = {
   read: (io: Io, ctx: Ctx, prev: PanelModel) => Promise<Partial<PanelModel>>
 }
 
-export const readers: Reader[] = []
+export const readers: Reader[] = [progressReader]
 
 export async function refresh(io: Io): Promise<PanelModel> {
   const loaded = await loadSettings(io)

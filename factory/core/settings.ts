@@ -35,6 +35,7 @@ const PR_HOSTS: readonly string[] = ['auto', 'github', 'azure-repos']
 const WRONG = 'wrong type'
 const BAD_PATTERN = 'not a valid pattern'
 const CONTROL = 'control character in a command'
+const OUTSIDE = 'path must be inside the repo'
 
 // A key's parser: the value, or a string saying why it is refused.
 type Parsed<T> = { ok: T } | { no: string }
@@ -63,6 +64,22 @@ function isPattern(source: string): boolean {
   }
 }
 
+// A path the plugin reads must stay in the repo: what it finds there is shown
+// in the panel and told to the model, so a settings file must not be able to
+// point it at a file elsewhere on the machine.
+function isInside(path: string): boolean {
+  if (path.startsWith('/') || path.startsWith('~') || path.includes('\\')) return false
+  if (CONTROL_CHAR.test(path)) return false
+
+  return !path.split('/').includes('..')
+}
+
+function repoPath(v: unknown): Parsed<string> {
+  if (!isText(v)) return { no: WRONG }
+
+  return isInside(v) ? { ok: v } : { no: OUTSIDE }
+}
+
 function ticketPattern(v: unknown): Parsed<string> {
   if (!isText(v)) return { no: WRONG }
 
@@ -81,6 +98,7 @@ function tracker(v: unknown): Parsed<Settings['tracker']> {
 
 function progress(v: unknown): Parsed<Settings['progress']> {
   if (!isObject(v) || !isText(v.files)) return { no: WRONG }
+  if (!isInside(v.files)) return { no: OUTSIDE }
   const patterns = { done: '^- \\[x\\]', open: '^- \\[ \\]', blocked: 'BLOCKED' }
   for (const key of ['done', 'open', 'blocked'] as const) {
     const given = v[key]
@@ -177,7 +195,7 @@ export function parseSettings(source: string | null): { settings: Settings; erro
   take('progress', progress)
   take('checks', checks)
   take('ports', ports)
-  take('owed', text)
+  take('owed', repoPath)
   take('gate', gate)
 
   return { settings, error }
