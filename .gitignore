@@ -1,0 +1,6 @@
+node_modules/
+.factory/
+.superpowers/
+factory/.claude-plugin/types/
+*.log
+.DS_Store

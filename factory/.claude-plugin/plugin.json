@@ -1,0 +1,28 @@
+{
+  "name": "factory",
+  "version": "0.1.0",
+  "description": "A work panel and a software factory for Claude Code",
+  "author": {
+    "name": "pskrekas",
+    "url": "https://github.com/pskrekas"
+  },
+  "homepage": "https://github.com/pskrekas/plugins-claude-factory",
+  "repository": "https://github.com/pskrekas/plugins-claude-factory",
+  "license": "MIT",
+  "keywords": ["claude-code", "claude-code-mod", "claude-code-plugin", "dashboard", "software-factory"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "openOnStart": {
+      "title": "Open on start",
+      "description": "Open the pane when a session starts",
+      "type": "boolean",
+      "default": false
+    },
+    "sound": {
+      "title": "Alert sound",
+      "description": "Play a short sound with an alert",
+      "type": "boolean",
+      "default": true
+    }
+  }
+}
