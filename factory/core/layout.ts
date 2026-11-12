@@ -1,6 +1,6 @@
 // Turns a PanelModel into the rows the pane draws, and into the status line.
 // Pure: no `$`. A section with nothing to show adds no row.
-import { factoryRows } from './line'
+import { factoryRows, jobCounts } from './line'
 import type { PanelModel } from './model'
 import { clean, fit, wrap } from './rows'
 import type { Row, Tone } from './rows'
@@ -113,6 +113,11 @@ export function rowsOf(model: PanelModel, columns: number, now: number): Row[] {
 export function statusText(model: PanelModel): string | undefined {
   const parts: string[] = []
   if (model.task?.id) parts.push(model.task.id)
+  if (model.factory) {
+    const { run, need } = jobCounts(model.factory)
+    const needs = need === 0 ? '' : `, ${need} need${need === 1 ? 's' : ''} you`
+    if (run + need > 0) parts.push(`factory ${run} run${needs}`)
+  }
   const first = model.progress[0]
   if (first && first.percent !== null) parts.push(`${first.percent}%`)
   if (model.checks.length > 0) {

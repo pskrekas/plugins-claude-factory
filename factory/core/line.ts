@@ -47,6 +47,8 @@ const CELLS_SHORT = 40 // seven cells of 9 and 6 x 4
 const ID_WIDTH = 9
 
 const isRunning = (job: JobView) => STATION[job.stage] < YOU
+export const isWaitingForYou = (job: JobView) =>
+  job.stage === 'needs-info' || job.stage === 'needs-human' || job.stage === 'ready'
 const isOnLoop = (view: FactoryView, by: 'gate' | 'review') =>
   view.jobs.some(job => job.stage === 'build' && job.sentBack?.by === by)
 
@@ -57,6 +59,13 @@ const plain = (left: string, right: string, tone: Tone, rightTone: Tone, columns
 })
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 const money = (usd: number | null) => (usd === null ? 'cost unknown' : `$${usd.toFixed(2)}`)
+
+// How many jobs run, and how many wait for the person.
+export function jobCounts(view: FactoryView): { run: number; need: number } {
+  const run = view.jobs.filter(isRunning).length
+
+  return { run, need: view.jobs.filter(isWaitingForYou).length }
+}
 
 export function countsOf(view: FactoryView): number[] {
   const counts = STATIONS.map(() => 0)
@@ -181,7 +190,7 @@ export function factoryRows(view: FactoryView, columns: number): Row[] {
   if (isEmpty) return []
 
   const running = jobs.filter(isRunning)
-  const waiting = jobs.filter(job => !isRunning(job) && job.stage !== 'done' && job.stage !== 'rejected')
+  const waiting = jobs.filter(isWaitingForYou)
   const rows: Row[] = [
     plain('FACTORY', `${running.length} of ${view.slots} slots busy`, 'head', 'dim', columns),
     ...lineRows(view, columns),
