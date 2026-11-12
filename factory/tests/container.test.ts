@@ -63,6 +63,10 @@ test("the gate's container is over the gate's clean copy; a container that canno
   expect(await ensureContainer(io, '/r', ID, 'gate', SPEC)).toEqual({ ok: true, name: GATE, folder: `${DIR}/gate/${ID}` })
   expect(docker(io).at(-1)).toContain(`-v ${DIR}/gate/${ID}:${DIR}/gate/${ID} -w ${DIR}/gate/${ID} node:22`)
   expect(docker(io).at(-1)?.includes('.git:')).toBe(false)
+  // The copy's `.git` file (git made the copy) cannot be changed from inside either.
+  const linked = world({ 'docker inspect': { exitCode: 1 }, 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 0 } }, { [`${DIR}/gate/${ID}/.git`]: 'gitdir: x\n' })
+  await ensureContainer(linked, '/r', ID, 'gate', SPEC)
+  expect(docker(linked).at(-1)).toContain(`-v ${DIR}/gate/${ID}:${DIR}/gate/${ID} -v ${DIR}/gate/${ID}/.git:${DIR}/gate/${ID}/.git:ro -w ${DIR}/gate/${ID} node:22`)
 
   const broken = world({ 'docker inspect': { exitCode: 1 }, 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 125, stderr: 'docker: invalid reference format.\nSee docker run --help' } })
   expect(await ensureContainer(broken, '/r', ID, 'job', SPEC)).toEqual({ ok: false, why: 'docker: docker: invalid reference format. See docker run --help' })

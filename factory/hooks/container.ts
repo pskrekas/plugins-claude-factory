@@ -71,7 +71,8 @@ export async function ensureContainer(
   await docker(io, { do: 'remove', name })
   const user = await userOf(io)
   if (user === null) return { ok: false, why: 'the user id could not be read' }
-  const gitFile = kind === 'job' ? await io.stat(`${folder}/.git`) : null
+  // The folder's `.git` file is git's own (a job's worktree, the gate's copy): it is read-only inside.
+  const gitFile = await io.stat(`${folder}/.git`)
   const made = await docker(io, { do: 'make', name, spec, folder, user, label, hasGitFile: gitFile !== null && gitFile.kind === 'file' })
   if (passed(made)) return { ok: true, name, folder }
 

@@ -24,9 +24,11 @@ import { nextStep } from '../core/step'
 import type { GateResult, Step } from '../core/step'
 import { descriptionOf } from './agent-events'
 import type { Spawn } from './agent-events'
+import { containerName } from '../core/container-args'
+import { removeContainer } from './container'
 import { context } from './context'
 import type { Ctx } from './context'
-import { runGate } from './gate'
+import { runGate, baseContainer } from './gate'
 import { drainFacts } from './inbox'
 import type { Io } from './io'
 import { isStopped, lockInfo, readJob, readJobs, releaseLock, retireJob, stateDirOf, takeLock, writeJob } from './jobs'
@@ -96,6 +98,13 @@ async function freeDiskGb(io: Io, dir: string): Promise<number | null> {
 // day: what it spent is in the day's total and under the day's limit.
 export async function tidy(io: Io, root: string, dir: string, job: Job): Promise<void> {
   if ((await io.stat(`${dir}/worktrees/${job.id}`)) !== null) await removeWorktree(io, root, job.id).catch(() => undefined)
+  // The containers go before the folders they hold. A job that ran on this machine asks docker nothing.
+  if (job.shell === 'container') {
+    for (const kind of ['job', 'gate'] as const) {
+      const name = containerName(kind, job.id, dir.slice(dir.lastIndexOf('/') + 1))
+      if (name !== null) await removeContainer(io, name).catch(() => undefined)
+    }
+  }
   if ((await io.stat(`${dir}/gate/${job.id}`)) !== null) await removeCleanCopy(io, root, job.id).catch(() => undefined)
   // The local branch goes too, so the item can run again.
   if (job.branch !== null && (await headOf(io, root, job.id)) !== null) await dropBranch(io, root, job.id).catch(() => undefined)
@@ -508,8 +517,15 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
       out.note = `${clean(itemId)}: the item could not be read`
       continue
     }
-    // Where the job's builder runs its commands is set here, once, from the settings.
-    const fresh = newJob({ id: item.id, title: item.title }, ctx.now, f.container !== null && f.container !== false ? 'container' : 'host')
+    // Where the job's builder runs its commands is set here, once: the base
+    // branch's container settings, as the person approved them. Never the
+    // settings file of a working tree.
+    const box = isPlanRun ? { ok: true as const, container: false as const } : await baseContainer(io, root, ctx.base)
+    if (!box.ok || box.container === null) {
+      out.note = `${clean(itemId)}: no container (${box.ok ? 'no container is set' : box.why})`
+      continue
+    }
+    const fresh = newJob({ id: item.id, title: item.title }, ctx.now, box.container === false ? 'host' : 'container')
     // An item that ended runs again: its old job is retired first.
     const old = jobs.find(one => one.id === fresh.id)
     if (old !== undefined) {

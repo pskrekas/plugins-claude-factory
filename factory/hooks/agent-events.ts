@@ -10,6 +10,7 @@ import { isJobId } from '../core/job'
 import type { Usage } from '../core/price'
 import { clean } from '../core/rows'
 import { ensureContainer, runShell } from './container'
+import { baseContainer } from './gate'
 import { dropFact } from './inbox'
 import type { Io } from './io'
 import { readJob, readJobs, setStop, stateDirOf } from './jobs'
@@ -42,7 +43,8 @@ const MAX_MISSES = 200
 let unsettled = 0
 const FENCED_TOOLS = ['Bash', SHELL_TOOL, 'Write', 'Edit', 'Read', 'Glob', 'Grep']
 const NOT_YET = 'The fence does not know this agent yet. Try again in a moment.'
-let forbidden: { at: number; commands: string[][]; container: ContainerSpec | false | null } | null = null
+let forbidden: { at: number; commands: string[][] } | null = null
+let box: { at: number; answer: { ok: true; container: ContainerSpec | false | null } | { ok: false; why: string } } | null = null
 // Where each job's builder runs its commands. It is set when a job is made and never changes.
 const shells = new Map<string, Shell>()
 const NOT_A_BUILDER = 'This tool is for the builder of the factory line.'
@@ -148,15 +150,27 @@ export async function checkedSpawn(
   return { agentId: got.agentId }
 }
 
-// The settings the fence and the shell tool read, kept for a few seconds.
-async function rulesOf(io: Io): Promise<{ commands: string[][]; container: ContainerSpec | false | null }> {
+// The forbidden commands, kept for a few seconds.
+async function forbiddenOf(io: Io): Promise<string[][]> {
   const now = await io.now()
   if (forbidden === null || now - forbidden.at >= SETTINGS_MS || now < forbidden.at) {
-    const { factory } = (await loadSettings(io)).settings
-    forbidden = { at: now, commands: factory.forbiddenCommands, container: factory.container }
+    forbidden = { at: now, commands: (await loadSettings(io)).settings.factory.forbiddenCommands }
   }
 
-  return forbidden
+  return forbidden.commands
+}
+
+// The container of the builder's commands, kept for a few seconds. It is the
+// base branch's, as the person approved it (the gate's own rule): the
+// settings file of a working tree names no image.
+async function boxOf(io: Io): Promise<{ ok: true; container: ContainerSpec | false | null } | { ok: false; why: string }> {
+  const now = await io.now()
+  if (box === null || now - box.at >= SETTINGS_MS || now < box.at) {
+    const { settings, root } = await loadSettings(io)
+    box = { at: now, answer: await baseContainer(io, root, settings.baseBranch) }
+  }
+
+  return box.answer
 }
 
 // Where the builder of a job runs its commands, or null when the job is gone.
@@ -224,7 +238,7 @@ export async function onToolCheck(
     worktree: tree.realPath,
     jobDir: folder.realPath,
     outFile: `${folder.realPath}/out/${OUT_FILE[agent.role](agent.focus)}`,
-    forbiddenCommands: (await rulesOf(io)).commands,
+    forbiddenCommands: await forbiddenOf(io),
   }
   const verdict = fenceOf({ tool: e.tool, input: await realInput(io, e.tool, e.input, who) }, who)
   if (verdict === null) return null
@@ -248,18 +262,19 @@ export async function onShell(
   if (e.agentId === undefined || job === null || job.shell !== 'container' || job.stage !== 'build') return { deny: NOT_A_BUILDER }
   const command = typeof e.command === 'string' ? e.command : ''
   if (command.trim() === '') return { deny: `${NOT_RUN}: give one command as text.` }
-  const rules = await rulesOf(io)
-  const refused = forbiddenIn(command, rules.commands)
+  const refused = forbiddenIn(command, await forbiddenOf(io))
   if (refused !== null) {
     await dropFact(io, root, { kind: 'refusal', agentId: e.agentId, command: clean(refused).trim().slice(0, 200), at: await io.now() }).catch(() => undefined)
 
     return { deny: 'This command is forbidden in this repository.' }
   }
-  if (rules.container === null || rules.container === false) return { deny: `${NOT_RUN}: the settings name no container.` }
-  const box = await ensureContainer(io, root, job.id, 'job', rules.container)
-  if (!box.ok) return { deny: `${NOT_RUN}: ${box.why}` }
+  const where = await boxOf(io)
+  if (!where.ok) return { deny: `${NOT_RUN}: ${where.why}.` }
+  if (where.container === null || where.container === false) return { deny: `${NOT_RUN}: the settings name no container.` }
+  const made = await ensureContainer(io, root, job.id, 'job', where.container)
+  if (!made.ok) return { deny: `${NOT_RUN}: ${made.why.replace(/\.$/, '')}.` }
   const asked = typeof e.timeout_ms === 'number' && Number.isFinite(e.timeout_ms) && e.timeout_ms > 0 ? e.timeout_ms : SHELL_MS.usual
-  const ran = await runShell(io, box.name, box.folder, command, Math.round(Math.min(SHELL_MS.most, Math.max(SHELL_MS.least, asked))))
+  const ran = await runShell(io, made.name, made.folder, command, Math.round(Math.min(SHELL_MS.most, Math.max(SHELL_MS.least, asked))))
 
   return { result: ran.text }
 }

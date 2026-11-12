@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
+import { storeKey } from '../core/consent'
 import { move, newJob, startWork } from '../core/job'
 import type { Job } from '../core/job'
 import { stateFolderOf } from '../core/state-path'
@@ -174,10 +175,16 @@ test('an agent that the fence did not see stops the line', async () => {
 const BOXED = '{"factory": {"container": {"image": "node:22"}, "forbiddenCommands": [["npm", "publish"]]}}'
 const LABEL = stateFolderOf('/r/.git')
 // A world where docker answers: the job's container runs, and a command prints `out`.
-function shellWorld(jobs: Job[], settings = BOXED, isRunning = true) {
-  const io = world(jobs, { '/r/.claude/factory.json': settings })
+const BOX_LINE = '[container] node:22 · network on · memory 4g · cpus 2'
+const BASE = 'f'.repeat(40)
+// `settings` is the file of the base branch; the person approved the container line.
+function shellWorld(jobs: Job[], settings = BOXED, isRunning = true, approved = [BOX_LINE]) {
+  const io = world(jobs, { '/r/.claude/factory.json': BOXED })
+  io.store.set(storeKey('/r/.git'), approved)
   io.answer = argv => {
     const line = argv.join(' ')
+    if (line === 'git rev-parse --verify refs/remotes/origin/main^{commit}') return { exitCode: 0, stdout: BASE + '\n' }
+    if (line === `git show ${BASE}:.claude/factory.json`) return { exitCode: 0, stdout: settings }
     if (line === 'id -u') return { exitCode: 0, stdout: '501\n' }
     if (line === 'id -g') return { exitCode: 0, stdout: '20\n' }
     if (line.startsWith('docker inspect')) return isRunning ? { exitCode: 0, stdout: 'true\n' } : { exitCode: 1, stdout: '', stderr: 'No such object' }
@@ -204,8 +211,8 @@ test("the builder's command runs in its job's container, as one argument, in the
   expect(dockerOf(io).at(-1)).toBe(`docker exec -w ${wt(job)} ${name} sh -c ${command}`)
   expect(dockerOf(io)[2]).toContain(`-v ${wt(job)}:${wt(job)} `)
   expect(dockerOf(io)[2]).toContain(' node:22 sleep infinity')
-  // Nothing of the command ran on this machine.
-  expect(io.ran.filter(line => !line.startsWith('docker ') && !line.startsWith('id -'))).toEqual([])
+  // Nothing of the command ran on this machine: beside docker, only the plugin's own reads.
+  expect(io.ran.filter(line => !line.startsWith('docker ') && !line.startsWith('id -'))).toEqual(['git rev-parse --verify refs/remotes/origin/main^{commit}', `git show ${BASE}:.claude/factory.json`])
 })
 
 test('a command has 2 minutes, or what the builder asks for, 10 minutes at most', async () => {
@@ -263,8 +270,30 @@ test('with no container the command is not run, and the builder is told why', as
   rememberAgent('b47', { jobId: job.id, role: 'builder', focus: '' })
   expect(await onShell(bare, { agentId: 'b47', command: 'ls' })).toEqual({ deny: 'The command was not run: the settings name no container.' })
   expect(dockerOf(bare)).toEqual([])
+  // The base branch names a container that the person did not approve.
+  const quiet = shellWorld([job], BOXED, true, [])
+  quiet.time = 60_000
+  expect(await onShell(quiet, { agentId: 'b47', command: 'ls' })).toEqual({ deny: 'The command was not run: the container settings are not approved.' })
+  expect(dockerOf(quiet)).toEqual([])
+  // The base branch cannot be read.
+  const blind = world([job], { '/r/.claude/factory.json': BOXED })
+  blind.time = 90_000
+  expect(await onShell(blind, { agentId: 'b47', command: 'ls' })).toEqual({ deny: 'The command was not run: no branch origin/main.' })
   // Docker is not on the machine.
-  const none = world([job], { '/r/.claude/factory.json': BOXED })
-  none.time = 60_000
-  expect(await onShell(none, { agentId: 'b47', command: 'ls' })).toEqual({ deny: 'The command was not run: docker is not on this machine' })
+  const none = shellWorld([job])
+  none.time = 120_000
+  const answer = none.answer
+  none.answer = argv => (argv[0] === 'docker' ? undefined : answer?.(argv))
+  expect(await onShell(none, { agentId: 'b47', command: 'ls' })).toEqual({ deny: 'The command was not run: docker is not on this machine.' })
+})
+
+test("the container is the base branch's: the file in the person's checkout names no image", async () => {
+  const job = build('48', 'container')
+  const io = shellWorld([job], BOXED, false)
+  io.time = 150_000
+  io.files['/r/.claude/factory.json'] = '{"factory": {"container": {"image": "evil:1"}}}'
+  rememberAgent('b48', { jobId: job.id, role: 'builder', focus: '' })
+  expect(await onShell(io, { agentId: 'b48', command: 'ls' })).toEqual({ result: 'exit 0\nhello\n' })
+  expect(dockerOf(io).find(line => line.startsWith('docker run'))).toContain(' node:22 sleep infinity')
+  expect(dockerOf(io).some(line => line.includes('evil'))).toBe(false)
 })

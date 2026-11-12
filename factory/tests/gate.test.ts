@@ -113,8 +113,14 @@ test('the end of what a command printed: both streams, and a word when the start
   expect(report([run('npm test', { exitCode: 1 })]).markdown.includes('The output was cut')).toBe(false)
 })
 
-const SETTINGS = JSON.stringify({ gate: { fast: [['npm', 'run', 'lint'], ['npm', 'test']], full: [['npm', 'run', 'build']] } })
-const APPROVED = ['[gate] npm run build', '[gate] npm run lint', '[gate] npm test']
+const GATE = { fast: [['npm', 'run', 'lint'], ['npm', 'test']], full: [['npm', 'run', 'build']] }
+// Most tests here run the commands on this machine: the settings say so, and the person approved that.
+const SETTINGS = JSON.stringify({ gate: GATE, factory: { container: false } })
+const HOST_LINE = '[container] none: the builder and the gate run on this machine'
+const GATE_LINES = ['[gate] npm run build', '[gate] npm run lint', '[gate] npm test']
+const APPROVED = [...GATE_LINES, HOST_LINE]
+const BOXED = JSON.stringify({ gate: GATE, factory: { container: { image: 'node:22', network: 'none' } } })
+const BOX_LINE = '[container] node:22 · network none · memory 4g · cpus 2'
 const job = { ...newJob({ id: '12', title: 'Add dark mode' }, 1000), stage: 'gate' as const, branch: 'factory/12-add-dark-mode' }
 const DIR = '/state/' + stateFolderOf('/r/.git')
 const WT = `${DIR}/worktrees/${job.id}`
@@ -146,6 +152,13 @@ function gateIo(answers: Record<string, Answer>, approved = APPROVED, settings =
   }
   io.answer = argv => {
     const line = argv.join(' ')
+    if (line === 'id -u') return { exitCode: 0, stdout: '501\n' }
+    if (line === 'id -g') return { exitCode: 0, stdout: '20\n' }
+    // Git makes the clean copy: it holds the commit's files and git's own `.git` file.
+    if (line.startsWith('git worktree add --detach') && (all['git worktree add']?.exitCode ?? 0) === 0) {
+      io.files[`${argv[4]}/README.md`] = 'x'
+      io.files[`${argv[4]}/.git`] = 'gitdir: x\n'
+    }
     const key = Object.keys(all).find(start => line.startsWith(start))
     const hit = key === undefined ? undefined : all[key]
 
@@ -156,7 +169,7 @@ function gateIo(answers: Record<string, Answer>, approved = APPROVED, settings =
 
   return io
 }
-const steps = (io: { ran: string[] }) => io.ran.filter(line => /^(git|npm) /.test(line))
+const steps = (io: { ran: string[] }) => io.ran.filter(line => /^(git|npm|docker) /.test(line))
 const reportOf = (io: { files: Record<string, string> }, name = 'round-1/checks.md') =>
   io.files[`${DIR}/jobs/${job.id}/files/${name}`] ?? ''
 
@@ -226,7 +239,7 @@ test('a branch that changed a protected path runs no command and needs a person'
 })
 
 test("the protected paths are the base branch's, not the caller's", async () => {
-  const settings = JSON.stringify({ ...JSON.parse(SETTINGS), factory: { protectedPaths: ['deploy'] } })
+  const settings = JSON.stringify({ ...JSON.parse(SETTINGS), factory: { container: false, protectedPaths: ['deploy'] } })
   const io = gateIo({ 'git diff': { exitCode: 0, stdout: 'deploy/prod.yml\0' }, 'npm': { exitCode: 0 } }, APPROVED, settings)
 
   expect((await runGate(io, '/r', job, 'main', 'fast')).why).toBe('protected path: deploy/prod.yml')
@@ -280,4 +293,64 @@ test('a command that cannot start is a failure, and output that was cut says so'
   const loud = gateIo({ 'npm run lint': { exitCode: 1, stdout: 'x'.repeat(5000), isCut: true } })
   await runGate(loud, '/r', job, 'main', 'fast')
   expect(reportOf(loud)).toContain('The output was cut')
+})
+
+const BOX = `factory-gate-${job.id}.${stateFolderOf('/r/.git')}`
+const IN_BOX = `docker exec -w ${CLEAN} ${BOX}`
+const DOCKER_OK = { 'docker inspect': { exitCode: 1, stderr: 'No such object' }, 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 0, stdout: 'abc\n' } }
+
+test("with a container the gate's commands run inside it, over the clean copy, and never on this machine", async () => {
+  const io = gateIo({ ...DOCKER_OK, [`${IN_BOX} npm run lint`]: { exitCode: 0 }, [`${IN_BOX} npm test`]: { exitCode: 0, stdout: '412 passed' } }, [...GATE_LINES, BOX_LINE], BOXED)
+
+  expect(await runGate(io, '/r', job, 'main', 'fast')).toEqual({ pass: true, why: null, needsPerson: false, sha: SHA })
+  expect(steps(io).slice(6)).toEqual([
+    `git worktree remove --force ${CLEAN}`,
+    `git worktree add --detach ${CLEAN} ${SHA}`,
+    `docker inspect --format {{.State.Running}} ${BOX}`,
+    `docker rm -f ${BOX}`,
+    `docker run -d --name ${BOX} --label factory.state=${stateFolderOf('/r/.git')} --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network none --user 501:20 -e HOME=/tmp -v ${CLEAN}:${CLEAN} -v ${CLEAN}/.git:${CLEAN}/.git:ro -w ${CLEAN} node:22 sleep infinity`,
+    `${IN_BOX} npm run lint`,
+    `${IN_BOX} npm test`,
+    // The container goes first, then the copy.
+    `docker rm -f ${BOX}`,
+    `git worktree remove --force ${CLEAN}`,
+  ])
+  // No command of the gate ran on this machine, and the builder's folder is not in the container.
+  expect(io.ran.some(line => line.startsWith('npm '))).toBe(false)
+  expect(io.ran.some(line => line.startsWith('docker run') && line.includes(WT))).toBe(false)
+  expect(io.timeouts[io.ran.indexOf(`${IN_BOX} npm test`)]).toBe(600_000)
+  expect(reportOf(io)).toContain('412 passed')
+  expect(reportOf(io)).toContain('## npm test (exit 0')
+})
+
+test('in a container too, the first command that fails stops the gate; the container and the copy are removed', async () => {
+  const io = gateIo({ ...DOCKER_OK, [`${IN_BOX} npm run lint`]: { exitCode: 2, stderr: 'lint error' }, [IN_BOX]: { exitCode: 0 } }, [...GATE_LINES, BOX_LINE], BOXED)
+
+  expect(await runGate(io, '/r', job, 'main', 'fast')).toEqual({ pass: false, why: 'npm run lint failed', needsPerson: false, sha: SHA })
+  expect(io.ran.filter(line => line.startsWith('docker exec'))).toEqual([`${IN_BOX} npm run lint`])
+  expect(steps(io).slice(-2)).toEqual([`docker rm -f ${BOX}`, `git worktree remove --force ${CLEAN}`])
+  expect(reportOf(io)).toContain('lint error')
+})
+
+test("a container that cannot be made runs no command and needs a person", async () => {
+  const io = gateIo({ ...DOCKER_OK, 'docker run': { exitCode: 125, stderr: 'docker: no space left on device' } }, [...GATE_LINES, BOX_LINE], BOXED)
+  expect(await runGate(io, '/r', job, 'main', 'fast')).toEqual({ pass: false, why: "the gate's container could not be made (docker: docker: no space left on device)", needsPerson: true, sha: null })
+  expect(io.ran.some(line => line.startsWith('docker exec') || line.startsWith('npm '))).toBe(false)
+  expect(steps(io).at(-1)).toBe(`git worktree remove --force ${CLEAN}`)
+  // Docker is not on the machine.
+  const none = gateIo({}, [...GATE_LINES, BOX_LINE], BOXED)
+  expect((await runGate(none, '/r', job, 'main', 'fast')).why).toBe("the gate's container could not be made (docker is not on this machine)")
+  expect(none.ran.some(line => line.startsWith('npm '))).toBe(false)
+})
+
+test('no container setting, or one that is not approved, runs no command and needs a person', async () => {
+  const unset = gateIo({ npm: { exitCode: 0 } }, GATE_LINES, JSON.stringify({ gate: GATE }))
+  expect(await runGate(unset, '/r', job, 'main', 'fast')).toEqual({ pass: false, why: 'no container is set', needsPerson: true, sha: null })
+  // "On this machine" is the person's own word: it counts only when approved.
+  const quiet = gateIo({ npm: { exitCode: 0 } }, GATE_LINES)
+  expect(await runGate(quiet, '/r', job, 'main', 'fast')).toEqual({ pass: false, why: 'the container settings are not approved', needsPerson: true, sha: null })
+  // An image the person did not approve (another one was).
+  const other = gateIo({ ...DOCKER_OK, docker: { exitCode: 0 } }, [...GATE_LINES, '[container] node:20 · network none · memory 4g · cpus 2'], BOXED)
+  expect((await runGate(other, '/r', job, 'main', 'fast')).why).toBe('the container settings are not approved')
+  for (const io of [unset, quiet, other]) expect(io.ran.some(line => line.startsWith('npm ') || line.startsWith('docker '))).toBe(false)
 })

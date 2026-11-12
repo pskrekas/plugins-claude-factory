@@ -22,15 +22,21 @@ const DIR = '/state/' + stateFolderOf('/r/.git')
 const BASE = 'f'.repeat(40)
 const SHA1 = '1'.repeat(40)
 const SHA2 = '2'.repeat(40)
-const SETTINGS = { tracker: { kind: 'github' }, gate: { fast: [['npm', 'test']], full: [['npm', 'run', 'build']] } }
+// Most tests here run the builder and the gate on this machine: the settings say so, and the person approved that.
+const SETTINGS = { tracker: { kind: 'github' }, gate: { fast: [['npm', 'test']], full: [['npm', 'run', 'build']] }, factory: { container: false as unknown } }
+const GATE_LINES = ['[gate] npm run build', '[gate] npm test']
+const HOST_LINE = '[container] none: the builder and the gate run on this machine'
+const BOX = { image: 'node:22' }
+const BOX_LINE = '[container] node:22 · network on · memory 4g · cpus 2'
+const LABEL = stateFolderOf('/r/.git')
 
 type World = ReturnType<typeof lineWorld>
-function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } = {}) {
-  const settings = JSON.stringify({ ...SETTINGS, ...opts.settings })
+function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: { factory?: object; [key: string]: unknown } } = {}) {
+  const settings = JSON.stringify({ ...SETTINGS, ...opts.settings, factory: { ...SETTINGS.factory, ...opts.settings?.factory } })
   const io = fakeIo({ files: { '/r/.git/HEAD': 'x', '/r/.claude/factory.json': settings }, remote: 'git@github.com:a/b.git', now: NOW })
-  io.store.set(storeKey('/r/.git'), ['[gate] npm run build', '[gate] npm test'])
+  io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE, BOX_LINE])
   // What the fake git, gh and npm answer; a test changes it as it goes.
-  const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isDirty: false, isMerged: false, fail: [] as string[], list: '[]', labels: ['factory'], comments: [] as { author: { login: string }; body: string }[], onRun: null as ((line: string) => void) | null }
+  const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isDirty: false, hasDocker: false, containers: '', isMerged: false, fail: [] as string[], failText: 'it broke', list: '[]', labels: ['factory'], comments: [] as { author: { login: string }; body: string }[], onRun: null as ((line: string) => void) | null }
   const link = (path: string) => {
     const id = path.slice(path.lastIndexOf('/') + 1)
     io.files[`${path}/.git`] = `gitdir: /r/.git/worktrees/${id}\n`
@@ -40,7 +46,7 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
   io.answer = argv => {
     const line = argv.join(' ')
     state.onRun?.(line)
-    if (state.fail.some(start => line.startsWith(start))) return { exitCode: 1, stdout: '', stderr: 'it broke' }
+    if (state.fail.some(start => line.startsWith(start))) return { exitCode: 1, stdout: '', stderr: state.failText }
     if (line.startsWith('gh api user')) return { exitCode: 0, stdout: 'runner\n' }
     if (line.startsWith('gh issue view') && line.includes('--json labels')) return { exitCode: 0, stdout: JSON.stringify({ labels: state.labels.map(name => ({ name })) }) }
     if (line.startsWith('gh issue view')) {
@@ -68,6 +74,15 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
       for (const name of Object.keys(io.files).filter(name => name.startsWith(`${argv[4]}/`))) delete io.files[name]
     }
     if (line.startsWith('npm')) return { exitCode: state.npm, stdout: state.npm === 0 ? 'all good' : 'FAILED 2 tests' }
+    if (line === 'id -u' || line === 'id -g') return { exitCode: 0, stdout: '501\n' }
+    // Docker, when the machine has it: no container runs yet, each one is made, a command inside ends as `npm` does.
+    if (argv[0] === 'docker' && state.hasDocker) {
+      if (line.startsWith('docker inspect')) return { exitCode: 1, stdout: '', stderr: 'No such object' }
+      if (line.startsWith('docker ps')) return { exitCode: 0, stdout: state.containers }
+      if (line.startsWith('docker exec')) return { exitCode: state.npm, stdout: state.npm === 0 ? 'all good' : 'FAILED 2 tests' }
+
+      return ok
+    }
     if (line.startsWith('df ')) return { exitCode: 0, stdout: 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/x 900000000 1 500000000 1% /\n' }
 
     return argv[0] === 'git' || argv[0] === 'gh' ? ok : undefined
@@ -77,10 +92,10 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
     io.files[`${DIR}/worktrees/${job.id}/README.md`] = 'x'
     link(`${DIR}/worktrees/${job.id}`)
   }
-  const started: { role: Role; description: string; agentId: string }[] = []
+  const started: { role: Role; description: string; agentId: string; shell?: string }[] = []
   const spawn: Spawn = async a => {
     const agentId = `a${started.length + 1}`
-    started.push({ role: a.role, description: a.description, agentId })
+    started.push(a.shell === 'container' ? { role: a.role, description: a.description, agentId, shell: a.shell } : { role: a.role, description: a.description, agentId })
     io.agentList.push({ id: agentId, status: 'running', type: `factory:${a.role}`, description: a.description })
 
     return { agentId }
@@ -584,6 +599,21 @@ test('/factory run: what it needs before it starts', async () => {
   expect(await startRun(noGate.io, noGate.spawn, null, READY)).toBe('No gate, no factory: gate commands are not approved. Approve them with /factory approve.')
   const empty = lineWorld({ settings: { gate: { fast: [], full: [] } } })
   expect(await startRun(empty.io, empty.spawn, null, READY)).toBe('No gate, no factory: no gate. Put the fast checks in gate.fast of the settings file on the base branch.')
+  // No container, no factory (design 8.3): the settings say where commands run, the person approved it, and docker is there.
+  const unset = lineWorld({ settings: { factory: { container: undefined } } })
+  expect(await startRun(unset.io, unset.spawn, null, READY)).toBe('No container, no factory: set factory.container in the settings file on the base branch (an image, or false to run on this machine).')
+  const quiet = lineWorld()
+  quiet.io.store.set(storeKey('/r/.git'), GATE_LINES)
+  expect(await startRun(quiet.io, quiet.spawn, null, READY)).toBe('No container, no factory: the container settings are not approved. Approve them with /factory approve.')
+  const noDocker = lineWorld({ settings: { factory: { container: BOX } } })
+  expect(await startRun(noDocker.io, noDocker.spawn, null, READY)).toBe('No container, no factory: docker is not on this machine.')
+  const noImage = lineWorld({ settings: { factory: { container: BOX } } })
+  noImage.state.hasDocker = true
+  noImage.state.fail = ['docker image inspect']
+  noImage.state.failText = 'Error response from daemon: No such image: node:22'
+  expect(await startRun(noImage.io, noImage.spawn, null, READY)).toBe('No container, no factory: the image node:22 is not on this machine. Run: docker pull node:22.')
+  for (const w of [unset, quiet, noDocker, noImage]) expect([w.started, await readRun(w.io, '/r'), (await lockInfo(w.io, '/r', NOW)).state]).toEqual([[], null, 'free'])
+  expect([unset, quiet, noDocker].some(w => w.io.ran.some(line => line.startsWith('docker run') || line.startsWith('docker ps')))).toBe(false)
   const noTypes = lineWorld()
   expect(await startRun(noTypes.io, noTypes.spawn, null, { hasAgentTypes: false })).toBe('The agent types of the line are not registered. Start a new session.')
   const taken = lineWorld()
@@ -752,4 +782,82 @@ test('a plan is not held up by jobs of the line that wait in their slots', async
   w.state.list = JSON.stringify([{ number: 4, title: 'Item 4', state: 'OPEN', labels: [{ name: 'factory' }] }])
   await startPlan(w.io, w.spawn, READY)
   expect([w.started.map(one => one.description), await planRows(w)]).toEqual([['factory intake 4-item-4'], [['4', 'running', null, '']]])
+})
+
+const boxOf = (kind: 'job' | 'gate', id: string) => `factory-${kind}-${id}.${LABEL}`
+const dockerOf = (w: World) => w.io.ran.filter(line => line.startsWith('docker '))
+
+test('in a container: the job says so, its builder has no shell of this machine, and the gate runs in a container of its own', async () => {
+  const w = lineWorld({ settings: { factory: { container: BOX } } })
+  w.state.hasDocker = true
+  // The person's own checkout names another image: the base branch's is the one that counts.
+  w.io.files['/r/.claude/factory.json'] = JSON.stringify({ ...SETTINGS, factory: { container: { image: 'evil:1' } } })
+  // A container that a run before this one left behind, and one that is not the factory's.
+  w.state.containers = `${boxOf('job', '9-old')}\nsomeone-elses\n`
+
+  expect(await startRun(w.io, w.spawn, '12', READY)).toBe('The line runs: 1 item in the queue, 0 jobs go on. /factory stop stops it.')
+  const id = (await jobOf(w, '12'))?.id ?? ''
+  const tree = `${DIR}/worktrees/${id}`
+  expect((await jobOf(w, '12'))?.shell).toBe('container')
+  expect(
+    inOrder(dockerOf(w), [
+      'docker image inspect --format {{.Id}} node:22',
+      `docker ps -a --filter label=factory.state=${LABEL}`,
+      `docker rm -f ${boxOf('job', '9-old')}`,
+    ]),
+  ).toBe('ok')
+  expect(dockerOf(w).some(line => line.includes('someone-elses') || line.includes('evil'))).toBe(false)
+
+  await ends(w, 'intake', 'ACCEPT risk=low surfaces=none')
+  await ends(w, 'spec', 'DONE')
+  // The builder that is started is the one with no shell of this machine.
+  expect(w.started.at(-1)).toEqual({ role: 'builder', description: `factory builder ${id}`, agentId: 'a3', shell: 'container' })
+  w.state.isDirty = true
+  await ends(w, 'builder', 'DONE')
+  expect((await jobOf(w, '12'))?.stage).toBe('review')
+  const gate = `${DIR}/gate/${id}`
+  expect(
+    inOrder(w.io.ran.filter(line => /^(git|gh|npm|docker) /.test(line)), [
+      `${IN_TREE(id)} commit --no-verify --no-gpg-sign -m Factory: item 12, round 1`,
+      `git worktree add --detach ${gate} ${SHA1}`,
+      `docker run -d --name ${boxOf('gate', id)} `,
+      `docker exec -w ${gate} ${boxOf('gate', id)} npm test`,
+      `docker rm -f ${boxOf('gate', id)}`,
+      `git worktree remove --force ${gate}`,
+      `git push origin ${SHA1}:refs/heads/factory/${id}`,
+    ]),
+  ).toBe('ok')
+  // The gate's container holds the clean copy, not the builder's folder.
+  expect(dockerOf(w).find(line => line.startsWith(`docker run -d --name ${boxOf('gate', id)} `))?.includes(tree)).toBe(false)
+  // No command of the gate ran on this machine.
+  expect(w.io.ran.some(line => line.startsWith('npm '))).toBe(false)
+})
+
+test('a job that ends has no container', async () => {
+  const w = lineWorld({ jobs: [{ ...at('12', ['spec', 'build', 'gate', 'review', 'approve', 'ready'], { pr: { number: 7, url: 'https://github.com/a/b/pull/7' } }), shell: 'container' }], settings: { factory: { container: BOX } } })
+  w.state.hasDocker = true
+  await begin(w)
+  await watch(w.io)
+  w.state.isMerged = true
+  w.io.time += 301_000
+  await watch(w.io)
+  expect((await jobOf(w, '12'))?.stage).toBe('done')
+  expect(dockerOf(w)).toEqual([`docker rm -f ${boxOf('job', '12-item-12')}`, `docker rm -f ${boxOf('gate', '12-item-12')}`])
+  // A job that ran on this machine asks docker nothing.
+  const host = lineWorld({ jobs: [at('13', ['spec', 'build', 'gate', 'review', 'approve', 'ready'], { pr: { number: 7, url: 'https://github.com/a/b/pull/7' } })] })
+  host.state.hasDocker = true
+  await begin(host)
+  host.state.isMerged = true
+  host.io.time += 301_000
+  await watch(host.io)
+  expect([(await jobOf(host, '13'))?.stage, dockerOf(host)]).toEqual(['done', []])
+})
+
+test('an item whose container settings cannot be read is not started', async () => {
+  const w = lineWorld({ queue: ['12'], settings: { factory: { container: BOX } } })
+  w.io.store.set(storeKey('/r/.git'), GATE_LINES)
+  await begin(w)
+  const out = await advance(w.io, w.spawn)
+  expect([await jobOf(w, '12'), w.started, out.note]).toEqual([undefined, [], '12: no container (the container settings are not approved)'])
+  expect(lines(w).some(line => line.startsWith('git worktree add'))).toBe(false)
 })

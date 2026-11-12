@@ -1,9 +1,13 @@
 // The gate: the checks a job's branch must pass. Code runs them, no agent.
 import { approvedOf, storeKey } from '../core/consent'
+import { containerLine } from '../core/factory-settings'
+import type { ContainerSpec } from '../core/factory-settings'
 import { gateReport, outputTail, protectedHits, testFilesOf } from '../core/gate'
 import type { CheckRun } from '../core/gate'
 import type { Job } from '../core/job'
 import { GATE_MARK, isBranchName, lineOf, parseSettings } from '../core/settings'
+import type { Settings } from '../core/settings'
+import { ensureContainer, removeContainer, runArgv } from './container'
 import type { Io } from './io'
 import { writeJobFile } from './jobs'
 import { consentKeyOf } from './readers/repo'
@@ -20,7 +24,41 @@ import {
 
 const MAX_SETTINGS_CHARS = 256 * 1024
 
-type Gate = { ok: true; commands: string[][]; baseSha: string; protectedPaths: string[] } | { ok: false; why: string }
+type Box = ContainerSpec | false | null
+type Gate = { ok: true; commands: string[][]; baseSha: string; protectedPaths: string[]; container: Box } | { ok: false; why: string }
+const BOX_NOT_APPROVED = 'the container settings are not approved'
+
+// The settings file of the base branch, read once by the commit's id, and the
+// lines this repository's person approved.
+async function baseSettings(
+  io: Io,
+  root: string,
+  base: string,
+): Promise<{ ok: true; settings: Settings; baseSha: string; approved: Set<string> } | { ok: false; why: string }> {
+  if (!isBranchName(base)) return { ok: false, why: 'not a branch name' }
+  const baseSha = await baseHeadOf(io, root, base)
+  if (baseSha === null) return { ok: false, why: `no branch origin/${base}` }
+  const shown = await git(io, root, { do: 'show-settings', sha: baseSha })
+  if (shown === null || 'failed' in shown || shown.exitCode !== 0) return { ok: false, why: `no settings file on ${base}` }
+  if (shown.stdout.length > MAX_SETTINGS_CHARS) return { ok: false, why: `settings on ${base}: too large` }
+  const { settings, error } = parseSettings(shown.stdout)
+  if (error !== null) return { ok: false, why: `settings on ${base}: ${error}` }
+
+  return { ok: true, settings, baseSha, approved: new Set(approvedOf(await io.storeGet(storeKey(await consentKeyOf(io, root))))) }
+}
+
+// Where the builder's and the gate's commands run (design 8.3): the base
+// branch's container settings, when the person approved their line. `false`
+// (on this machine) is the person's own word, so it needs the approval too.
+// `null`: the base names none.
+export async function baseContainer(io: Io, root: string, base: string): Promise<{ ok: true; container: Box } | { ok: false; why: string }> {
+  const read = await baseSettings(io, root, base)
+  if (!read.ok) return read
+  const { container } = read.settings.factory
+  const line = containerLine(container)
+
+  return line !== null && !read.approved.has(line) ? { ok: false, why: BOX_NOT_APPROVED } : { ok: true, container }
+}
 
 // The commands of the fast or the full gate, or why there are none to run.
 //
@@ -30,25 +68,22 @@ type Gate = { ok: true; commands: string[][]; baseSha: string; protectedPaths: s
 // commit's id (`baseSha`): a branch or a tag that a job names `origin/<base>`
 // is not read in its place. The protected paths are the base branch's too.
 // And each command must be on the approved list of this repository, with the
-// gate's mark.
+// gate's mark. The container the commands run in is the base branch's too,
+// and its line must be approved as well.
 export async function gateCommands(io: Io, root: string, base: string, which: 'fast' | 'full'): Promise<Gate> {
-  if (!isBranchName(base)) return { ok: false, why: 'not a branch name' }
-  const baseSha = await baseHeadOf(io, root, base)
-  if (baseSha === null) return { ok: false, why: `no branch origin/${base}` }
-  const shown = await git(io, root, { do: 'show-settings', sha: baseSha })
-  if (shown === null || 'failed' in shown || shown.exitCode !== 0) return { ok: false, why: `no settings file on ${base}` }
-  if (shown.stdout.length > MAX_SETTINGS_CHARS) return { ok: false, why: `settings on ${base}: too large` }
-  const { settings, error } = parseSettings(shown.stdout)
-  if (error !== null) return { ok: false, why: `settings on ${base}: ${error}` }
+  const read = await baseSettings(io, root, base)
+  if (!read.ok) return read
+  const { settings, baseSha, approved } = read
   const commands = settings.gate[which]
   if (commands.length === 0) return { ok: false, why: 'no gate' }
-
-  const approved = new Set(approvedOf(await io.storeGet(storeKey(await consentKeyOf(io, root)))))
   if (!commands.every(argv => approved.has(GATE_MARK + lineOf(argv)))) {
     return { ok: false, why: 'gate commands are not approved' }
   }
+  const { container } = settings.factory
+  const line = containerLine(container)
+  if (line !== null && !approved.has(line)) return { ok: false, why: BOX_NOT_APPROVED }
 
-  return { ok: true, commands, baseSha, protectedPaths: settings.factory.protectedPaths }
+  return { ok: true, commands, baseSha, protectedPaths: settings.factory.protectedPaths, container }
 }
 
 // A command of the gate may run for ten minutes. A longer one is a failure:
@@ -75,6 +110,11 @@ const COMMAND_TIMEOUT_MS = 600_000
 // file git was told to overlook, or a ref with a look-alike name cannot change
 // what is checked or what the commands see. The copy holds no installed
 // packages: the gate's own commands install them.
+//
+// The commands run code that an agent wrote. So they run in a container that
+// holds the clean copy and nothing else of this machine (design 8.3), unless
+// the base branch's settings say `"container": false` and the person approved
+// that. With no container setting the gate does not run.
 export async function runGate(
   io: Io,
   root: string,
@@ -87,6 +127,8 @@ export async function runGate(
   if (!(await fetchBase(io, root, base)).ok) return stop('the base branch could not be fetched')
   const gate = await gateCommands(io, root, base, which)
   if (!gate.ok) return stop(gate.why)
+  if (gate.container === null) return stop('no container is set')
+  const spec = gate.container
   const sha = await headOf(io, root, job.id)
   const changed = sha === null ? null : await changedFiles(io, root, gate.baseSha, sha)
   if (sha === null || changed === null) return stop('the changed files could not be listed')
@@ -102,10 +144,16 @@ export async function runGate(
   if (hits.length === 0 && !isEmpty) {
     const copy = await addCleanCopy(io, root, job.id, sha)
     if (!copy.ok) return stop('the clean copy could not be made')
+    let box: { name: string; folder: string } | null = null
     try {
+      if (spec !== false) {
+        const made = await ensureContainer(io, root, job.id, 'gate', spec)
+        if (!made.ok) return stop(`the gate's container could not be made (${made.why})`)
+        box = made
+      }
       for (const argv of gate.commands) {
         const started = await io.now()
-        const result = await io.run(argv, { cwd: copy.path, timeoutMs: COMMAND_TIMEOUT_MS })
+        const result = box === null ? await io.run(argv, { cwd: copy.path, timeoutMs: COMMAND_TIMEOUT_MS }) : await runArgv(io, box.name, box.folder, argv, COMMAND_TIMEOUT_MS)
         const isFailed = 'failed' in result
         runs.push({
           line: lineOf(argv),
@@ -118,6 +166,8 @@ export async function runGate(
         if (isFailed || result.exitCode !== 0) break
       }
     } finally {
+      // The container goes first: nothing runs in the copy when it is removed.
+      if (box !== null) await removeContainer(io, box.name).catch(() => undefined)
       await removeCleanCopy(io, root, job.id)
     }
   }
