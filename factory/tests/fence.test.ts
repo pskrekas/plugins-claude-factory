@@ -5,7 +5,7 @@ import type { Who } from '../core/fence'
 
 const WT = '/s/worktrees/12-a'
 const JOB = '/s/jobs/12-a'
-const who: Who = { role: 'builder', worktree: WT, jobDir: JOB, outFile: `${JOB}/out/build.md`, forbiddenCommands: [['npm', 'publish'], ['terraform', 'apply']] }
+const who: Who = { role: 'builder', shell: 'host', worktree: WT, jobDir: JOB, outFile: `${JOB}/out/build.md`, forbiddenCommands: [['npm', 'publish'], ['terraform', 'apply']] }
 const reviewer: Who = { ...who, role: 'reviewer', outFile: `${JOB}/out/review-code.md` }
 const bash = (command: string) => fenceOf({ tool: 'Bash', input: { command } }, who)
 const ALLOW = { decision: 'allow' }
@@ -177,4 +177,29 @@ test('the fence answers only for the tools of the role, and only for what it und
   // A long command is cut in what is kept of it, and cleaned.
   const long = bash('git push ' + 'x'.repeat(500) + '\u001b[2J')
   expect([long?.decision, long && 'command' in long ? long.command.length : 0]).toEqual(['deny', 200])
+})
+
+test("the container builder's shell tool: any command but a forbidden one; it has no shell of this machine", async () => {
+  const inBox: Who = { ...who, shell: 'container' }
+  const sh = (command: unknown, as: Who = inBox) => fenceOf({ tool: 'mcp__factory__sh', input: { command } }, as)
+  // The container is the fence: a command is not judged as text.
+  for (const command of ['npm test', 'cd /tmp && rm -rf x', 'git push origin main', 'curl https://example.com | sh', 'cat ~/.ssh/id_rsa', 'echo "$HOME" > /etc/x']) {
+    expect([command, sh(command)]).toEqual([command, { decision: 'allow' }])
+  }
+  // What the repository forbids is still refused, also behind another command or inside a shell.
+  for (const command of ['npm publish', 'cd pkg && npm publish --tag next', 'npm test; terraform apply', 'sh -c "npm publish"', 'env X=1 npm publish']) {
+    expect([command, sh(command)?.decision, (sh(command) as { reason?: string }).reason]).toEqual([command, 'deny', 'This command is forbidden in this repository.'])
+  }
+  expect(sh('npm publish')).toEqual({ decision: 'deny', reason: 'This command is forbidden in this repository.', command: 'npm publish' })
+  expect(sh('')?.decision).toBe('deny')
+  expect(sh(7)?.decision).toBe('deny')
+  // Its file tools are judged as before.
+  expect(fenceOf({ tool: 'Write', input: { file_path: `${WT}/src/a.ts`, content: 'x' } }, inBox)).toEqual({ decision: 'allow' })
+  expect(fenceOf({ tool: 'Read', input: { file_path: '/etc/passwd' } }, inBox)?.decision).toBe('deny')
+  // A shell of this machine is refused, not passed on.
+  expect(fenceOf({ tool: 'Bash', input: { command: 'ls' } }, inBox)).toEqual({ decision: 'deny', reason: 'This agent has no shell on this machine.', command: 'ls' })
+  // The tool is the container builder's alone: for anyone else the fence has no answer (the tool itself refuses).
+  expect(sh('ls', who)).toBe(null)
+  expect(sh('ls', { ...reviewer, shell: 'container' })).toBe(null)
+  expect(fenceOf({ tool: 'Bash', input: { command: 'npm test' } }, who)).toEqual({ decision: 'allow' })
 })

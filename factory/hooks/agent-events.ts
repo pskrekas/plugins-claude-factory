@@ -1,14 +1,15 @@
 // What the plugin does when the engine tells it of an agent: a spawn, a tool
 // call, the end of a turn, the report prompt. Each function answers fast and
 // waits for nothing but the `Io`'s own calls (docs/notes/r2b-check.md).
-import { OUT_FILE, typeOf } from '../core/agents'
-import { ROLES } from '../core/factory-settings'
-import type { Role } from '../core/factory-settings'
-import { fenceOf, resolvePath } from '../core/fence'
+import { AGENT_TYPES, OUT_FILE, SHELL_TOOL, typeOf } from '../core/agents'
+import type { Shell } from '../core/agents'
+import type { ContainerSpec, Role } from '../core/factory-settings'
+import { fenceOf, forbiddenIn, resolvePath } from '../core/fence'
 import type { Who } from '../core/fence'
 import { isJobId } from '../core/job'
 import type { Usage } from '../core/price'
 import { clean } from '../core/rows'
+import { ensureContainer, runShell } from './container'
 import { dropFact } from './inbox'
 import type { Io } from './io'
 import { readJob, readJobs, setStop, stateDirOf } from './jobs'
@@ -16,10 +17,10 @@ import { loadSettings } from './readers/settings'
 
 // Starts one agent of the line. Built by a hook from its own `$`, because an
 // agent is fenced only when a hook that is still running starts it.
-export type Spawn = (a: { role: Role; description: string; prompt: string }) => Promise<{ agentId: string } | { no: string }>
+// `shell`: where the job's builder runs its commands; it says which builder type is started.
+export type Spawn = (a: { role: Role; shell: Shell; description: string; prompt: string }) => Promise<{ agentId: string } | { no: string }>
 export type AgentRef = { jobId: string; role: Role; focus: string }
 
-const OURS = ROLES.map(typeOf)
 const NOT_THE_LINE = 'Only the factory line starts this agent.'
 const UNSEEN = 'the fence did not see this agent'
 const REREAD_MS = 1_000
@@ -39,9 +40,14 @@ const misses = new Map<string, number>()
 const MAX_MISSES = 200
 // Spawns of the line that the hook saw and whose agent id is not known yet.
 let unsettled = 0
-const FENCED_TOOLS = ['Bash', 'Write', 'Edit', 'Read', 'Glob', 'Grep']
+const FENCED_TOOLS = ['Bash', SHELL_TOOL, 'Write', 'Edit', 'Read', 'Glob', 'Grep']
 const NOT_YET = 'The fence does not know this agent yet. Try again in a moment.'
-let forbidden: { at: number; commands: string[][] } | null = null
+let forbidden: { at: number; commands: string[][]; container: ContainerSpec | false | null } | null = null
+// Where each job's builder runs its commands. It is set when a job is made and never changes.
+const shells = new Map<string, Shell>()
+const NOT_A_BUILDER = 'This tool is for the builder of the factory line.'
+const NOT_RUN = 'The command was not run'
+const SHELL_MS = { usual: 120_000, most: 600_000, least: 1_000 }
 
 // `factory <role> <job id>`, or `factory reviewer:<focus> <job id>`.
 export const descriptionOf = (role: Role, focus: string, jobId: string): string =>
@@ -96,12 +102,15 @@ export async function onSpawn(
   io: Io,
   e: { subagentType: string; description: string },
 ): Promise<(AgentRef & { cwd: string }) | { deny: string } | null> {
-  if (!OURS.includes(e.subagentType)) return null
+  if (!AGENT_TYPES.includes(e.subagentType)) return null
   const ref = parseDescription(e.description)
-  if (ref === null || typeOf(ref.role) !== e.subagentType) return { deny: NOT_THE_LINE }
+  if (ref === null) return { deny: NOT_THE_LINE }
   const root = await io.root()
   const dir = await stateDirOf(io, root)
-  if (dir === null || (await readJob(io, root, ref.jobId)) === null) return { deny: NOT_THE_LINE }
+  const job = dir === null ? null : await readJob(io, root, ref.jobId)
+  // The type is the one of the job's own shell: a job that builds in a
+  // container never gets the builder that has a shell of this machine.
+  if (job === null || typeOf(ref.role, job.shell) !== e.subagentType) return { deny: NOT_THE_LINE }
   const tree = await io.stat(`${dir}/worktrees/${ref.jobId}`)
   if (tree === null || tree.kind !== 'dir') return { deny: NOT_THE_LINE }
   seenSpawns.add(e.description)
@@ -116,10 +125,10 @@ export async function onSpawn(
 export async function checkedSpawn(
   io: Io,
   raw: (input: { subagentType: string; description: string; prompt: string }) => Promise<{ agentId?: string; deny?: string }>,
-  a: { role: Role; description: string; prompt: string },
+  a: { role: Role; shell: Shell; description: string; prompt: string },
 ): Promise<{ agentId: string } | { no: string }> {
   seenSpawns.delete(a.description)
-  const got = await raw({ subagentType: typeOf(a.role), description: a.description, prompt: a.prompt }).catch(
+  const got = await raw({ subagentType: typeOf(a.role, a.shell), description: a.description, prompt: a.prompt }).catch(
     (error: unknown) => ({ deny: String(error instanceof Error ? error.message : error) }) as { agentId?: string; deny?: string },
   )
   if (got.deny !== undefined) return { no: clean(got.deny).slice(0, 200) }
@@ -139,13 +148,26 @@ export async function checkedSpawn(
   return { agentId: got.agentId }
 }
 
-async function forbiddenOf(io: Io): Promise<string[][]> {
+// The settings the fence and the shell tool read, kept for a few seconds.
+async function rulesOf(io: Io): Promise<{ commands: string[][]; container: ContainerSpec | false | null }> {
   const now = await io.now()
   if (forbidden === null || now - forbidden.at >= SETTINGS_MS || now < forbidden.at) {
-    forbidden = { at: now, commands: (await loadSettings(io)).settings.factory.forbiddenCommands }
+    const { factory } = (await loadSettings(io)).settings
+    forbidden = { at: now, commands: factory.forbiddenCommands, container: factory.container }
   }
 
-  return forbidden.commands
+  return forbidden
+}
+
+// Where the builder of a job runs its commands, or null when the job is gone.
+async function shellOf(io: Io, root: string, jobId: string): Promise<Shell | null> {
+  const hit = shells.get(jobId)
+  if (hit !== undefined) return hit
+  const job = await readJob(io, root, jobId)
+  if (job === null) return null
+  shells.set(jobId, job.shell)
+
+  return job.shell
 }
 
 // Where a path really is: the real path of the nearest part of it that
@@ -194,13 +216,15 @@ export async function onToolCheck(
   }
   const dir = await stateDirOf(io, root)
   const [tree, folder] = dir === null ? [null, null] : await Promise.all([io.stat(`${dir}/worktrees/${agent.jobId}`), io.stat(`${dir}/jobs/${agent.jobId}`)])
-  if (tree === null || folder === null) return { decision: 'deny', reason: 'The job of this agent has no folder.' }
+  const shell = await shellOf(io, root, agent.jobId)
+  if (tree === null || folder === null || shell === null) return { decision: 'deny', reason: 'The job of this agent has no folder.' }
   const who: Who = {
     role: agent.role,
+    shell,
     worktree: tree.realPath,
     jobDir: folder.realPath,
     outFile: `${folder.realPath}/out/${OUT_FILE[agent.role](agent.focus)}`,
-    forbiddenCommands: await forbiddenOf(io),
+    forbiddenCommands: (await rulesOf(io)).commands,
   }
   const verdict = fenceOf({ tool: e.tool, input: await realInput(io, e.tool, e.input, who) }, who)
   if (verdict === null) return null
@@ -208,6 +232,36 @@ export async function onToolCheck(
   await dropFact(io, root, { kind: 'refusal', agentId: e.agentId, command: verdict.command, at: await io.now() }).catch(() => undefined)
 
   return { decision: 'deny', reason: verdict.reason }
+}
+
+// The plugin's shell tool (design 8.3): one command of a builder, run inside
+// its job's container. It answers only the builder of a job that builds in a
+// container, while the job is in Build. The command is never read by a shell
+// of the person's machine: it is one argument of `sh -c` inside the container.
+export async function onShell(
+  io: Io,
+  e: { agentId?: string; command?: unknown; timeout_ms?: unknown },
+): Promise<{ result: string } | { deny: string }> {
+  const root = await io.root()
+  const agent = await agentOf(io, root, e.agentId)
+  const job = agent === null || agent.role !== 'builder' ? null : await readJob(io, root, agent.jobId)
+  if (e.agentId === undefined || job === null || job.shell !== 'container' || job.stage !== 'build') return { deny: NOT_A_BUILDER }
+  const command = typeof e.command === 'string' ? e.command : ''
+  if (command.trim() === '') return { deny: `${NOT_RUN}: give one command as text.` }
+  const rules = await rulesOf(io)
+  const refused = forbiddenIn(command, rules.commands)
+  if (refused !== null) {
+    await dropFact(io, root, { kind: 'refusal', agentId: e.agentId, command: clean(refused).trim().slice(0, 200), at: await io.now() }).catch(() => undefined)
+
+    return { deny: 'This command is forbidden in this repository.' }
+  }
+  if (rules.container === null || rules.container === false) return { deny: `${NOT_RUN}: the settings name no container.` }
+  const box = await ensureContainer(io, root, job.id, 'job', rules.container)
+  if (!box.ok) return { deny: `${NOT_RUN}: ${box.why}` }
+  const asked = typeof e.timeout_ms === 'number' && Number.isFinite(e.timeout_ms) && e.timeout_ms > 0 ? e.timeout_ms : SHELL_MS.usual
+  const ran = await runShell(io, box.name, box.folder, command, Math.round(Math.min(SHELL_MS.most, Math.max(SHELL_MS.least, asked))))
+
+  return { result: ran.text }
 }
 
 // The end of an agent's turn: a fact for the code that advances the jobs.

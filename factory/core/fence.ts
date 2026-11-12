@@ -4,16 +4,22 @@
 // It answers only for the tools of the agent's role. For any other tool it
 // answers null, and the caller hands the call on unchanged.
 //
-// For shell commands it is best effort: a command line can hide what it does.
-// What does not depend on it: every agent reads a clean checkout, the gate
-// runs in its own clean copy, the plugin alone pushes, and nothing merges.
-import { TOOLS } from './agents'
+// For shell commands on the person's machine (`Bash`, the host builder) it is
+// best effort: a command line can hide what it does. A builder in a container
+// has no such shell: its commands run through the plugin's own tool, inside
+// the job's container, and there only the repository's forbidden commands are
+// refused, as text. What depends on neither: every agent reads a clean
+// checkout, the gate runs in its own clean copy, the plugin alone pushes, and
+// nothing merges.
+import { SHELL_TOOL, toolsOf } from './agents'
+import type { Shell } from './agents'
 import type { Role } from './factory-settings'
 import { clean } from './rows'
 import { isObject } from './rules'
 
 // `outFile`: the one file the agent writes outside the code, as a full path.
-export type Who = { role: Role; worktree: string; jobDir: string; outFile: string; forbiddenCommands: string[][] }
+// `shell`: where the job's builder runs its commands.
+export type Who = { role: Role; shell: Shell; worktree: string; jobDir: string; outFile: string; forbiddenCommands: string[][] }
 export type Verdict = { decision: 'allow' } | { decision: 'deny'; reason: string; command: string } | null
 type Deny = { decision: 'deny'; reason: string; command: string }
 
@@ -38,6 +44,7 @@ const NOT_PLAIN = 'The command is not plain enough to check. Write the program a
 const STAY = "An agent stays on its job's branch."
 const OUT_WRITE = 'This write is outside the job.'
 const TOO_DEEP = 'A shell inside a shell inside a shell is not run.'
+const NO_SHELL = 'This agent has no shell on this machine.'
 
 // A path as the tools see it, with `.` and `..` resolved. A relative path is
 // under `base`. Null for a path that cannot be judged.
@@ -190,6 +197,31 @@ function gitVerdict(words: string[], simple: string): Deny | null {
   return null
 }
 
+// True when the words of one simple command start as a forbidden command does.
+const isForbidden = (words: string[], forbidden: string[][]) =>
+  forbidden.some(([first = '', ...more]) => baseName(words[0] ?? '') === baseName(first) && more.every((word, i) => words[i + 1] === word))
+
+const SPLIT = /;|&&|\|\||\||&|\n|\$\(|`|\(|\)/
+
+// The first simple command of `command` that the repository forbids, or null.
+// Also one behind another command, or given to a shell as text. Best effort,
+// as every text check of a command is.
+export function forbiddenIn(command: string, forbidden: string[][], depth = 0): string | null {
+  for (const simple of command.split(SPLIT)) {
+    const words = wordsOf(simple)
+    if (isForbidden(words, forbidden)) return simple
+    const program = baseName(words[0] ?? '')
+    if (depth < 2 && (SHELLS.includes(program) || program === 'eval')) {
+      const flag = words.findIndex((word, i) => i > 0 && /^-[A-Za-z]*c[A-Za-z]*$/.test(word))
+      const from = program === 'eval' ? 1 : flag + 1
+      const inner = from > 0 ? forbiddenIn(words.slice(from).join(' '), forbidden, depth + 1) : null
+      if (inner !== null) return inner
+    }
+  }
+
+  return null
+}
+
 function simpleVerdict(simple: string, who: Who, depth: number, at: { cwd: string }): Deny | null {
   // Git told where to look, or what to run, through the environment.
   // Any mention of one of git's own variables is refused, however it is set.
@@ -249,10 +281,7 @@ function simpleVerdict(simple: string, who: Who, depth: number, at: { cwd: strin
     if (refused !== null) return refused
   }
   if (program === 'gh' || (program === 'az' && words[1] === 'repos')) return deny(HOST, simple)
-  for (const list of who.forbiddenCommands) {
-    const [first = '', ...more] = list
-    if (program === baseName(first) && more.every((word, i) => words[i + 1] === word)) return deny(FORBIDDEN, simple)
-  }
+  if (isForbidden(words, who.forbiddenCommands)) return deny(FORBIDDEN, simple)
   // A write to a place that only the shell knows (a variable, a home folder) cannot be judged.
   const writes = simple.includes('>') || WRITERS.includes(program) || (program === 'sed' && words.some(word => word.startsWith('-i')))
 
@@ -281,7 +310,7 @@ function commandVerdict(command: string, who: Who, depth: number): Deny | null {
   const at = { cwd: who.worktree }
   // `>|` is a write mark, not a pipe. Braces stay in the words: a group of
   // choices in a command is refused as not plain.
-  for (const simple of command.replace(/>\|/g, '>').split(/;|&&|\|\||\||&|\n|\$\(|`|\(|\)/)) {
+  for (const simple of command.replace(/>\|/g, '>').split(SPLIT)) {
     const refused = simpleVerdict(simple, who, depth, at)
     if (refused !== null) return refused
   }
@@ -290,7 +319,13 @@ function commandVerdict(command: string, who: Who, depth: number): Deny | null {
 }
 
 export function fenceOf(call: { tool: string; input: unknown }, who: Who): Verdict {
-  if (!TOOLS[who.role].includes(call.tool)) return null
+  if (!toolsOf(who.role, who.shell).includes(call.tool)) {
+    // A builder in a container has no shell of this machine. Its type does
+    // not hold one; a call of one is refused here too, not passed on.
+    if (call.tool === 'Bash' && who.role === 'builder') return deny(NO_SHELL, isObject(call.input) ? (text(call.input.command) ?? '') : '')
+
+    return null
+  }
   if (!isObject(call.input)) return deny(NOT_UNDERSTOOD, '')
   if (call.tool === 'Read' || call.tool === 'Glob' || call.tool === 'Grep') return readVerdict(call.tool, call.input, who)
   if (call.tool === 'Write' || call.tool === 'Edit') return writeVerdict(call.input, who)
@@ -299,6 +334,15 @@ export function fenceOf(call: { tool: string; input: unknown }, who: Who): Verdi
     if (command === null) return deny(NOT_UNDERSTOOD, '')
 
     return commandVerdict(command, who, 0) ?? ALLOW
+  }
+  if (call.tool === SHELL_TOOL) {
+    // The command runs in the job's container: the container is the fence,
+    // and the text is read only for what the repository forbids.
+    const command = text(call.input.command)
+    if (command === null) return deny(NOT_UNDERSTOOD, '')
+    const refused = forbiddenIn(command, who.forbiddenCommands)
+
+    return refused === null ? ALLOW : deny(FORBIDDEN, refused)
   }
 
   return null

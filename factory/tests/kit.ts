@@ -107,6 +107,8 @@ export function engine(
     cwds: [] as (string | undefined)[],
     // The agent types the plugin registered, and the agents it started.
     registered: [] as { name: string; tools?: readonly string[]; model?: string }[],
+    // The tools the plugin registered.
+    tools: [] as { name: string; inputSchema?: unknown }[],
     spawned: [] as { type: string; description: string; cwd?: string }[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
   }
@@ -159,6 +161,11 @@ export function engine(
     return { value: { agent: 'factory:' + e.name } as never }
   })
   on('agent.offer', () => ({ isOffered: true }) as never)
+  on('tool.register', (_, e) => {
+    seen.tools.push(e as { name: string; inputSchema?: unknown })
+
+    return { value: { tool: 'mcp__factory__' + e.name } as never }
+  })
   on('tool.check', () => ({ decision: 'ask' }) as never)
   on('prompt.submit', (_, e) => ({ text: e.text }) as never)
   on('turn.complete', (_, e) => ({ text: e.answer }) as never)

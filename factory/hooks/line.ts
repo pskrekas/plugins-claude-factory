@@ -313,6 +313,7 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
         for (const agent of step.agents) {
           const got = await spawn({
             role: agent.role,
+            shell: job.shell,
             description: descriptionOf(agent.role, agent.focus, job.id),
             prompt: briefOf(agent.role, { jobId: job.id, itemId: job.itemId, round: job.round, focus: agent.focus, files: `${dir}/jobs/${job.id}/files`, out: `${dir}/jobs/${job.id}/out`, worktree: `${dir}/worktrees/${job.id}` }),
           })
@@ -507,7 +508,8 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
       out.note = `${clean(itemId)}: the item could not be read`
       continue
     }
-    const fresh = newJob({ id: item.id, title: item.title }, ctx.now)
+    // Where the job's builder runs its commands is set here, once, from the settings.
+    const fresh = newJob({ id: item.id, title: item.title }, ctx.now, f.container !== null && f.container !== false ? 'container' : 'host')
     // An item that ended runs again: its old job is retired first.
     const old = jobs.find(one => one.id === fresh.id)
     if (old !== undefined) {

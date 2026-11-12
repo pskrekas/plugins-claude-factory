@@ -16,15 +16,37 @@ const world = (on: Parameters<typeof engine>[0], job: Job) =>
 const inbox = (w: { files: Record<string, string> }) =>
   Object.entries(w.files).filter(([name]) => name.startsWith(`${STATE}/inbox/`)).map(([, text]) => JSON.parse(text) as { kind: string; agentId: string; command?: string; usage?: unknown })
 
-test('the five agent types are registered at the start, and the model is not offered them', async ($, on) => {
+test('the six agent types are registered at the start, and the model is not offered them', async ($, on) => {
   const w = world(on, building('31', 'e31'))
   await $.session.start(START)
 
-  expect(w.registered.map(spec => spec.name)).toEqual(['intake', 'spec', 'builder', 'reviewer', 'approver'])
-  expect(w.registered.find(spec => spec.name === 'builder')?.tools).toEqual(['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash'])
+  expect(w.registered.map(spec => spec.name)).toEqual(['intake', 'spec', 'builder', 'builder-host', 'reviewer', 'approver'])
+  expect(w.registered.find(spec => spec.name === 'builder')?.tools).toEqual(['Read', 'Glob', 'Grep', 'Write', 'Edit', 'mcp__factory__sh'])
+  expect(w.registered.find(spec => spec.name === 'builder-host')?.tools).toEqual(['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash'])
   expect(w.registered.find(spec => spec.name === 'intake')?.model).toBe('opus')
   expect(await $.agent.offer({ agent: 'factory:builder', description: 'x' } as never)).toEqual({ isOffered: false })
+  expect(await $.agent.offer({ agent: 'factory:builder-host', description: 'x' } as never)).toEqual({ isOffered: false })
   expect(await $.agent.offer({ agent: 'general-purpose', description: 'x' } as never)).toEqual({ isOffered: true })
+})
+
+test("the builder's shell is a tool of the plugin: it is registered, and it answers nobody but a builder", async ($, on) => {
+  const w = world(on, building('36', 'e36'))
+  await $.session.start(START)
+
+  expect(w.tools.map(tool => tool.name)).toEqual(['sh'])
+  expect(w.tools[0]?.inputSchema).toEqual({
+    type: 'object',
+    properties: { command: { type: 'string', description: 'One shell command.' }, timeout_ms: { type: 'number', description: 'The time limit in milliseconds: 120000 when left out, 600000 at most.' } },
+    required: ['command'],
+  })
+  const refused = { deny: 'This tool is for the builder of the factory line.' }
+  // The session's own model, an agent that is not the line's, and the builder of a job that builds on this machine.
+  expect(await $.tool.call({ tool: 'mcp__factory__sh', command: 'ls' } as never)).toEqual(refused)
+  expect(await $.tool.call({ tool: 'mcp__factory__sh', command: 'ls', agentId: 'stranger' } as never)).toEqual(refused)
+  expect(await $.tool.call({ tool: 'mcp__factory__sh', command: 'ls', agentId: 'e36' } as never)).toEqual(refused)
+  expect(w.ran.some(line => line.startsWith('docker '))).toBe(false)
+  // Any other tool is not the plugin's to answer.
+  expect(((await $.tool.call({ tool: 'Bash', command: 'ls' } as never)) as { deny?: string }).deny).toBe(undefined)
 })
 
 test('a tool call of a job\'s agent goes through the fence; any other call is not the plugin\'s', async ($, on) => {
@@ -62,11 +84,13 @@ test('only the line starts an agent of its types, and it starts in the job\'s wo
   const w = world(on, job)
   await $.session.start(START)
 
-  expect(await $.agent.spawn({ subagentType: 'factory:builder', description: 'please build', prompt: 'p' } as never)).toEqual({ deny: 'Only the factory line starts this agent.' })
+  expect(await $.agent.spawn({ subagentType: 'factory:builder-host', description: 'please build', prompt: 'p' } as never)).toEqual({ deny: 'Only the factory line starts this agent.' })
+  // The job builds on this machine: a container builder is not its builder.
+  expect(await $.agent.spawn({ subagentType: 'factory:builder', description: `factory builder ${job.id}`, prompt: 'p' } as never)).toEqual({ deny: 'Only the factory line starts this agent.' })
   expect(w.spawned).toEqual([])
-  const started = await $.agent.spawn({ subagentType: 'factory:builder', description: `factory builder ${job.id}`, prompt: 'p' } as never)
+  const started = await $.agent.spawn({ subagentType: 'factory:builder-host', description: `factory builder ${job.id}`, prompt: 'p' } as never)
   expect(started).toEqual({ model: 'm', agentId: 'a1' })
-  expect(w.spawned).toEqual([{ type: 'factory:builder', description: `factory builder ${job.id}`, cwd: `${STATE}/worktrees/${job.id}` }])
+  expect(w.spawned).toEqual([{ type: 'factory:builder-host', description: `factory builder ${job.id}`, cwd: `${STATE}/worktrees/${job.id}` }])
   // The new agent is fenced at once.
   expect(await $.tool.check({ tool: 'Bash', input: { command: 'gh pr merge 1' }, agentId: 'a1' } as never)).toEqual({ decision: 'deny', reason: 'The line talks to the host; an agent does not.' })
   // Another kind of agent is not touched.

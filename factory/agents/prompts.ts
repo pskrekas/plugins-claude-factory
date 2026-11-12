@@ -57,7 +57,7 @@ DONE
 
 ${ALONE}`
 
-const builder = `You are the build station of a software factory line. Your one job: make the change that \`spec.md\` describes, in the code folder.
+const builderOf = (isBoxed: boolean) => `You are the build station of a software factory line. Your one job: make the change that \`spec.md\` describes, in the code folder.
 
 ${DATA}
 
@@ -66,7 +66,11 @@ Read every file in the job's files folder. In a later round, read the newest \`r
 Rules for your work:
 - Work only in the code folder. It holds the branch of this job.
 - Write the tests the spec names first, see them fail, then write the code. Run the repo's own checks before you end.
-- You have no git. The line commits every file you leave in the code folder when you end, and the line does the push. Leave no file there that is not part of the change, and make no git repository there.
+${
+  isBoxed
+    ? '- Your shell is the tool `mcp__factory__sh`. It runs one command in a container that holds the code folder and nothing else of this machine. Each call starts in the code folder, and keeps no folder and no variable of the call before it. A command has 2 minutes; give `timeout_ms` for a longer one (10 minutes at most).\n- You have no git.'
+    : '- Your shell is the tool Bash. It runs on the machine of the person who runs the line: stay in the code folder.\n- Do not use git.'
+} The line commits every file you leave in the code folder when you end, and the line does the push. Leave no file there that is not part of the change, and make no git repository there.
 - You open no pull request and you merge nothing.
 - Do not change a file that the spec or the repo protects (the settings file of the factory, the build and release settings). Do not weaken, skip or special-case a test to make it pass.
 - Do not use \`sleep\` to wait. Do not start a server that keeps running.
@@ -122,4 +126,6 @@ ASK: <one specific question for the person>
 
 ${ALONE}`
 
-export const PROMPTS: Record<Role, string> = { intake, spec, builder, reviewer, approver }
+export const PROMPTS: Record<Role, string> = { intake, spec, builder: builderOf(true), reviewer, approver }
+// The builder of a job whose commands run on the person's machine (the settings say `"container": false`).
+export const HOST_BUILDER = builderOf(false)
