@@ -19,7 +19,7 @@ export type GitCall =
   | { do: 'changed'; base: string; at?: string }
   | { do: 'uncommitted' }
   | { do: 'add-clean'; path: string; sha: string }
-  | { do: 'head' }
+  | { do: 'head'; jobId: string }
 
 // An absolute path with no `..` in it and no control character.
 const isPlainPath = (path: string) =>
@@ -67,6 +67,8 @@ export function gitArgs(call: GitCall): string[] | null {
       // Run in the job's worktree: what it holds that its branch does not.
       return ['git', 'status', '--porcelain', '--no-renames', '--untracked-files=all', '-z']
     case 'head':
-      return ['git', 'rev-parse', 'HEAD']
+      // The tip of the job's own branch, by the ref's full name: the commit a
+      // push of that branch sends. Not `HEAD`, which is wherever a folder is.
+      return ['git', 'rev-parse', '--verify', `refs/heads/${branchOf(call.jobId)}^{commit}`]
   }
 }

@@ -89,10 +89,12 @@ export async function changedFiles(
   return result.stdout.split('\0').filter(name => name !== '')
 }
 
-// The last commit of a job's branch, by its full id. Null when git cannot say.
+// The last commit of a job's branch `factory/<job id>`, by its full id. Null
+// when git cannot say. It is read from the branch, in the repo, and not from
+// the HEAD of the job's folder: a folder can be on another branch or on none,
+// and the branch is what a push sends.
 export async function headOf(io: Io, root: string, jobId: string): Promise<string | null> {
-  const path = await worktreePath(io, root, jobId)
-  const result = path === null ? null : await git(io, path, { do: 'head' })
+  const result = await git(io, root, { do: 'head', jobId })
   if (result === null || 'failed' in result || result.exitCode !== 0) return null
   const sha = result.stdout.trim()
 

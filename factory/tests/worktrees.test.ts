@@ -37,7 +37,8 @@ test('every git call of the factory, word for word', async () => {
   // A rename is shown as a file that went and a file that came: both names are checked.
   expect(line({ do: 'changed', base: 'main' })).toBe('git diff --name-only --no-renames -z origin/main...HEAD')
   expect(line({ do: 'uncommitted' })).toBe('git status --porcelain --no-renames --untracked-files=all -z')
-  expect(line({ do: 'head' })).toBe('git rev-parse HEAD')
+  // The tip of the job's own branch: the ref that a push sends, by its full name.
+  expect(line({ do: 'head', jobId: ID })).toBe('git rev-parse --verify refs/heads/factory/12-add-dark-mode^{commit}')
   // The gate's own copy of one commit, and the files of that same commit.
   expect(line({ do: 'add-clean', path: CLEAN, sha: SHA })).toBe(`git worktree add --detach ${CLEAN} ${SHA}`)
   expect(line({ do: 'changed', base: 'main', at: SHA })).toBe(`git diff --name-only --no-renames -z origin/main...${SHA}`)
@@ -53,9 +54,10 @@ test('a commit is named by its full id only', async () => {
 
 test("the gate's clean copy: made at one commit, in the state folder, and removed", async () => {
   const io = fakeIo({ files: { '/r/x': '' } })
-  io.answer = git({ 'git rev-parse HEAD': { exitCode: 0, stdout: SHA + '\n' }, 'git worktree': { exitCode: 0 }, 'git diff': { exitCode: 0, stdout: 'a.ts\0' } })
+  io.answer = git({ 'git rev-parse --verify': { exitCode: 0, stdout: SHA + '\n' }, 'git worktree': { exitCode: 0 }, 'git diff': { exitCode: 0, stdout: 'a.ts\0' } })
   expect(await headOf(io, '/r', ID)).toBe(SHA)
-  expect(io.cwds[0]).toBe(WT)
+  expect(io.cwds[0]).toBe('/r')
+  expect(await headOf(io, '/r', '../x')).toBe(null)
   expect(await changedFiles(io, '/r', ID, 'main', SHA)).toEqual(['a.ts'])
   expect(await addCleanCopy(io, '/r', ID, SHA)).toEqual({ ok: true, path: CLEAN })
   expect(await removeCleanCopy(io, '/r', ID)).toEqual({ ok: true })
@@ -69,7 +71,7 @@ test("the gate's clean copy: made at one commit, in the state folder, and remove
   expect(io.cwds.slice(2)).toEqual(['/r', '/r', '/r'])
 
   const odd = fakeIo({ files: { '/r/x': '' } })
-  odd.answer = git({ 'git rev-parse HEAD': { exitCode: 0, stdout: 'not a commit\n' }, 'git worktree add': { exitCode: 128, stderr: 'fatal: no' } })
+  odd.answer = git({ 'git rev-parse --verify': { exitCode: 0, stdout: 'not a commit\n' }, 'git worktree add': { exitCode: 128, stderr: 'fatal: no' } })
   expect(await headOf(odd, '/r', ID)).toBe(null)
   expect(await addCleanCopy(odd, '/r', ID, SHA)).toEqual({ ok: false, why: 'git: fatal: no' })
   expect(await addCleanCopy(odd, '/r', ID, 'HEAD')).toEqual({ ok: false, why: 'not a job id or a branch name' })
@@ -98,7 +100,7 @@ test('the factory cannot force, merge into the base, or push another branch', as
     gitArgs({ do: 'abort-merge' }),
     gitArgs({ do: 'changed', base: 'main' }),
     gitArgs({ do: 'uncommitted' }),
-    gitArgs({ do: 'head' }),
+    gitArgs({ do: 'head', jobId: ID }),
     gitArgs({ do: 'add-clean', path: CLEAN, sha: SHA }),
     gitArgs({ do: 'changed', base: 'main', at: SHA }),
   ].map(list => list ?? [])

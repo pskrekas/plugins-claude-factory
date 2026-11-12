@@ -55,6 +55,10 @@ const COMMAND_TIMEOUT_MS = 600_000
 // changed files could not be listed, the clean copy could not be made, or the
 // branch changed a protected path.
 //
+// `sha` is the commit the gate judged, when it wrote a report: a caller that
+// pushes the branch or marks its pull request ready after the gate must see
+// that the branch is still at this commit (`headOf`).
+//
 // The gate judges one commit. It reads the branch's last commit once, lists
 // the files of that commit, and runs the commands in a fresh copy of that
 // commit (`gate/<job id>` in the state folder), never in the folder the
@@ -68,14 +72,14 @@ export async function runGate(
   base: string,
   f: FactorySettings,
   which: 'fast' | 'full',
-): Promise<{ pass: boolean; why: string | null; needsPerson: boolean }> {
+): Promise<{ pass: boolean; why: string | null; needsPerson: boolean; sha: string | null }> {
   const gate = await gateCommands(io, root, base, which)
-  if (!gate.ok) return { pass: false, why: gate.why, needsPerson: true }
+  if (!gate.ok) return { pass: false, why: gate.why, needsPerson: true, sha: null }
   const sha = await headOf(io, root, job.id)
   const changed = sha === null ? null : await changedFiles(io, root, job.id, base, sha)
   const uncommitted = changed === null ? null : await uncommittedFiles(io, root, job.id)
   if (sha === null || changed === null || uncommitted === null) {
-    return { pass: false, why: 'the changed files could not be listed', needsPerson: true }
+    return { pass: false, why: 'the changed files could not be listed', needsPerson: true, sha: null }
   }
 
   // A branch that changed the settings file, or another protected path, is
@@ -87,7 +91,7 @@ export async function runGate(
   const runs: CheckRun[] = []
   if (hits.length === 0 && uncommitted.length === 0) {
     const copy = await addCleanCopy(io, root, job.id, sha)
-    if (!copy.ok) return { pass: false, why: 'the clean copy could not be made', needsPerson: true }
+    if (!copy.ok) return { pass: false, why: 'the clean copy could not be made', needsPerson: true, sha: null }
     try {
       for (const argv of gate.commands) {
         const started = await io.now()
@@ -118,5 +122,5 @@ export async function runGate(
   const name = which === 'fast' ? 'checks.md' : 'merge-checks.md'
   await writeJobFile(io, root, job.id, `round-${job.round}/${name}`, report.markdown)
 
-  return { pass: report.pass, why: report.why, needsPerson: hits.length > 0 }
+  return { pass: report.pass, why: report.why, needsPerson: hits.length > 0, sha }
 }
