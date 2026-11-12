@@ -5,6 +5,7 @@ import {
   STAGES,
   TRANSITIONS,
   addSpend,
+  grant,
   isActive,
   isFinished,
   isWaiting,
@@ -12,6 +13,9 @@ import {
   move,
   newJob,
   parseJob,
+  reject,
+  resume,
+  stop,
 } from '../core/job'
 import type { Stage } from '../core/job'
 
@@ -117,7 +121,6 @@ test('a job file is checked field by field', async () => {
     // A stage a job can only wait in must say where it goes back to, and only
     // to a stage the table allows; a job that does not wait must not say one.
     { stage: 'needs-human', stoppedIn: 'ready', question: 'q' },
-    { stage: 'needs-human', stoppedIn: 'build', question: 'q' },
     { stage: 'needs-info', stoppedIn: null, question: 'q' },
     { stage: 'needs-info', stoppedIn: 'intake', question: null },
     { stage: 'review', stoppedIn: 'review' },
@@ -171,4 +174,76 @@ test('spend is added per day and per station, and one unpriced piece makes the j
   expect([unpriced.costUsd, unpriced.spend[1]]).toEqual([null, { day: '2026-01-16', ms: 31_000, usd: null }])
   expect(addSpend(unpriced, 'build', 1000, 3, day2).costUsd).toBe(null)
   expect(parseJob(JSON.stringify(unpriced), unpriced.id)).toEqual(unpriced)
+})
+
+test('a file without the new fields still reads, with the defaults', async () => {
+  const { branch, itemUrl, asker, refusals, feedback, ...old } = job()
+  expect([branch, itemUrl, asker, refusals, feedback]).toEqual([null, null, null, 0, 0])
+  const read = parseJob(JSON.stringify(old), old.id)
+  expect([read?.branch, read?.itemUrl, read?.asker, read?.refusals, read?.feedback]).toEqual([null, null, null, 0, 0])
+  const id = job().id
+  expect(parseJob(JSON.stringify({ ...job(), refusals: -1 }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), feedback: 1.5 }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), asker: 'nobody' }), id)).toBe(null)
+  // A job's branch is factory/<its own id>, nothing else.
+  expect(parseJob(JSON.stringify({ ...job(), branch: 'main' }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), branch: 'factory/other-job' }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), branch: 'factory/' + id }), id)?.branch).toBe('factory/' + id)
+  expect(parseJob(JSON.stringify({ ...job(), itemUrl: 'u'.repeat(900) }), id)?.itemUrl?.length).toBe(300)
+})
+
+test('a job can be rejected from any stage it is alive in', async () => {
+  const paths: Stage[][] = [
+    [],
+    ['spec'],
+    ['spec', 'build'],
+    ['spec', 'build', 'gate'],
+    ['spec', 'build', 'gate', 'review'],
+    ['spec', 'build', 'gate', 'review', 'approve'],
+    ['spec', 'build', 'gate', 'review', 'approve', 'ready'],
+  ]
+  for (const stages of paths) expect(reject(walk(stages), 'dropped', 5).stage).toBe('rejected')
+  expect(reject(stop(job(), { question: 'q', asker: 'intake' }, 1), 'dropped', 2).stage).toBe('rejected')
+  expect(() => reject(reject(job(), 'x', 1), 'again', 2)).toThrow(IllegalMove)
+  expect(() => reject(walk(['spec', 'build', 'gate', 'review', 'approve', 'ready', 'done']), 'late', 2)).toThrow(IllegalMove)
+})
+
+test('a limit can stop a job in spec or build, and it goes back there', async () => {
+  const stopped = stop(walk(['spec', 'build']), { question: 'cost limit for the day', asker: 'limit' }, 9)
+  expect([stopped.stage, stopped.stoppedIn, stopped.asker, stopped.question]).toEqual([
+    'needs-human',
+    'build',
+    'limit',
+    'cost limit for the day',
+  ])
+  const back = resume(stopped, 'the person said go on', 10)
+  expect([back.stage, back.round, back.asker, back.question, back.stoppedIn]).toEqual(['build', 1, null, null, null])
+  expect(stop(walk(['spec']), { question: 'q', asker: 'limit' }, 9).stoppedIn).toBe('spec')
+  expect(parseJob(JSON.stringify(stopped), stopped.id)).toEqual(stopped)
+})
+
+test('a job with no rounds left stops at the gate and resumes in build, as a new round', async () => {
+  const failed = { ...walk(['spec', 'build', 'gate']), sentBack: { by: 'gate' as const, why: '2 tests failed' } }
+  const stopped = stop(failed, { question: 'round limit: 3 rounds with no pass', asker: 'limit', resumeAt: 'build' }, 9)
+  expect(stopped.stoppedIn).toBe('build')
+  const back = resume(grant(stopped, { rounds: 1 }, 10), 'one more round', 11)
+  expect([back.stage, back.round, back.granted.rounds, back.sentBack?.by]).toEqual(['build', 2, 1, 'gate'])
+  expect(() => stop(failed, { question: 'q', asker: 'limit', resumeAt: 'ready' }, 9)).toThrow(IllegalMove)
+})
+
+test('intake asks the author; resume goes back to intake', async () => {
+  const asked = stop(job(), { question: 'Which font?', asker: 'intake' }, 2)
+  expect([asked.stage, asked.stoppedIn, asked.asker]).toEqual(['needs-info', 'intake', 'intake'])
+  expect(resume(asked, 'answered', 3).stage).toBe('intake')
+  expect(() => resume(job(), 'x', 1)).toThrow(IllegalMove)
+  expect(() => resume(walk(['spec', 'build', 'gate', 'review', 'approve', 'ready']), 'x', 1)).toThrow(IllegalMove)
+  // Stopped at intake for its risk: a person lets it go on to spec.
+  const risky = stop(job(), { question: 'Risk is medium. Build it?', asker: 'intake', resumeAt: 'spec' }, 2)
+  expect([risky.stage, risky.stoppedIn]).toEqual(['needs-human', 'spec'])
+})
+
+test('grant adds and never goes below zero', async () => {
+  const granted = grant(grant(job(), { rounds: 2, usd: 5 }, 1), { rounds: -5, minutes: 30 }, 2)
+  expect(granted.granted).toEqual({ rounds: 0, usd: 5, minutes: 30 })
+  expect([granted.updatedAt, granted.stage]).toEqual([2, 'intake'])
 })

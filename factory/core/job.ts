@@ -18,6 +18,9 @@ export type Stage =
   | 'done'
   | 'rejected'
 
+// Who stopped a job to ask: a station, or a limit of the line.
+export type Asker = 'intake' | 'gate' | 'review' | 'approve' | 'limit'
+
 export type SentBack = { by: 'gate' | 'review' | 'approve' | 'you'; why: string }
 
 // Agent time and its price on one local day (YYYY-MM-DD). The day limits sum
@@ -47,6 +50,11 @@ export type Job = {
   // What the person allowed on top of the settings' limits, when a job that
   // reached one was told to go on.
   granted: { rounds: number; usd: number; minutes: number }
+  branch: string | null // 'factory/<id>' once the job has a worktree
+  itemUrl: string | null // the tracker item's address
+  asker: Asker | null // who stopped the job, while it waits
+  refusals: number // commands the fence refused
+  feedback: number // how many feedback files the job has
   history: { at: number; from: Stage | null; to: Stage; reason: string }[]
 }
 
@@ -68,11 +76,12 @@ export const STAGES: readonly Stage[] = [
 export const TRANSITIONS: Record<Stage, readonly Stage[]> = {
   intake: ['spec', 'needs-info', 'needs-human', 'rejected'],
   'needs-info': ['rejected'],
-  spec: ['build'],
-  build: ['gate'],
-  gate: ['review', 'build', 'needs-human'],
-  review: ['approve', 'build', 'needs-human'],
-  approve: ['ready', 'build', 'needs-human'],
+  // A limit can stop a job at any station, and a person can drop it at any.
+  spec: ['build', 'needs-human', 'rejected'],
+  build: ['gate', 'needs-human', 'rejected'],
+  gate: ['review', 'build', 'needs-human', 'rejected'],
+  review: ['approve', 'build', 'needs-human', 'rejected'],
+  approve: ['ready', 'build', 'needs-human', 'rejected'],
   'needs-human': ['rejected'],
   ready: ['done', 'build', 'rejected'],
   done: [],
@@ -92,7 +101,8 @@ const MAX_HISTORY = 100
 const MAX_NAMES = 10
 const MAX_SPEND = 60
 // Where a job that asks can go back to (design 5.3).
-const RESUMES: readonly Stage[] = ['intake', 'spec', 'gate', 'review', 'approve']
+const RESUMES: readonly Stage[] = ['intake', 'spec', 'build', 'gate', 'review', 'approve']
+const ASKERS: readonly string[] = ['intake', 'gate', 'review', 'approve', 'limit']
 
 export class IllegalMove extends Error {}
 
@@ -135,6 +145,11 @@ export function newJob(item: { id: string; title: string }, now: number): Job {
     spend: [],
     stageMs: {},
     granted: { rounds: 0, usd: 0, minutes: 0 },
+    branch: null,
+    itemUrl: null,
+    asker: null,
+    refusals: 0,
+    feedback: 0,
     history: [{ at: now, from: null, to: 'intake', reason: 'started' }],
   }
 }
@@ -144,15 +159,20 @@ export function move(
   to: Stage,
   reason: string,
   now: number,
-  set: Partial<Pick<Job, 'question' | 'sentBack' | 'risk' | 'surfaces' | 'reviewers' | 'pr'>> = {},
+  set: Partial<
+    Pick<Job, 'question' | 'sentBack' | 'risk' | 'surfaces' | 'reviewers' | 'pr' | 'stoppedIn' | 'asker' | 'branch' | 'itemUrl'>
+  > = {},
 ): Job {
   const from = job.stage
   const isAsking = ASKS.includes(from)
   if (!TRANSITIONS[from].includes(to) && !(isAsking && to === job.stoppedIn)) {
     throw new IllegalMove(`${from} -> ${to}`)
   }
-  const isLoop = to === 'build' && LOOPS_FROM.includes(from)
-  if (isLoop && !set.sentBack) throw new IllegalMove(`${from} -> build needs who sent it back`)
+  // A move back to Build is a new round: from a station that sends it back
+  // (it must say who), or from a stop that was made because no round was left.
+  const isSentBack = to === 'build' && LOOPS_FROM.includes(from)
+  if (isSentBack && !set.sentBack) throw new IllegalMove(`${from} -> build needs who sent it back`)
+  const isLoop = isSentBack || (to === 'build' && isAsking && job.sentBack !== null)
   if (ASKS.includes(to) && !set.question) throw new IllegalMove(`${from} -> ${to} needs a question`)
 
   // Only what `set` really gives is applied, and its text is cut: a job that
@@ -171,18 +191,66 @@ export function move(
   if (set.reviewers !== undefined) next.reviewers = set.reviewers.slice(0, MAX_NAMES).map(name => name.slice(0, MAX.name))
   if (set.pr !== undefined) next.pr = set.pr
 
+  if (set.branch !== undefined) next.branch = set.branch
+  if (set.itemUrl !== undefined) next.itemUrl = set.itemUrl === null ? null : set.itemUrl.slice(0, MAX.url)
   if (ASKS.includes(to)) {
-    // Stopped at intake for its risk, the job goes on to spec when the person
-    // lets it; stopped anywhere else, it goes back where it was.
-    next.stoppedIn = from === 'intake' && to === 'needs-human' ? 'spec' : from
+    // Where it goes back to: what the caller says, or, stopped at intake for
+    // its risk, on to spec when the person lets it; else where it was.
+    const back = set.stoppedIn ?? (from === 'intake' && to === 'needs-human' ? 'spec' : from)
+    if (!RESUMES.includes(back)) throw new IllegalMove(`${to} cannot go back to ${back}`)
+    next.stoppedIn = back
+    next.asker = set.asker ?? null
   } else if (isAsking) {
     next.stoppedIn = null
     next.question = null
+    next.asker = null
   }
   // Once the reviewers pass a round, nobody "sent it back" any more.
   if (to === 'approve' || to === 'ready') next.sentBack = null
 
   return next
+}
+
+// Stops a job to ask: the item's author (intake's question) or the person.
+export function stop(
+  job: Job,
+  why: { question: string; asker: Asker; resumeAt?: Stage },
+  now: number,
+): Job {
+  const to: Stage = why.asker === 'intake' && why.resumeAt === undefined ? 'needs-info' : 'needs-human'
+
+  return move(job, to, `${why.asker} asks`, now, {
+    question: why.question,
+    asker: why.asker,
+    ...(why.resumeAt === undefined ? {} : { stoppedIn: why.resumeAt }),
+  })
+}
+
+// Sends a job that asked back to the station it stopped in.
+export function resume(job: Job, reason: string, now: number): Job {
+  if (!ASKS.includes(job.stage) || job.stoppedIn === null) throw new IllegalMove(`${job.stage} is not a stop to resume`)
+
+  return move(job, job.stoppedIn, reason, now)
+}
+
+// Drops a job, from any stage it is alive in.
+export function reject(job: Job, reason: string, now: number): Job {
+  return move(job, 'rejected', reason, now)
+}
+
+// Adds to what the person allowed on top of the limits.
+export function grant(job: Job, more: { rounds?: number; usd?: number; minutes?: number }, now: number): Job {
+  const add = (have: number, extra: number | undefined) => Math.max(0, have + (extra ?? 0))
+
+  return {
+    ...job,
+    granted: {
+      rounds: add(job.granted.rounds, more.rounds),
+      usd: add(job.granted.usd, more.usd),
+      minutes: add(job.granted.minutes, more.minutes),
+    },
+    updatedAt: now,
+  }
 }
 
 // The local calendar day of a time, as YYYY-MM-DD.
@@ -294,6 +362,13 @@ export function parseJob(text: string, folder: string): Job | null {
     stageMs[name] = ms
   }
 
+  // Fields a file of the first line version does not have read as their defaults.
+  const { branch = null, itemUrl = null, asker = null, refusals = 0, feedback = 0 } = raw
+  if (branch !== null && branch !== `factory/${id}`) return null
+  if (itemUrl !== null && typeof itemUrl !== 'string') return null
+  if (asker !== null && !ASKERS.includes(asker as string)) return null
+  if (!isCount(refusals) || !isCount(feedback) || !Number.isInteger(refusals) || !Number.isInteger(feedback)) return null
+
   return {
     version: 1,
     id,
@@ -315,6 +390,11 @@ export function parseJob(text: string, folder: string): Job | null {
     spend,
     stageMs,
     granted: { rounds: granted.rounds, usd: granted.usd, minutes: granted.minutes },
+    branch: branch as string | null,
+    itemUrl: itemUrl === null ? null : cut(itemUrl as string, MAX.url),
+    asker: asker as Asker | null,
+    refusals,
+    feedback,
     history,
   }
 }
