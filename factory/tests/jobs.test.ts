@@ -281,7 +281,11 @@ test('a job is written through a temporary file and one rename', async () => {
 
   expect(io.files[path(j.id)]).toBe(JSON.stringify(j, null, 2) + '\n')
   expect(Object.keys(io.files).some(file => file.endsWith('.tmp'))).toBe(false)
-  expect(io.ran).toContain(`mv -f ${path(j.id)}.tmp ${path(j.id)}`)
+  // Written in the plugin's own tmp folder, then moved over the name in one rename.
+  expect(io.written.includes(path(j.id))).toBe(false)
+  const moves = io.ran.filter(line => line.startsWith('mv -f ') && line.endsWith(' ' + path(j.id)))
+  expect(moves.length).toBe(1)
+  expect(moves[0]?.startsWith(`mv -f ${DIR}/tmp/`)).toBe(true)
   expect(await stateDirOf(io, '/r')).toBe(DIR)
 })
 
@@ -414,4 +418,42 @@ test('a job file and a job are not written into a folder that is a link', async 
   await writeJobFile(io, '/r', j.id, 'spec.md', 'x').catch(caught => (error = caught))
   expect(error).not.toBe(null)
   expect(Object.keys(io.files).filter(file => file.includes('/jobs/'))).toEqual([])
+})
+
+test("a file is put in place by a rename, never written at its name", async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  const j = job('1')
+  await writeJob(io, '/r', j)
+  await writeJobFile(io, '/r', j.id, 'spec.md', 'first')
+  await writeJobFile(io, '/r', j.id, 'spec.md', 'second')
+  const target = `${DIR}/jobs/${j.id}/files/spec.md`
+
+  expect(io.files[target]).toBe('second')
+  // A rename replaces the name. A write at the name would go through a hard
+  // link to whatever else that name is.
+  expect(io.written.some(file => file === target)).toBe(false)
+  expect(io.written.every(file => file.startsWith(`${DIR}/tmp/`) || file === `${DIR}/repo`)).toBe(true)
+  expect(Object.keys(io.files).some(file => file.startsWith(`${DIR}/tmp/`))).toBe(false)
+})
+
+test('a write fails closed when the folder is not where its path says', async () => {
+  const j = job('1')
+  const folder = `${DIR}/jobs/${j.id}/files`
+  const io = fakeIo({ files: { '/r/x': '', [`${folder}/keep.md`]: 'k' }, reals: { [folder]: '/elsewhere/files' } })
+  let error: unknown = null
+  await writeJobFile(io, '/r', j.id, 'spec.md', 'x').catch(caught => (error = caught))
+
+  expect(String(error)).toContain('not inside the state folder')
+  expect(io.files[`${folder}/spec.md`]).toBe(undefined)
+})
+
+test('a name that is a folder is not replaced by a file', async () => {
+  const j = job('1')
+  const folder = `${DIR}/jobs/${j.id}/files`
+  const io = fakeIo({ files: { '/r/x': '', [`${folder}/spec.md/inner.md`]: 'k' } })
+  let error: unknown = null
+  await writeJobFile(io, '/r', j.id, 'spec.md', 'x').catch(caught => (error = caught))
+
+  expect(error).not.toBe(null)
+  expect(io.files[`${folder}/spec.md/inner.md`]).toBe('k')
 })

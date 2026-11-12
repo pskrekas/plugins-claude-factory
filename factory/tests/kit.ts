@@ -218,6 +218,20 @@ export function engine(
 
       return { value: { exitCode: 0, stdout: top + '\n', stderr: '' } as never }
     }
+    // The file commands of the store are acted out on the file map, and not counted as runs.
+    const plain = e.argv.filter(arg => arg !== '-p' && arg !== '-f')
+    const ok = (isOk: boolean) => ({ value: { exitCode: isOk ? 0 : 1, stdout: '', stderr: '' } as never })
+    if (plain[0] === 'mkdir' && plain[1] !== undefined) return ok(true)
+    if (plain[0] === 'mv' && plain[1] !== undefined && plain[2] !== undefined) {
+      const [from, to] = [plain[1], plain[2]]
+      const moved = Object.keys(seen.files).filter(file => file === from || file.startsWith(from + '/'))
+      for (const file of moved) {
+        seen.files[to + file.slice(from.length)] = seen.files[file] ?? ''
+        delete seen.files[file]
+      }
+
+      return ok(moved.length > 0)
+    }
     seen.cwds.push(e.init?.cwd)
     seen.stdins.push(e.init?.stdin)
     seen.ran.push(e.argv.join(' '))
@@ -274,6 +288,8 @@ export function fakeIo(
     stateDir?: string
     // Paths that are symbolic links.
     links?: Set<string>
+    // A path whose real place is another one.
+    reals?: Record<string, string>
   } = {},
 ) {
   const files = world.files ?? {}
@@ -298,9 +314,10 @@ export function fakeIo(
     stateDir: async () => world.stateDir ?? '/state',
     stat: async (path: string) => {
       const text = files[path]
-      if (text !== undefined) return { kind: 'file' as const, size: text.length, mtimeMs: 0, realPath: path }
+      const realPath = world.reals?.[path] ?? path
+      if (text !== undefined) return { kind: 'file' as const, size: text.length, mtimeMs: 0, realPath }
 
-      return isDir(path) ? { kind: 'dir' as const, size: 0, mtimeMs: dirs.get(path) ?? 0, realPath: path } : null
+      return isDir(path) ? { kind: 'dir' as const, size: 0, mtimeMs: dirs.get(path) ?? 0, realPath } : null
     },
     isLink: async (path: string) => world.links?.has(path) ?? false,
     readFile: async (path: string) => {
@@ -318,7 +335,10 @@ export function fakeIo(
 
       return [...names]
     },
+    // Every path a file was written to directly (not moved to).
+    written: [] as string[],
     writeFile: async (path: string, text: string) => {
+      io.written.push(path)
       files[path] = text
     },
     run: async (argv: string[], init?: { cwd?: string; timeoutMs?: number; stdin?: string; env?: Record<string, string> }) => {

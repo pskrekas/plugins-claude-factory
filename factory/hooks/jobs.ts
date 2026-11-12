@@ -113,13 +113,9 @@ export async function writeJob(io: Io, root: string, job: Job): Promise<void> {
   const state = await stateOf(io, root)
   if ('no' in state) throw new Error(state.no)
   if (!(await claim(io, state))) throw new Error(NOT_OURS)
-  // Written beside the job file, read back, then renamed over it: one rename,
-  // so a reader sees the old job or the new one and never half of one.
-  const file = `${state.dir}/jobs/${job.id}/job.json`
-  await writeInside(io, state.dir, `jobs/${job.id}/job.json.tmp`, text)
-  const back = await readInside(io, state.dir, `jobs/${job.id}/job.json.tmp`, MAX_JOB_BYTES)
-  if (back === null || parseJob(back, job.id) === null) throw new Error(`the job file did not read back: ${job.id}`)
-  if (!ran(await io.run(['mv', '-f', `${file}.tmp`, file]))) throw new Error(`the job file could not be put in place: ${job.id}`)
+  // Written as a fresh file, read back, then renamed over the job file: a
+  // reader sees the old job or the new one and never half of one.
+  await writeInside(io, state.dir, `jobs/${job.id}/job.json`, text, back => parseJob(back, job.id) !== null)
 }
 
 // The state folder of this repository, or null when there is none to use.
