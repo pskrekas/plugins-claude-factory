@@ -81,3 +81,17 @@ export async function changedFiles(io: Io, root: string, jobId: string, base: st
 
   return result.stdout.split('\0').filter(name => name !== '')
 }
+
+// The files of a job's worktree that are changed or new and not committed
+// (ignored files are not listed). Null when git could not say.
+export async function uncommittedFiles(io: Io, root: string, jobId: string): Promise<string[] | null> {
+  const path = await worktreePath(io, root, jobId)
+  const result = path === null ? null : await git(io, path, { do: 'uncommitted' })
+  if (result === null || 'failed' in result || result.exitCode !== 0) return null
+
+  // Each entry is two state letters, a space, then the name.
+  return result.stdout
+    .split('\0')
+    .filter(entry => entry.length > 3)
+    .map(entry => entry.slice(3))
+}

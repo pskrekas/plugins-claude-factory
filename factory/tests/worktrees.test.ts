@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { branchOf, gitArgs } from '../core/git-args'
 import { stateFolderOf } from '../core/state-path'
-import { addWorktree, changedFiles, pushBranch, removeWorktree, syncBase, worktreePath } from '../hooks/worktrees'
+import { addWorktree, changedFiles, pushBranch, removeWorktree, syncBase, uncommittedFiles, worktreePath } from '../hooks/worktrees'
 import { fakeIo } from './kit'
 
 const ID = '12-add-dark-mode'
@@ -21,7 +21,9 @@ test('every git call of the factory, word for word', async () => {
   )
   expect(line({ do: 'merge-base', base: 'main' })).toBe('git merge --no-edit origin/main')
   expect(line({ do: 'abort-merge' })).toBe('git merge --abort')
-  expect(line({ do: 'changed', base: 'main' })).toBe('git diff --name-only -z origin/main...HEAD')
+  // A rename is shown as a file that went and a file that came: both names are checked.
+  expect(line({ do: 'changed', base: 'main' })).toBe('git diff --name-only --no-renames -z origin/main...HEAD')
+  expect(line({ do: 'uncommitted' })).toBe('git status --porcelain --no-renames --untracked-files=all -z')
   expect(line({ do: 'head' })).toBe('git rev-parse HEAD')
 })
 
@@ -47,6 +49,7 @@ test('the factory cannot force, merge into the base, or push another branch', as
     gitArgs({ do: 'merge-base', base: 'main' }),
     gitArgs({ do: 'abort-merge' }),
     gitArgs({ do: 'changed', base: 'main' }),
+    gitArgs({ do: 'uncommitted' }),
     gitArgs({ do: 'head' }),
   ].map(list => list ?? [])
   const banned = ['-f', '--force-with-lease', '--mirror', '--all', '--delete', '--tags', 'reset', 'rebase', 'checkout', 'commit', 'clean']
@@ -129,6 +132,14 @@ test('changed files, push and remove', async () => {
   const broken = fakeIo({ files: { '/r/x': '' } })
   broken.answer = git({ 'git diff': { exitCode: 128, stderr: 'bad revision' } })
   expect(await changedFiles(broken, '/r', ID, 'main')).toBe(null)
+  expect(await uncommittedFiles(broken, '/r', ID)).toBe(null)
+
+  const dirty = fakeIo({ files: { '/r/x': '' } })
+  dirty.answer = git({ 'git status': { exitCode: 0, stdout: '?? a b.ts\0 M src/x.ts\0D  gone.ts\0' } })
+  expect(await uncommittedFiles(dirty, '/r', ID)).toEqual(['a b.ts', 'src/x.ts', 'gone.ts'])
+  expect(dirty.cwds[0]).toBe(WT)
+  dirty.answer = git({ 'git status': { exitCode: 0, stdout: '' } })
+  expect(await uncommittedFiles(dirty, '/r', ID)).toEqual([])
   const none = fakeIo({ files: { '/r/x': '' } })
   expect(await pushBranch(none, '/r', 'not a job')).toEqual({ ok: false, why: 'not a job id or a branch name' })
   expect(none.ran).toEqual([])

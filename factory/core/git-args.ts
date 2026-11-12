@@ -17,6 +17,7 @@ export type GitCall =
   | { do: 'merge-base'; base: string }
   | { do: 'abort-merge' }
   | { do: 'changed'; base: string }
+  | { do: 'uncommitted' }
   | { do: 'head' }
 
 // An absolute path with no `..` in it and no control character.
@@ -49,7 +50,12 @@ export function gitArgs(call: GitCall): string[] | null {
     case 'abort-merge':
       return ['git', 'merge', '--abort']
     case 'changed':
-      return ['git', 'diff', '--name-only', '-z', `origin/${call.base}...HEAD`]
+      // No rename detection: a moved file is listed under both its names, so
+      // a protected path that was moved away is still seen.
+      return ['git', 'diff', '--name-only', '--no-renames', '-z', `origin/${call.base}...HEAD`]
+    case 'uncommitted':
+      // Run in the job's worktree: what it holds that its branch does not.
+      return ['git', 'status', '--porcelain', '--no-renames', '--untracked-files=all', '-z']
     case 'head':
       return ['git', 'rev-parse', 'HEAD']
   }

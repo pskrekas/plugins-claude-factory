@@ -8,7 +8,7 @@ import { GATE_MARK, isBranchName, lineOf, parseSettings } from '../core/settings
 import type { Io } from './io'
 import { writeJobFile } from './jobs'
 import { consentKeyOf } from './readers/repo'
-import { changedFiles, worktreePath } from './worktrees'
+import { changedFiles, uncommittedFiles, worktreePath } from './worktrees'
 
 const GIT_TIMEOUT_MS = 10_000
 const MAX_SETTINGS_CHARS = 256 * 1024
@@ -65,15 +65,19 @@ export async function runGate(
   if (!gate.ok) return { pass: false, why: gate.why, needsPerson: true }
   const cwd = await worktreePath(io, root, job.id)
   const changed = await changedFiles(io, root, job.id, base)
-  if (cwd === null || changed === null) {
+  const uncommitted = await uncommittedFiles(io, root, job.id)
+  if (cwd === null || changed === null || uncommitted === null) {
     return { pass: false, why: 'the changed files could not be listed', needsPerson: true }
   }
 
   // A branch that changed the settings file, or another protected path, is
-  // not run at all: its own code would be what runs.
-  const hits = protectedHits(changed, f.protectedPaths)
+  // not run at all: its own code would be what runs. The commands run in the
+  // worktree, so a file there that is not committed is checked the same way,
+  // and while there is one no command runs: the gate judges what the branch
+  // holds, not what the folder holds.
+  const hits = protectedHits([...new Set([...changed, ...uncommitted])], f.protectedPaths)
   const runs: CheckRun[] = []
-  for (const argv of hits.length > 0 ? [] : gate.commands) {
+  for (const argv of hits.length > 0 || uncommitted.length > 0 ? [] : gate.commands) {
     const started = await io.now()
     const result = await io.run(argv, { cwd, timeoutMs: COMMAND_TIMEOUT_MS })
     const isFailed = 'failed' in result
@@ -87,7 +91,14 @@ export async function runGate(
     if (isFailed || result.exitCode !== 0) break
   }
 
-  const report = gateReport({ which, round: job.round, runs, protectedHits: hits, testFiles: testFilesOf(changed) })
+  const report = gateReport({
+    which,
+    round: job.round,
+    runs,
+    protectedHits: hits,
+    testFiles: testFilesOf(changed),
+    uncommitted: [...uncommitted].sort(),
+  })
   const name = which === 'fast' ? 'checks.md' : 'merge-checks.md'
   await writeJobFile(io, root, job.id, `round-${job.round}/${name}`, report.markdown)
 

@@ -3,6 +3,8 @@
 
 const MAX_TAIL = 4_000
 const MAX_TEST_FILES = 50
+const MAX_UNCOMMITTED = 50
+const MAX_NAME = 200
 const TEST_FOLDERS = ['test', 'tests', '__tests__', 'spec']
 const TEST_NAME = /\.(test|spec)\.[a-z]+$/
 const SETTINGS_NAMES = [
@@ -59,6 +61,18 @@ export function tailOf(text: string): string {
     .replace(/```/g, "'''")
 }
 
+// A file name as it is written in the report. The name comes from the job's
+// branch, so it is text an agent chose: it stays on one line, cannot close the
+// code it is shown as, and cannot turn the text around it.
+export function nameOf(file: string): string {
+  return file
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '?')
+    .replace(/`/g, "'")
+    .slice(0, MAX_NAME)
+}
+
+const listed = (file: string) => '- `' + nameOf(file) + '`'
+
 const whyOf = (run: CheckRun): string | null => {
   if (run.failed === 'timeout') return `${run.line} timed out`
   if (run.failed === 'not-found') return `${run.line} was not found`
@@ -72,12 +86,18 @@ export function gateReport(g: {
   runs: CheckRun[]
   protectedHits: string[]
   testFiles: string[]
+  // Files of the worktree that are not committed: the gate judges the branch,
+  // so it runs nothing while the folder holds more than the branch.
+  uncommitted: string[]
 }): { pass: boolean; why: string | null; markdown: string } {
   const firstFailure = g.runs.map(whyOf).find(why => why !== null) ?? null
-  const why =
+  const blocked =
     g.protectedHits.length > 0
-      ? `protected path: ${g.protectedHits[0]}`
-      : (firstFailure ?? (g.runs.length === 0 ? 'no command ran' : null))
+      ? `protected path: ${nameOf(g.protectedHits[0] ?? '')}`
+      : g.uncommitted.length > 0
+        ? `files not committed: ${g.uncommitted.length}`
+        : null
+  const why = blocked ?? firstFailure ?? (g.runs.length === 0 ? 'no command ran' : null)
   const pass = why === null
   const seconds = (ms: number) => `${Math.round(ms / 1000)} s`
   const ended = (run: CheckRun) => (run.exitCode === null ? (run.failed ?? 'failed') : `exit ${run.exitCode}`)
@@ -86,7 +106,8 @@ export function gateReport(g: {
     '## Summary',
     `- The ${g.which} gate of round ${g.round} ${pass ? 'passed' : `failed: ${why}`}.`,
     `- Commands run: ${g.runs.length === 0 ? 'none' : g.runs.map(run => run.line).join('; ')}.`,
-    `- Protected paths changed: ${g.protectedHits.length === 0 ? 'none' : g.protectedHits.join(', ')}.`,
+    `- Protected paths changed: ${g.protectedHits.length === 0 ? 'none' : g.protectedHits.map(nameOf).join(', ')}.`,
+    `- Files not committed: ${g.uncommitted.length === 0 ? 'none' : g.uncommitted.length}.`,
     `- Test and settings files changed: ${g.testFiles.length}.`,
     '',
   ]
@@ -94,7 +115,10 @@ export function gateReport(g: {
     lines.push(`## ${run.line} (${ended(run)}, ${seconds(run.ms)})`, '```text', tailOf(run.tail), '```', '')
   }
   if (g.testFiles.length > 0) {
-    lines.push('## Test and settings files changed', ...g.testFiles.map(file => `- ${file}`), '')
+    lines.push('## Test and settings files changed', ...g.testFiles.map(listed), '')
+  }
+  if (g.uncommitted.length > 0) {
+    lines.push('## Files not committed', ...g.uncommitted.slice(0, MAX_UNCOMMITTED).map(listed), '')
   }
 
   return { pass, why, markdown: lines.join('\n') }
