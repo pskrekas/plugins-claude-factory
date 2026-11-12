@@ -15,7 +15,7 @@ import { PANE, TITLE } from './state'
 // Change the tag when PanelModel's fields change: it declines what an earlier
 // version stored, which outlives a reload.
 const panel = atom({ plugin: 'factory', key: 'panel' } as const, emptyModel(), {
-  shape: 'panel-1',
+  shape: 'panel-2',
 })
 
 const MINIMUM = [2, 1, 322] as const
@@ -245,6 +245,17 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {rows.map(row => {
+          if (row.cells) {
+            return (
+              <Text>
+                {row.cells.map((cell, i) => (
+                  <Text bold={cell.tone === 'head'} dimColor={cell.tone === 'dim'} color={COLOR[cell.tone]}>
+                    {(i > 0 ? ' ' : '') + cell.text}
+                  </Text>
+                ))}
+              </Text>
+            )
+          }
           const gap = Math.max(1, columns - row.left.length - row.right.length)
 
           return (

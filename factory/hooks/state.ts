@@ -3,4 +3,4 @@
 // const of the file where `read` or `update` is called.
 export const PANE = 'factory'
 export const TITLE = 'Factory'
-export const SHAPE = 'panel-1'
+export const SHAPE = 'panel-2'

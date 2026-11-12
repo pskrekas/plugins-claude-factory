@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 import { mock } from 'claude-code/testing'
 
 import { emptyModel } from '../core/model'
-import type { PanelModel } from '../core/model'
+import type { FactoryView, JobView, PanelModel } from '../core/model'
 
 export const PANE = {
   plugin: 'factory',
@@ -51,7 +51,7 @@ export const FULL: PanelModel = {
 
 // What `state.get` answers for the panel atom holding `model`.
 export function stored(model: PanelModel) {
-  return { value: { value: { shape: 'panel-1', value: model }, version: 1 } }
+  return { value: { value: { shape: 'panel-2', value: model }, version: 1 } }
 }
 
 type Run = { exitCode: number; stdout: string; stderr?: string }
@@ -312,4 +312,39 @@ export function fakeIo(
   }
 
   return io
+}
+
+const jobView = (over: Partial<JobView> & Pick<JobView, 'itemId' | 'stage'>): JobView => ({
+  title: 'A job',
+  stoppedIn: null,
+  round: 1,
+  maxRounds: 3,
+  sentBack: null,
+  question: null,
+  prNumber: null,
+  minutes: 0,
+  costUsd: null,
+  ...over,
+})
+
+// A factory with two running jobs (one on the gate's loop) and two that wait.
+export const VIEW: FactoryView = {
+  jobs: [
+    jobView({ itemId: 'PROJ-12', stage: 'review', minutes: 9, costUsd: 2.1 }),
+    jobView({
+      itemId: 'PROJ-13',
+      stage: 'build',
+      round: 2,
+      sentBack: { by: 'gate', why: '2 tests failed' },
+      minutes: 14,
+      costUsd: 3.4,
+    }),
+    jobView({ itemId: 'PROJ-14', stage: 'needs-info', stoppedIn: 'intake', question: 'Which default font?' }),
+    jobView({ itemId: 'PROJ-10', stage: 'ready', prNumber: 51 }),
+  ],
+  more: 0,
+  queue: 4,
+  slots: 2,
+  today: { done: 3, minutes: 41, costUsd: 9.8, firstRound: 2, finished: 3 },
+  note: null,
 }

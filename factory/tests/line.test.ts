@@ -1,0 +1,151 @@
+import { expect, test } from 'claude-code/testing'
+
+import { rowsOf } from '../core/layout'
+import type { Row } from '../core/layout'
+import { STATIONS, countsOf, factoryRows, jobRows, lineRows } from '../core/line'
+import type { FactoryView } from '../core/model'
+import { FULL, VIEW } from './kit'
+
+const textOf = (row: Row) => (row.cells ? row.cells.map(cell => cell.text).join(' ') : row.left)
+const widthOf = (row: Row) =>
+  row.cells ? textOf(row).length : row.left.length + (row.right ? 1 + row.right.length : 0)
+const EMPTY: FactoryView = {
+  jobs: [],
+  more: 0,
+  queue: null,
+  slots: 2,
+  today: { done: 0, minutes: 0, costUsd: null, firstRound: 0, finished: 0 },
+  note: null,
+}
+
+test('the stations and their counts', async () => {
+  expect(STATIONS).toEqual(['Queue', 'Intake', 'Spec', 'Build', 'Gate', 'Review', 'Approve', 'You'])
+  expect(countsOf(VIEW)).toEqual([4, 0, 0, 1, 0, 1, 0, 2])
+  expect(countsOf(EMPTY)).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
+})
+
+test('the wide line: stations, counts under them, the loops', async () => {
+  const rows = lineRows(VIEW, 80)
+  expect(rows.map(textOf)).toEqual([
+    ' Queue -> Intake -> Spec -> Build -> Gate -> Review -> Approve -> You',
+    '   4        0        0        1       0        1          0        2',
+    '                              ^       │        │',
+    '                              ├─fail──┘        │',
+    '                              └─── changes ────┘',
+  ])
+  expect(rows[0]?.tone).toBe('head')
+  expect(rows[1]?.cells?.at(-1)).toEqual({ text: '       2', tone: 'bad' })
+  // PROJ-13 is back at Build from the gate: the gate's loop is lit, the reviewers' is not.
+  expect(rows.slice(2).map(row => row.tone)).toEqual(['warn', 'warn', 'dim'])
+})
+
+test('the loops light up only while a job is on them', async () => {
+  const calm = { ...VIEW, jobs: VIEW.jobs.map(job => ({ ...job, sentBack: null })) }
+  expect(lineRows(calm, 80).slice(2).map(row => row.tone)).toEqual(['dim', 'dim', 'dim'])
+  const review = {
+    ...VIEW,
+    jobs: VIEW.jobs.map(job => (job.sentBack ? { ...job, sentBack: { by: 'review' as const, why: 'x' } } : job)),
+  }
+  expect(lineRows(review, 80).slice(2).map(row => row.tone)).toEqual(['warn', 'warn', 'warn'])
+  expect(lineRows({ ...EMPTY, queue: 0 }, 80)[1]?.cells?.at(-1)?.tone).toBe('dim')
+})
+
+test('the short line', async () => {
+  expect(lineRows(VIEW, 40).map(textOf)).toEqual(['Q4 I0 S0 B1 G0 R1 A0 You2', '↺ gate'])
+  expect(lineRows(VIEW, 40)[1]?.tone).toBe('warn')
+  expect(lineRows({ ...VIEW, jobs: [] }, 40).map(textOf)).toEqual(['Q4 I0 S0 B0 G0 R0 A0 You0'])
+  expect(lineRows(VIEW, 24).map(textOf)[0]).toBe('Q4 I0 S0 B1 G0 R1 A0 Y2')
+})
+
+test('a job row: one cell per station, then round, sender, time and cost', async () => {
+  const rows = jobRows(VIEW.jobs[1]!, 80)
+  expect(rows[0]?.cells?.map(cell => cell.text.trim())).toEqual(['PROJ-13', 'done', 'done', 'now', 'fail', '-', '-'])
+  expect(rows[0]?.cells?.map(cell => cell.tone)).toEqual(['plain', 'good', 'good', 'head', 'warn', 'dim', 'dim'])
+  expect(rows[1]?.left).toBe('↺ round 2 of 3 · gate sent it back: 2 tests failed · 14 m · $3.40')
+
+  const first = jobRows(VIEW.jobs[0]!, 80)
+  expect(first[0]?.cells?.map(cell => cell.text.trim())).toEqual(['PROJ-12', 'done', 'done', 'done', 'done', 'now', '-'])
+  expect(first[1]?.left).toBe('round 1 of 3 · 9 m · $2.10')
+  expect(jobRows({ ...VIEW.jobs[0]!, costUsd: null }, 80)[1]?.left).toBe('round 1 of 3 · 9 m · cost unknown')
+})
+
+test('a job row when the reviewers sent it back, and when it waits', async () => {
+  const changes = { ...VIEW.jobs[1]!, sentBack: { by: 'review' as const, why: 'code: one gap' } }
+  expect(jobRows(changes, 80)[0]?.cells?.map(cell => cell.text.trim())).toEqual([
+    'PROJ-13', 'done', 'done', 'now', '-', 'changes', '-',
+  ])
+  const waits = { ...VIEW.jobs[2]!, stage: 'needs-human' as const, stoppedIn: 'review' as const }
+  expect(jobRows(waits, 80)[0]?.cells?.map(cell => cell.text.trim())).toEqual([
+    'PROJ-14', 'done', 'done', 'done', 'done', 'you', '-',
+  ])
+})
+
+test('narrow job rows use short words, then one plain row', async () => {
+  expect(jobRows(VIEW.jobs[1]!, 50)[0]?.cells?.map(cell => cell.text.trim())).toEqual([
+    'PROJ-13', 'ok', 'ok', 'now', 'fail', '-', '-',
+  ])
+  const narrow = jobRows(VIEW.jobs[1]!, 30)
+  expect(narrow[0]?.cells).toBe(undefined)
+  expect([narrow[0]?.left, narrow[0]?.right]).toEqual(['PROJ-13', 'build'])
+})
+
+test('the whole section, in order', async () => {
+  const rows = factoryRows(VIEW, 80)
+  const text = rows.map(row => (row.cells ? textOf(row) : row.left + '|' + row.right))
+  const at = (line: string) => text.indexOf(line)
+  expect(text[0]).toBe('FACTORY|2 of 2 slots busy')
+  expect(at(' Queue -> Intake -> Spec -> Build -> Gate -> Review -> Approve -> You|')).toBe(1)
+  expect(at('NEEDS YOU (2)|')).toBeGreaterThan(at('round 1 of 3 · 9 m · $2.10|'))
+  expect(at('PROJ-14  Which default font?|')).toBe(at('NEEDS YOU (2)|') + 1)
+  expect(at('PROJ-10  PR 51 is ready. You merge.|')).toBe(at('NEEDS YOU (2)|') + 2)
+  expect(at('QUEUE  4 items with the mark|')).toBe(at('NEEDS YOU (2)|') + 3)
+  expect(at('TODAY  3 done · 41 m · $9.80 · 2 of 3 passed in round 1|')).toBe(text.length - 1)
+  // A waiting job has no row of cells.
+  expect(text.some(line => line.startsWith('PROJ-14 ') && !line.includes('Which'))).toBe(false)
+})
+
+test('small cases of the section', async () => {
+  expect(factoryRows(EMPTY, 80)).toEqual([])
+  const queued = factoryRows({ ...EMPTY, queue: 1 }, 80).map(row => row.left)
+  expect(queued).toContain('QUEUE  1 item with the mark')
+  expect(queued).not.toContain('NEEDS YOU (0)')
+  const noted = factoryRows({ ...EMPTY, note: '2 job files skipped', more: 3 }, 80).map(row => row.left)
+  expect(noted).toContain('+ 3 more')
+  expect(noted.at(-1)).toBe('2 job files skipped')
+  const unpriced = { ...EMPTY, today: { done: 0, minutes: 5, costUsd: null, firstRound: 0, finished: 1 } }
+  expect(factoryRows(unpriced, 80).at(-1)?.left).toBe('TODAY  0 done · 5 m · cost unknown')
+})
+
+test('no row of the section is wider than the pane, at 24 to 120 columns', async () => {
+  for (let columns = 24; columns <= 120; columns++) {
+    for (const row of factoryRows(VIEW, columns)) expect(widthOf(row)).toBeLessThanOrEqual(columns)
+  }
+})
+
+test('hostile text in a job is cleaned and cut', async () => {
+  const bad = '\u001b[2J' + 'x'.repeat(5000) + '‮'
+  const view = {
+    ...VIEW,
+    jobs: VIEW.jobs.map(job => ({
+      ...job,
+      itemId: 'P\u001bROJ',
+      title: bad,
+      question: job.question === null ? null : bad,
+      sentBack: job.sentBack === null ? null : { ...job.sentBack, why: bad },
+    })),
+  }
+  for (const columns of [24, 40, 60, 80]) {
+    for (const row of factoryRows(view, columns)) {
+      expect(widthOf(row)).toBeLessThanOrEqual(columns)
+      expect(/[\p{Cc}\p{Cf}]/u.test(textOf(row) + row.right)).toBe(false)
+    }
+  }
+})
+
+test('the section sits after TASK in the pane', async () => {
+  const heads = rowsOf({ ...FULL, factory: VIEW }, 80, 5000)
+    .filter(row => row.tone === 'head' && !row.cells)
+    .map(row => row.left)
+  expect(heads.slice(0, 3)).toEqual(['TASK', 'FACTORY', ' Queue -> Intake -> Spec -> Build -> Gate -> Review -> Approve -> You'])
+  expect(rowsOf(FULL, 80, 5000).map(row => row.left)).not.toContain('FACTORY')
+})
