@@ -316,12 +316,16 @@ export function fakeIo(
     reads: [] as string[],
     ran: [] as string[],
     stdins: [] as (string | undefined)[],
-    // Where each command ran.
+    // Where each command ran, with which time limit and which environment.
     cwds: [] as (string | undefined)[],
+    timeouts: [] as (number | undefined)[],
+    envs: [] as (Record<string, string> | undefined)[],
     // A program whose next run fails, to test what a failure leaves behind.
     failNext: null as string | null,
     // Answers for commands the fake does not act out itself (git, gh).
-    answer: null as ((argv: string[]) => { exitCode: number; stdout: string; stderr?: string } | undefined) | null,
+    answer: null as
+      | ((argv: string[]) => { exitCode: number; stdout: string; stderr?: string; isCut?: boolean } | undefined)
+      | null,
     now: async () => io.time,
     root: async () => '/r',
     remote: async () => null,
@@ -360,6 +364,8 @@ export function fakeIo(
       io.ran.push(argv.join(' '))
       io.stdins.push(init?.stdin)
       io.cwds.push(init?.cwd)
+      io.timeouts.push(init?.timeoutMs)
+      io.envs.push(init?.env)
       const done = (ok: boolean) => ({ exitCode: ok ? 0 : 1, stdout: '', stderr: '' })
       if (io.failNext === argv[0]) {
         io.failNext = null
@@ -367,7 +373,9 @@ export function fakeIo(
         return done(false)
       }
       const given = io.answer?.(argv)
-      if (given !== undefined) return { exitCode: given.exitCode, stdout: given.stdout, stderr: given.stderr ?? '' }
+      if (given !== undefined) {
+        return { exitCode: given.exitCode, stdout: given.stdout, stderr: given.stderr ?? '', ...(given.isCut ? { isCut: true } : {}) }
+      }
       const args = argv.filter(arg => arg !== '-p' && arg !== '-f')
       const [program, a, b] = args
       // mkdir makes a folder only if nothing is there: it is the atomic step of the lock.

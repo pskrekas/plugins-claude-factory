@@ -231,6 +231,15 @@ test('a job with no rounds left stops at the gate and resumes in build, as a new
   expect(() => stop(failed, { question: 'q', asker: 'limit', resumeAt: 'ready' }, 9)).toThrow(IllegalMove)
 })
 
+test('a limit that stops a job in the middle of a round does not start a new round', async () => {
+  const again = move(walk(['spec', 'build', 'gate']), 'build', 'checks failed', 5, { sentBack: { by: 'gate', why: 'x' } })
+  expect(again.round).toBe(2)
+  const stopped = stop(again, { question: 'cost limit for the job', asker: 'limit' }, 9)
+  const back = resume(grant(stopped, { usd: 10 }, 10), 'the person said go on', 11)
+  // Still round 2: the gate has not judged it again.
+  expect([back.stage, back.round, back.sentBack?.by]).toEqual(['build', 2, 'gate'])
+})
+
 test('intake asks the author; resume goes back to intake', async () => {
   const asked = stop(job(), { question: 'Which font?', asker: 'intake' }, 2)
   expect([asked.stage, asked.stoppedIn, asked.asker]).toEqual(['needs-info', 'intake', 'intake'])

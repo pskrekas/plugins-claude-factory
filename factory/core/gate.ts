@@ -17,10 +17,11 @@ const SETTINGS_NAMES = [
   /^tsconfig.*\.json$/,
 ]
 
-// A changed file is protected when it is a protected path, or under one that ends with `/`.
+// A changed file is protected when it is a protected path, or under one (a
+// folder, written with or without the `/` at its end).
 export function protectedHits(changed: string[], protectedPaths: string[]): string[] {
   const isProtected = (file: string) =>
-    protectedPaths.some(path => file === path || (path.endsWith('/') && file.startsWith(path)))
+    protectedPaths.some(path => file === path || file.startsWith(path.endsWith('/') ? path : path + '/'))
 
   return changed.filter(isProtected).sort()
 }
@@ -49,14 +50,16 @@ export type CheckRun = {
   exitCode: number | null
   failed: 'timeout' | 'not-found' | 'other' | null
   tail: string
+  // The engine kept only the start of what the command printed.
+  isCut: boolean
   ms: number
 }
 
 // The end of a command's output: its last characters, with nothing in it that
 // can move a terminal's cursor or close the block it is shown in.
-export function tailOf(text: string): string {
+export function tailOf(text: string, max = MAX_TAIL): string {
   return text
-    .slice(-MAX_TAIL)
+    .slice(-max)
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
     .replace(/```/g, "'''")
 }
@@ -73,6 +76,15 @@ export function nameOf(file: string): string {
 
 const listed = (file: string) => '- `' + nameOf(file) + '`'
 
+// The end of what a command printed on both streams. Each gets half the room
+// when both wrote, so a long error stream does not push the output off.
+export function outputTail(stdout: string, stderr: string): string {
+  if (stderr === '') return tailOf(stdout)
+  if (stdout === '') return tailOf(stderr)
+
+  return `${tailOf(stdout, MAX_TAIL / 2)}\n[stderr]\n${tailOf(stderr, MAX_TAIL / 2)}`
+}
+
 const whyOf = (run: CheckRun): string | null => {
   if (run.failed === 'timeout') return `${run.line} timed out`
   if (run.failed === 'not-found') return `${run.line} was not found`
@@ -86,17 +98,13 @@ export function gateReport(g: {
   runs: CheckRun[]
   protectedHits: string[]
   testFiles: string[]
-  // Files of the worktree that are not committed: the gate judges the branch,
-  // so it runs nothing while the folder holds more than the branch.
+  // Files of the builder's folder that are not committed. The gate judges the
+  // branch, so they are not checked; the report names them, because they are
+  // not in the pull request either.
   uncommitted: string[]
 }): { pass: boolean; why: string | null; markdown: string } {
   const firstFailure = g.runs.map(whyOf).find(why => why !== null) ?? null
-  const blocked =
-    g.protectedHits.length > 0
-      ? `protected path: ${nameOf(g.protectedHits[0] ?? '')}`
-      : g.uncommitted.length > 0
-        ? `files not committed: ${g.uncommitted.length}`
-        : null
+  const blocked = g.protectedHits.length > 0 ? `protected path: ${nameOf(g.protectedHits[0] ?? '')}` : null
   const why = blocked ?? firstFailure ?? (g.runs.length === 0 ? 'no command ran' : null)
   const pass = why === null
   const seconds = (ms: number) => `${Math.round(ms / 1000)} s`
@@ -107,12 +115,13 @@ export function gateReport(g: {
     `- The ${g.which} gate of round ${g.round} ${pass ? 'passed' : `failed: ${why}`}.`,
     `- Commands run: ${g.runs.length === 0 ? 'none' : g.runs.map(run => run.line).join('; ')}.`,
     `- Protected paths changed: ${g.protectedHits.length === 0 ? 'none' : g.protectedHits.map(nameOf).join(', ')}.`,
-    `- Files not committed: ${g.uncommitted.length === 0 ? 'none' : g.uncommitted.length}.`,
+    `- Files not committed: ${g.uncommitted.length === 0 ? 'none' : `${g.uncommitted.length} (not in the branch: not checked, and not in the pull request)`}.`,
     `- Test and settings files changed: ${g.testFiles.length}.`,
     '',
   ]
   for (const run of g.runs) {
     lines.push(`## ${run.line} (${ended(run)}, ${seconds(run.ms)})`, '```text', tailOf(run.tail), '```', '')
+    if (run.isCut) lines.push('The output was cut: only its first 4 MiB were kept, so its end is missing.', '')
   }
   if (g.testFiles.length > 0) {
     lines.push('## Test and settings files changed', ...g.testFiles.map(listed), '')

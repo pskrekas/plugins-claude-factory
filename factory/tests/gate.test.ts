@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { storeKey } from '../core/consent'
 import { FACTORY_DEFAULTS } from '../core/factory-settings'
-import { gateReport, protectedHits, testFilesOf } from '../core/gate'
+import { gateReport, outputTail, protectedHits, testFilesOf } from '../core/gate'
 import type { CheckRun } from '../core/gate'
 import { newJob } from '../core/job'
 import { stateFolderOf } from '../core/state-path'
@@ -17,6 +17,8 @@ test('which changed files are protected', async () => {
   ])
   expect(protectedHits(['.github-notes.md', 'src/.claude/factory.json', '.github'], protectedPaths)).toEqual([])
   expect(protectedHits(['a'], [])).toEqual([])
+  // A folder is protected with or without the `/` at its end.
+  expect(protectedHits(['deploy/prod.yml', 'deployment.md', 'deploy'], ['deploy'])).toEqual(['deploy', 'deploy/prod.yml'])
 })
 
 test('which changed files are tests or test and build settings', async () => {
@@ -34,7 +36,7 @@ test('which changed files are tests or test and build settings', async () => {
   expect(testFilesOf(Array.from({ length: 80 }, (_, i) => `tests/t${i}.py`)).length).toBe(50)
 })
 
-const run = (line: string, over: Partial<CheckRun> = {}): CheckRun => ({ line, exitCode: 0, failed: null, tail: 'ok', ms: 1200, ...over })
+const run = (line: string, over: Partial<CheckRun> = {}): CheckRun => ({ line, exitCode: 0, failed: null, tail: 'ok', isCut: false, ms: 1200, ...over })
 const report = (runs: CheckRun[], hits: string[] = [], files: string[] = [], uncommitted: string[] = []) =>
   gateReport({ which: 'fast', round: 2, runs, protectedHits: hits, testFiles: files, uncommitted })
 
@@ -89,14 +91,26 @@ test('a file name cannot add a line to the report, close its code, or turn its t
   }
 })
 
-test('files that are not committed fail the gate, after a protected path', async () => {
-  const dirty = report([], [], [], ['scratch.txt', 'src/a.ts'])
-  expect([dirty.pass, dirty.why]).toEqual([false, 'files not committed: 2'])
-  expect(dirty.markdown).toContain('- Files not committed: 2.')
+test('files that are not committed are a note in the report, not a failure', async () => {
+  const dirty = report([run('npm test')], [], [], ['scratch.txt', 'src/a.ts'])
+  expect([dirty.pass, dirty.why]).toEqual([true, null])
+  expect(dirty.markdown).toContain('- Files not committed: 2 (not in the branch: not checked, and not in the pull request).')
   expect(dirty.markdown).toContain('## Files not committed\n- `scratch.txt`\n- `src/a.ts`')
-  expect(report([], ['.github/x.yml'], [], ['.github/x.yml']).why).toBe('protected path: .github/x.yml')
   expect(report([run('npm test')]).markdown).toContain('- Files not committed: none.')
   expect(report([], [], [], Array.from({ length: 80 }, (_, i) => `f${i}`)).markdown.split('\n- `f').length).toBe(51)
+})
+
+test('the end of what a command printed: both streams, and a word when the start was all that was kept', async () => {
+  expect(outputTail('out', '')).toBe('out')
+  expect(outputTail('', 'err')).toBe('err')
+  // A long error stream does not push the output off the report.
+  const both = outputTail('o'.repeat(9000) + 'OUT-END', 'e'.repeat(9000) + 'ERR-END')
+  expect(both).toContain('OUT-END')
+  expect(both.endsWith('ERR-END')).toBe(true)
+  expect(both.length).toBeLessThanOrEqual(4100)
+  const cut = report([run('npm test', { exitCode: 1, isCut: true })]).markdown
+  expect(cut).toContain('The output was cut: only its first 4 MiB were kept, so its end is missing.')
+  expect(report([run('npm test', { exitCode: 1 })]).markdown.includes('The output was cut')).toBe(false)
 })
 
 const SETTINGS = JSON.stringify({ gate: { fast: [['npm', 'run', 'lint'], ['npm', 'test']], full: [['npm', 'run', 'build']] } })
@@ -107,149 +121,131 @@ const WT = `${DIR}/worktrees/${job.id}`
 // The gate's commands run in a fresh copy of the branch's last commit.
 const CLEAN = `${DIR}/gate/${job.id}`
 const SHA = '0123456789abcdef0123456789abcdef01234567'
+const BASE = 'f'.repeat(40)
+const HEAD_CALL = `git rev-parse --verify refs/heads/factory/${job.id}^{commit}`
+const BASE_CALL = 'git rev-parse --verify refs/remotes/origin/main^{commit}'
 
-function gateIo(answers: Record<string, { exitCode: number; stdout?: string; stderr?: string }>, approved = APPROVED) {
+type Answer = { exitCode: number; stdout?: string; stderr?: string; isCut?: boolean }
+// Every git call answers well (one file changed, nothing left to commit) unless the test says otherwise.
+function gateIo(answers: Record<string, Answer>, approved = APPROVED, settings = SETTINGS) {
   const io = fakeIo({ files: { '/r/x': '' } })
   io.store.set(storeKey('/r'), approved)
+  const all: Record<string, Answer> = {
+    ...answers,
+    'git fetch': answers['git fetch'] ?? { exitCode: 0 },
+    [BASE_CALL]: answers[BASE_CALL] ?? { exitCode: 0, stdout: BASE + '\n' },
+    'git show': answers['git show'] ?? { exitCode: 0, stdout: settings },
+    [HEAD_CALL]: answers[HEAD_CALL] ?? { exitCode: 0, stdout: SHA + '\n' },
+    'git diff': answers['git diff'] ?? { exitCode: 0, stdout: 'src/a.ts\0' },
+    'git status': answers['git status'] ?? { exitCode: 0, stdout: '' },
+    'git worktree add': answers['git worktree add'] ?? { exitCode: 0 },
+    'git worktree remove': answers['git worktree remove'] ?? { exitCode: 0 },
+  }
   io.answer = argv => {
     const line = argv.join(' ')
-    if (line.startsWith('git show')) return { exitCode: 0, stdout: SETTINGS }
-    // A worktree with nothing left to commit, unless the test says more.
-    const all: typeof answers = {
-      ...answers,
-      'git status': answers['git status'] ?? { exitCode: 0, stdout: '' },
-      'git rev-parse --verify': answers['git rev-parse --verify'] ?? { exitCode: 0, stdout: SHA + '\n' },
-      'git worktree add': answers['git worktree add'] ?? { exitCode: 0 },
-      'git worktree remove': answers['git worktree remove'] ?? { exitCode: 0 },
-    }
     const key = Object.keys(all).find(start => line.startsWith(start))
     const hit = key === undefined ? undefined : all[key]
 
-    return hit === undefined ? undefined : { exitCode: hit.exitCode, stdout: hit.stdout ?? '', stderr: hit.stderr ?? '' }
+    return hit === undefined
+      ? undefined
+      : { exitCode: hit.exitCode, stdout: hit.stdout ?? '', stderr: hit.stderr ?? '', isCut: hit.isCut }
   }
 
   return io
 }
+const steps = (io: { ran: string[] }) => io.ran.filter(line => /^(git|npm) /.test(line))
+const reportOf = (io: { files: Record<string, string> }, name = 'round-1/checks.md') =>
+  io.files[`${DIR}/jobs/${job.id}/files/${name}`] ?? ''
 
-test('a gate that passes: both commands run in a clean copy of the commit and the report is written', async () => {
-  const io = gateIo({ 'git diff': { exitCode: 0, stdout: 'src/a.ts\0' }, 'npm run lint': { exitCode: 0 }, 'npm test': { exitCode: 0, stdout: '412 passed' } })
+test('a gate that passes: one base commit and one job commit are read, and the commands run in a clean copy', async () => {
+  const io = gateIo({ 'npm run lint': { exitCode: 0 }, 'npm test': { exitCode: 0, stdout: '412 passed' } })
 
-  expect(await runGate(io, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({ pass: true, why: null, needsPerson: false, sha: SHA })
-  const commands = io.ran.filter(line => line.startsWith('npm'))
-  expect(commands).toEqual(['npm run lint', 'npm test'])
-  // They run in the clean copy, never in the folder the builder worked in.
-  expect(io.cwds[io.ran.indexOf('npm run lint')]).toBe(CLEAN)
-  expect(io.cwds[io.ran.indexOf('npm test')]).toBe(CLEAN)
-  expect(io.cwds.includes(WT)).toBe(true)
-  // The commit is the tip of the job's own branch, read in the repo: not the
-  // HEAD of the builder's folder, which can be on another branch or on none.
-  expect(io.cwds[io.ran.findIndex(line => line.startsWith('git rev-parse --verify'))]).toBe('/r')
-  // One commit is read, listed, copied and run; the copy is removed after.
-  const steps = io.ran.filter(line => /^(git|npm) /.test(line) && !line.startsWith('git show') && !line.startsWith('git status'))
-  expect(steps).toEqual([
-    `git rev-parse --verify refs/heads/factory/${job.id}^{commit}`,
-    `git diff --name-only --no-renames -z origin/main...${SHA}`,
+  expect(await runGate(io, '/r', job, 'main', 'fast')).toEqual({ pass: true, why: null, needsPerson: false, sha: SHA })
+  expect(steps(io)).toEqual([
+    'git fetch origin main',
+    BASE_CALL,
+    `git show ${BASE}:.claude/factory.json`,
+    HEAD_CALL,
+    `git diff --name-only --no-renames -z ${BASE}...${SHA}`,
+    'git status --porcelain --no-renames --untracked-files=all -z',
     `git worktree remove --force ${CLEAN}`,
     `git worktree add --detach ${CLEAN} ${SHA}`,
     'npm run lint',
     'npm test',
     `git worktree remove --force ${CLEAN}`,
   ])
-  const text = io.files[`${DIR}/jobs/${job.id}/files/round-1/checks.md`] ?? ''
-  expect(text.startsWith('## Summary\n- The fast gate of round 1 passed.')).toBe(true)
-  expect(text).toContain('412 passed')
+  const at = (start: string) => io.ran.findIndex(line => line.startsWith(start))
+  // The commands run in the clean copy. Only the note about files that are
+  // not committed is read in the builder's folder; the rest is read in the repo.
+  expect([io.cwds[at('npm run lint')], io.cwds[at('npm test')]]).toEqual([CLEAN, CLEAN])
+  expect(io.cwds.filter(cwd => cwd === WT).length).toBe(1)
+  expect(io.cwds[at('git status')]).toBe(WT)
+  expect([io.cwds[at(HEAD_CALL)], io.cwds[at('git diff')], io.cwds[at('git show')]]).toEqual(['/r', '/r', '/r'])
+  // A command has ten minutes.
+  expect(io.timeouts[at('npm test')]).toBe(600_000)
+  expect(reportOf(io).startsWith('## Summary\n- The fast gate of round 1 passed.')).toBe(true)
+  expect(reportOf(io)).toContain('412 passed')
 })
 
-test('the first command that fails stops the gate', async () => {
-  const io = gateIo({ 'git diff': { exitCode: 0, stdout: 'src/a.ts\0' }, 'npm run lint': { exitCode: 2, stderr: 'lint error' }, 'npm test': { exitCode: 0 } })
+test('the first command that fails stops the gate, and the copy is removed', async () => {
+  const io = gateIo({ 'npm run lint': { exitCode: 2, stderr: 'lint error' }, 'npm test': { exitCode: 0 } })
 
-  expect(await runGate(io, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({ pass: false, why: 'npm run lint failed', needsPerson: false, sha: SHA })
+  expect(await runGate(io, '/r', job, 'main', 'fast')).toEqual({ pass: false, why: 'npm run lint failed', needsPerson: false, sha: SHA })
   expect(io.ran.filter(line => line.startsWith('npm'))).toEqual(['npm run lint'])
-  expect(io.files[`${DIR}/jobs/${job.id}/files/round-1/checks.md`]).toContain('lint error')
-  // The copy is removed also after a failure.
-  expect(io.ran.filter(line => /^(git|npm) /.test(line)).at(-1)).toBe(`git worktree remove --force ${CLEAN}`)
+  expect(reportOf(io)).toContain('lint error')
+  expect(steps(io).at(-1)).toBe(`git worktree remove --force ${CLEAN}`)
 })
 
-test('a clean copy that cannot be made, or a commit that cannot be read, runs no command and needs a person', async () => {
-  const noCopy = gateIo({ 'git diff': { exitCode: 0, stdout: 'src/a.ts\0' }, 'git worktree add': { exitCode: 128, stderr: 'fatal: no' }, 'npm': { exitCode: 0 } })
-  expect(await runGate(noCopy, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({
-    pass: false,
-    why: 'the clean copy could not be made',
-    needsPerson: true,
-    sha: null,
-  })
-  expect(noCopy.ran.some(line => line.startsWith('npm'))).toBe(false)
-
-  const noHead = gateIo({ 'git diff': { exitCode: 0, stdout: 'src/a.ts\0' }, 'git rev-parse --verify': { exitCode: 0, stdout: 'HEAD\n' }, 'npm': { exitCode: 0 } })
-  expect(await runGate(noHead, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({
-    pass: false,
-    why: 'the changed files could not be listed',
-    needsPerson: true,
-    sha: null,
-  })
-  expect(noHead.ran.some(line => line.startsWith('npm') || line.startsWith('git diff') || line.startsWith('git worktree'))).toBe(false)
+test('what cannot be read runs no command and needs a person', async () => {
+  const cases: [Record<string, Answer>, string][] = [
+    [{ 'git fetch': { exitCode: 128, stderr: 'no network' } }, 'the base branch could not be fetched'],
+    [{ [BASE_CALL]: { exitCode: 128 } }, 'no branch origin/main'],
+    [{ [HEAD_CALL]: { exitCode: 0, stdout: 'HEAD\n' } }, 'the changed files could not be listed'],
+    [{ 'git diff': { exitCode: 128, stderr: 'bad revision' } }, 'the changed files could not be listed'],
+    [{ 'git worktree add': { exitCode: 128, stderr: 'fatal: no' } }, 'the clean copy could not be made'],
+  ]
+  for (const [answers, why] of cases) {
+    const io = gateIo({ ...answers, 'npm': { exitCode: 0 } })
+    expect(await runGate(io, '/r', job, 'main', 'fast')).toEqual({ pass: false, why, needsPerson: true, sha: null })
+    expect(io.ran.some(line => line.startsWith('npm'))).toBe(false)
+  }
 })
 
 test('a branch that changed a protected path runs no command and needs a person', async () => {
   const io = gateIo({ 'git diff': { exitCode: 0, stdout: 'src/a.ts\0.claude/factory.json\0' }, 'npm': { exitCode: 0 } })
 
-  expect(await runGate(io, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({
+  expect(await runGate(io, '/r', job, 'main', 'fast')).toEqual({
     pass: false,
     why: 'protected path: .claude/factory.json',
     needsPerson: true,
-    sha: SHA,
-  })
-  expect(io.ran.some(line => line.startsWith('npm'))).toBe(false)
-  expect(io.files[`${DIR}/jobs/${job.id}/files/round-1/checks.md`]).toContain('.claude/factory.json')
-})
-
-test('a worktree with files that are not committed runs no command: the gate checks what the branch holds', async () => {
-  const io = gateIo({
-    'git diff': { exitCode: 0, stdout: 'src/a.ts\0' },
-    'git status': { exitCode: 0, stdout: '?? scratch.txt\0 M src/a.ts\0' },
-    'npm': { exitCode: 0 },
-  })
-
-  expect(await runGate(io, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({
-    pass: false,
-    why: 'files not committed: 2',
-    needsPerson: false,
     sha: SHA,
   })
   expect(io.ran.some(line => line.startsWith('npm') || line.startsWith('git worktree'))).toBe(false)
-  expect(io.cwds[io.ran.findIndex(line => line.startsWith('git status'))]).toBe(WT)
-  expect(io.files[`${DIR}/jobs/${job.id}/files/round-1/checks.md`]).toContain('- `scratch.txt`')
+  expect(reportOf(io)).toContain('.claude/factory.json')
 })
 
-test('a protected path that is changed but not committed needs a person', async () => {
-  const io = gateIo({
-    'git diff': { exitCode: 0, stdout: 'src/a.ts\0' },
-    'git status': { exitCode: 0, stdout: ' M .claude/factory.json\0' },
-    'npm': { exitCode: 0 },
-  })
+test("the protected paths are the base branch's, not the caller's", async () => {
+  const settings = JSON.stringify({ ...JSON.parse(SETTINGS), factory: { protectedPaths: ['deploy'] } })
+  const io = gateIo({ 'git diff': { exitCode: 0, stdout: 'deploy/prod.yml\0' }, 'npm': { exitCode: 0 } }, APPROVED, settings)
 
-  expect(await runGate(io, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({
-    pass: false,
-    why: 'protected path: .claude/factory.json',
-    needsPerson: true,
-    sha: SHA,
-  })
-  expect(io.ran.some(line => line.startsWith('npm'))).toBe(false)
+  expect((await runGate(io, '/r', job, 'main', 'fast')).why).toBe('protected path: deploy/prod.yml')
+})
 
-  const blind = gateIo({ 'git diff': { exitCode: 0, stdout: 'src/a.ts\0' }, 'git status': { exitCode: 128 }, 'npm': { exitCode: 0 } })
-  expect(await runGate(blind, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({
-    pass: false,
-    why: 'the changed files could not be listed',
-    needsPerson: true,
-    sha: null,
-  })
-  expect(blind.ran.some(line => line.startsWith('npm'))).toBe(false)
+test('files that are not committed do not stop the gate: they are a note, and the commands never see them', async () => {
+  const io = gateIo({ 'git status': { exitCode: 0, stdout: '?? scratch.txt\0 M .claude/factory.json\0' }, 'npm': { exitCode: 0 } })
+
+  expect(await runGate(io, '/r', job, 'main', 'fast')).toEqual({ pass: true, why: null, needsPerson: false, sha: SHA })
+  expect(reportOf(io)).toContain('- Files not committed: 2 (')
+  expect(reportOf(io)).toContain('- `scratch.txt`')
+  // A status that cannot be read is no reason to stop either.
+  const blind = gateIo({ 'git status': { exitCode: 128 }, 'npm': { exitCode: 0 } })
+  expect((await runGate(blind, '/r', job, 'main', 'fast')).pass).toBe(true)
 })
 
 test('gate commands that are not approved run nothing and need a person', async () => {
-  const io = gateIo({ 'git diff': { exitCode: 0, stdout: '' }, 'npm': { exitCode: 0 } }, ['npm test'])
+  const io = gateIo({ 'npm': { exitCode: 0 } }, ['npm test'])
 
-  expect(await runGate(io, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({
+  expect(await runGate(io, '/r', job, 'main', 'fast')).toEqual({
     pass: false,
     why: 'gate commands are not approved',
     needsPerson: true,
@@ -258,27 +254,21 @@ test('gate commands that are not approved run nothing and need a person', async 
   expect(io.ran.some(line => line.startsWith('npm'))).toBe(false)
 })
 
-test('the full gate writes its own report; a git that cannot list the changes needs a person', async () => {
-  const io = gateIo({ 'git diff': { exitCode: 0, stdout: 'src/a.ts\0' }, 'npm run build': { exitCode: 0 } })
-  expect((await runGate(io, '/r', { ...job, round: 2 }, 'main', FACTORY_DEFAULTS, 'full')).pass).toBe(true)
-  expect(io.files[`${DIR}/jobs/${job.id}/files/round-2/merge-checks.md`]).toContain('The full gate of round 2 passed.')
-
-  const blind = gateIo({ 'git diff': { exitCode: 128, stderr: 'bad revision' } })
-  expect(await runGate(blind, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({
-    pass: false,
-    why: 'the changed files could not be listed',
-    needsPerson: true,
-    sha: null,
-  })
+test('the full gate writes its own report', async () => {
+  const io = gateIo({ 'npm run build': { exitCode: 0 } })
+  expect((await runGate(io, '/r', { ...job, round: 2 }, 'main', 'full')).pass).toBe(true)
+  expect(reportOf(io, 'round-2/merge-checks.md')).toContain('The full gate of round 2 passed.')
 })
 
-test('a command that hangs or cannot start is a failure, not a hang of the job', async () => {
-  const io = gateIo({ 'git diff': { exitCode: 0, stdout: 'src/a.ts\0' } })
+test('a command that cannot start is a failure, and output that was cut says so', async () => {
   // No answer for `npm`: the fake says the program was not found.
-  expect(await runGate(io, '/r', job, 'main', FACTORY_DEFAULTS, 'fast')).toEqual({
+  expect(await runGate(gateIo({}), '/r', job, 'main', 'fast')).toEqual({
     pass: false,
     why: 'npm run lint was not found',
     needsPerson: false,
     sha: SHA,
   })
+  const loud = gateIo({ 'npm run lint': { exitCode: 1, stdout: 'x'.repeat(5000), isCut: true } })
+  await runGate(loud, '/r', job, 'main', 'fast')
+  expect(reportOf(loud)).toContain('The output was cut')
 })

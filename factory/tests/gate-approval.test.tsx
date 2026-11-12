@@ -26,13 +26,16 @@ test('the pane lists the gate commands with their mark, and approving them never
   expect(world.ran.some(line => line.startsWith('npm'))).toBe(false)
 })
 
-// The settings file of the base branch, as `git show origin/main:.claude/factory.json` gives it.
-const onBase = (text: string | null) => (argv: string[]) =>
-  argv.join(' ') === 'git show origin/main:.claude/factory.json'
-    ? text === null
-      ? { exitCode: 128, stdout: '', stderr: 'fatal: path does not exist' }
-      : { exitCode: 0, stdout: text }
-    : undefined
+// The settings file of the base branch: its ref is read by its full name, then
+// the file by that commit's id.
+const BASE = 'f'.repeat(40)
+const onBase = (text: string | null) => (argv: string[]) => {
+  const line = argv.join(' ')
+  if (line === 'git rev-parse --verify refs/remotes/origin/main^{commit}') return { exitCode: 0, stdout: BASE + '\n' }
+  if (line !== `git show ${BASE}:.claude/factory.json`) return undefined
+
+  return text === null ? { exitCode: 128, stdout: '', stderr: 'fatal: path does not exist' } : { exitCode: 0, stdout: text }
+}
 
 function ioWith(base: string | null, approved: string[]) {
   const io = fakeIo({ files: { '/r/x': '' } })
@@ -44,11 +47,16 @@ function ioWith(base: string | null, approved: string[]) {
 
 test("the gate's commands are the base branch's, when they are approved", async () => {
   const io = ioWith(SETTINGS, ['[gate] npm run build', '[gate] npm test', 'x y'])
-  expect(await gateCommands(io, '/r', 'main', 'fast')).toEqual({ ok: true, commands: [['npm', 'test']] })
-  expect(await gateCommands(io, '/r', 'main', 'full')).toEqual({
+  expect(await gateCommands(io, '/r', 'main', 'fast')).toEqual({
     ok: true,
-    commands: [['npm', 'test'], ['npm', 'run', 'build']],
+    commands: [['npm', 'test']],
+    baseSha: BASE,
+    // The protected paths are the base branch's too.
+    protectedPaths: ['.claude/factory.json'],
   })
+  expect(await gateCommands(io, '/r', 'main', 'full')).toEqual(
+    expect.objectContaining({ ok: true, commands: [['npm', 'test'], ['npm', 'run', 'build']] }),
+  )
 })
 
 test('a gate command approved only as a check does not run in the gate', async () => {
@@ -74,6 +82,7 @@ test('why there is no gate', async () => {
     ok: false,
     why: 'settings on main: too large',
   })
+  expect(await gateCommands(ioWith(SETTINGS, []), '/r', 'gone', 'fast')).toEqual({ ok: false, why: 'no branch origin/gone' })
   const bad = ioWith(SETTINGS, [])
   expect(await gateCommands(bad, '/r', '--upload-pack=x', 'fast')).toEqual({ ok: false, why: 'not a branch name' })
   expect(bad.ran).toEqual([])
@@ -84,6 +93,6 @@ test("a job's own settings file cannot change the gate", async () => {
   const io = ioWith(SETTINGS, ['[gate] npm run build', '[gate] npm test', 'x y'])
   io.files['/r/.claude/factory.json'] = JSON.stringify({ gate: { fast: [['true']] } })
 
-  expect(await gateCommands(io, '/r', 'main', 'fast')).toEqual({ ok: true, commands: [['npm', 'test']] })
+  expect(await gateCommands(io, '/r', 'main', 'fast')).toEqual(expect.objectContaining({ ok: true, commands: [['npm', 'test']] }))
   expect(io.reads).not.toContain('/r/.claude/factory.json')
 })

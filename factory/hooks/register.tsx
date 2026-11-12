@@ -160,7 +160,12 @@ export const register: Register = (on, options) => {
 
         return $.process
           .run(argv, { ...init, env })
-          .then(done => ({ exitCode: done.exitCode, stdout: done.stdout, stderr: done.stderr }))
+          .then(done => ({
+            exitCode: done.exitCode,
+            stdout: done.stdout,
+            stderr: done.stderr,
+            ...(done.isStdoutTruncated || done.isStderrTruncated ? { isCut: true } : {}),
+          }))
           .catch(failureOf)
       },
       storeGet: key => $.store.get(key).catch(() => undefined),

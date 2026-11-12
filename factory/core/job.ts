@@ -172,7 +172,10 @@ export function move(
   // (it must say who), or from a stop that was made because no round was left.
   const isSentBack = to === 'build' && LOOPS_FROM.includes(from)
   if (isSentBack && !set.sentBack) throw new IllegalMove(`${from} -> build needs who sent it back`)
-  const isLoop = isSentBack || (to === 'build' && isAsking && job.sentBack !== null)
+  // A stop that was made in Build itself (a cost or time limit in the middle
+  // of a round) goes on in the same round: no station judged it again.
+  const stoppedFrom = job.history.at(-1)?.from
+  const isLoop = isSentBack || (to === 'build' && isAsking && job.sentBack !== null && stoppedFrom !== 'build')
   if (ASKS.includes(to) && !set.question) throw new IllegalMove(`${from} -> ${to} needs a question`)
 
   // Only what `set` really gives is applied, and its text is cut: a job that

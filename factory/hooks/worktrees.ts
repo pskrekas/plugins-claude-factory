@@ -14,11 +14,15 @@ type Done = { ok: boolean; why?: string }
 
 const passed = (result: RunResult) => !('failed' in result) && result.exitCode === 0
 
+// Git reads every object as it is: a replacement (`git replace`) that a job
+// made could show the gate one tree while a push sends another.
+const GIT_ENV = { GIT_NO_REPLACE_OBJECTS: '1' }
+
 // Runs one call in `cwd`. Null when the call itself breaks a rule: nothing ran.
-async function git(io: Io, cwd: string, call: GitCall): Promise<RunResult | null> {
+export async function git(io: Io, cwd: string, call: GitCall): Promise<RunResult | null> {
   const argv = gitArgs(call)
 
-  return argv === null ? null : io.run(argv, { cwd, timeoutMs: GIT_TIMEOUT_MS })
+  return argv === null ? null : io.run(argv, { cwd, timeoutMs: GIT_TIMEOUT_MS, env: GIT_ENV })
 }
 
 const done = (result: RunResult | null): Done =>
@@ -73,17 +77,25 @@ export async function syncBase(io: Io, root: string, jobId: string, base: string
   return { ok: false, why: `conflict with ${base}` }
 }
 
-// The files the job's branch changed against the base, or null when git cannot
-// say. With `at`, the files of that one commit and not of wherever HEAD is now.
-export async function changedFiles(
-  io: Io,
-  root: string,
-  jobId: string,
-  base: string,
-  at?: string,
-): Promise<string[] | null> {
-  const path = await worktreePath(io, root, jobId)
-  const result = path === null ? null : await git(io, path, { do: 'changed', base, at })
+// Brings the base branch's ref up to date with the remote.
+export async function fetchBase(io: Io, root: string, base: string): Promise<Done> {
+  return done(await git(io, root, { do: 'fetch', base }))
+}
+
+// The last commit of the base branch as the remote has it, by its full id.
+export async function baseHeadOf(io: Io, root: string, base: string): Promise<string | null> {
+  const result = await git(io, root, { do: 'base-head', base })
+  if (result === null || 'failed' in result || result.exitCode !== 0) return null
+  const sha = result.stdout.trim()
+
+  return isCommitId(sha) ? sha : null
+}
+
+// The files that commit `to` changed since it left the line of commit `from`,
+// or null when git cannot say. Asked in the repo, by commit id: nothing a
+// job's folder holds takes part.
+export async function changedFiles(io: Io, root: string, from: string, to: string): Promise<string[] | null> {
+  const result = await git(io, root, { do: 'changed', from, to })
   if (result === null || 'failed' in result || result.exitCode !== 0) return null
 
   return result.stdout.split('\0').filter(name => name !== '')

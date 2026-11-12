@@ -16,7 +16,9 @@ export type GitCall =
   | { do: 'push'; jobId: string }
   | { do: 'merge-base'; base: string }
   | { do: 'abort-merge' }
-  | { do: 'changed'; base: string; at?: string }
+  | { do: 'changed'; from: string; to: string }
+  | { do: 'base-head'; base: string }
+  | { do: 'show-settings'; sha: string }
   | { do: 'uncommitted' }
   | { do: 'add-clean'; path: string; sha: string }
   | { do: 'head'; jobId: string }
@@ -38,13 +40,15 @@ export function gitArgs(call: GitCall): string[] | null {
   if ('jobId' in call && !isJobId(call.jobId)) return null
   if ('path' in call && !isPlainPath(call.path)) return null
   if ('sha' in call && !isCommitId(call.sha)) return null
-  if ('at' in call && call.at !== undefined && !isCommitId(call.at)) return null
+  if ('from' in call && !(isCommitId(call.from) && isCommitId(call.to))) return null
 
   switch (call.do) {
     case 'fetch':
       return ['git', 'fetch', 'origin', call.base]
     case 'add':
-      return ['git', 'worktree', 'add', call.path, '-b', branchOf(call.jobId), `origin/${call.base}`]
+      // The base by the full name of its ref: a branch or a tag that a job
+      // names `origin/<base>` is never read in its place.
+      return ['git', 'worktree', 'add', call.path, '-b', branchOf(call.jobId), `refs/remotes/origin/${call.base}`]
     case 'remove':
       // The worktree's own flag: the folder of a job that ended goes with what it holds.
       return ['git', 'worktree', 'remove', '--force', call.path]
@@ -53,13 +57,19 @@ export function gitArgs(call: GitCall): string[] | null {
       return ['git', 'push', '-u', 'origin', `${branchOf(call.jobId)}:${branchOf(call.jobId)}`]
     case 'merge-base':
       // Run in the job's worktree: it brings the base into the job's branch.
-      return ['git', 'merge', '--no-edit', `origin/${call.base}`]
+      return ['git', 'merge', '--no-edit', `refs/remotes/origin/${call.base}`]
     case 'abort-merge':
       return ['git', 'merge', '--abort']
     case 'changed':
       // No rename detection: a moved file is listed under both its names, so
       // a protected path that was moved away is still seen.
-      return ['git', 'diff', '--name-only', '--no-renames', '-z', `origin/${call.base}...${call.at ?? 'HEAD'}`]
+      // Both ends are commit ids: what is listed is what was read, whatever a
+      // ref points at a moment later.
+      return ['git', 'diff', '--name-only', '--no-renames', '-z', `${call.from}...${call.to}`]
+    case 'base-head':
+      return ['git', 'rev-parse', '--verify', `refs/remotes/origin/${call.base}^{commit}`]
+    case 'show-settings':
+      return ['git', 'show', `${call.sha}:.claude/factory.json`]
     case 'add-clean':
       // A second working tree at one commit, on no branch: what the gate runs in.
       return ['git', 'worktree', 'add', '--detach', call.path, call.sha]
