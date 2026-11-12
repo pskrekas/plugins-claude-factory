@@ -1,6 +1,5 @@
 // `/factory run`: what must be true before the line runs, then the run file
 // and the first call that advances the jobs.
-import { hasMark } from '../adapters/github-issues'
 import { endWork, isActive, isFinished } from '../core/job'
 import type { Spawn } from './agent-events'
 import { context } from './context'
@@ -43,7 +42,7 @@ async function clearPlan(io: Io, root: string, now: number): Promise<void> {
 // Intake said of each item.
 export async function startPlan(io: Io, spawn: Spawn, ready: { hasAgentTypes: boolean }): Promise<string> {
   const ctx = await context(io)
-  if (ctx.tracker === null || ctx.mark === null) return '/factory plan needs a GitHub tracker in the settings.'
+  if (ctx.tracker === null || ctx.mark === null) return '/factory plan needs a tracker in the settings (github or azure-boards).'
   if (!ready.hasAgentTypes) return 'The agent types of the line are not registered. Start a new session.'
   // A run that is going is left alone. A run file with no live lock is a run that died.
   const lock = await lockInfo(io, ctx.root, ctx.now)
@@ -66,7 +65,7 @@ export async function startPlan(io: Io, spawn: Spawn, ready: { hasAgentTypes: bo
 export async function startRun(io: Io, spawn: Spawn, only: string | null, ready: { hasAgentTypes: boolean }): Promise<string> {
   if (only !== null && !ITEM_ID.test(only)) return 'Not an item id: /factory run [id]'
   const ctx = await context(io)
-  if (ctx.tracker === null || ctx.mark === null) return '/factory run needs a GitHub tracker in the settings.'
+  if (ctx.tracker === null || ctx.mark === null) return '/factory run needs a tracker in the settings (github or azure-boards).'
   if (!ready.hasAgentTypes) return 'The agent types of the line are not registered. Start a new session.'
   // No gate, no factory (design 8.2): the fast checks must be there and approved.
   const gate = await gateCommands(io, ctx.root, ctx.base, 'fast')
@@ -82,7 +81,7 @@ export async function startRun(io: Io, spawn: Spawn, only: string | null, ready:
     if (!docker.ok) return `No container, no factory: ${docker.why.replace(/\.$/, '')}.`
   }
   // Only a marked item runs, also when it is named: the mark is the person's own word (design 8.1).
-  if (only !== null && !(await hasMark(ctx.run, only, ctx.mark))) return `${clean(only)} does not carry the mark "${ctx.mark}". Only a marked item runs.`
+  if (only !== null && !(await ctx.tracker.hasMark(only))) return `${clean(only)} does not carry the mark "${ctx.mark}". Only a marked item runs.`
   // A session that already runs the line may have a builder's command or a gate in a container now.
   const wasMine = (await lockInfo(io, ctx.root, ctx.now)).state === 'mine'
   const lock = await takeLock(io, ctx.root, ctx.now)

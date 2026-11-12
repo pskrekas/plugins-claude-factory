@@ -593,7 +593,7 @@ const READY = { hasAgentTypes: true }
 
 test('/factory run: what it needs before it starts', async () => {
   const noTracker = lineWorld({ settings: { tracker: undefined } })
-  expect(await startRun(noTracker.io, noTracker.spawn, null, READY)).toBe('/factory run needs a GitHub tracker in the settings.')
+  expect(await startRun(noTracker.io, noTracker.spawn, null, READY)).toBe('/factory run needs a tracker in the settings (github or azure-boards).')
   const noGate = lineWorld()
   noGate.io.store.set(storeKey('/r/.git'), [])
   expect(await startRun(noGate.io, noGate.spawn, null, READY)).toBe('No gate, no factory: gate commands are not approved. Approve them with /factory approve.')
@@ -772,7 +772,7 @@ test('a risk above the limit is told in the plan; a second plan replaces the fir
 
 test('/factory plan needs a tracker and the agent types', async () => {
   const noTracker = lineWorld({ settings: { tracker: undefined } })
-  expect(await startPlan(noTracker.io, noTracker.spawn, READY)).toBe('/factory plan needs a GitHub tracker in the settings.')
+  expect(await startPlan(noTracker.io, noTracker.spawn, READY)).toBe('/factory plan needs a tracker in the settings (github or azure-boards).')
   const noTypes = lineWorld()
   expect(await startPlan(noTypes.io, noTypes.spawn, { hasAgentTypes: false })).toBe('The agent types of the line are not registered. Start a new session.')
 })

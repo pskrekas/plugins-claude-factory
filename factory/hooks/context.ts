@@ -1,6 +1,8 @@
 // What a command or the line needs to act: the repo, the settings, and the
 // tracker when there is one.
 import { githubIssues, inRepo } from '../adapters/github-issues'
+import { githubPrs } from '../adapters/github-pr'
+import type { PrHost } from '../adapters/pr-host'
 import type { Run, Tracker } from '../adapters/tracker'
 import type { FactorySettings } from '../core/factory-settings'
 import { prHostOf, repoOf } from '../core/task'
@@ -16,10 +18,12 @@ export type Ctx = {
   now: number
   f: FactorySettings
   run: Run
-  // The tracker and the pull request host are GitHub, or there is none here.
+  // The tracker and the pull request host of this repository, each chosen by
+  // itself; null when the settings or the remote name none the plugin knows.
   tracker: Tracker | null
+  host: PrHost | null
   mark: string | null
-  // The login of the person who runs the line, on the tracker's host; null when it is not known.
+  // The person who runs the line, as the tracker names an author; null when it is not known.
   me: () => Promise<string | null>
 }
 
@@ -31,28 +35,20 @@ export async function context(io: Io): Promise<Ctx> {
   const repo = repoOf(remote)
   const plain: Run = (argv, stdin) => io.run(argv, { cwd: root, timeoutMs: GH_TIMEOUT_MS, stdin })
   const run = repo === null ? plain : inRepo(plain, repo)
-  const tracker = settings.tracker
-  const isGitHub = tracker?.kind === 'github' && prHostOf(remote, settings.prHost) === 'github' && repo !== null
-
-  let login: string | null | undefined
-  const me = async () => {
-    if (login === undefined) {
-      const asked = await plain(['gh', 'api', 'user', '--jq', '.login'])
-      const name = 'failed' in asked || asked.exitCode !== 0 ? '' : asked.stdout.trim()
-      login = /^[A-Za-z0-9-]{1,100}$/.test(name) ? name : null
-    }
-
-    return login
-  }
+  const kind = settings.tracker?.kind
+  const tracker = kind === 'github' && repo !== null && settings.tracker ? githubIssues(run, settings.tracker.mark, settings.factory.forbiddenCommentWords) : null
+  const host = prHostOf(remote, settings.prHost) === 'github' && repo !== null ? githubPrs(run) : null
 
   return {
     root,
-    me,
+    me: async () => (tracker === null ? null : tracker.me()),
     base: settings.baseBranch,
     now: await io.now(),
     f: settings.factory,
     run,
-    tracker: isGitHub && tracker ? githubIssues(run, tracker.mark, settings.factory.forbiddenCommentWords) : null,
-    mark: isGitHub && tracker ? tracker.mark : null,
+    // As before this contract: with GitHub Issues the pull request host is GitHub too.
+    tracker: host === null ? null : tracker,
+    host,
+    mark: host !== null && tracker !== null && settings.tracker ? settings.tracker.mark : null,
   }
 }

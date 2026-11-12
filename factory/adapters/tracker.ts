@@ -1,5 +1,7 @@
-// The contract every tracker adapter offers (design 7.1). The core uses only
-// these five actions. This phase implements `read` for GitHub Issues.
+// The contract every tracker adapter offers (design 7.1): the five actions,
+// and the three things the line asks beside them (the queue with the items
+// the tracker says are in progress, whether an item carries the mark, who
+// runs the line). The line uses only these.
 import type { RunResult } from '../core/run'
 
 export type TrackerState = 'in-progress' | 'needs-human' | 'done' | 'rejected'
@@ -19,8 +21,20 @@ export type TrackerItem = {
 // into an argument.
 export type Run = (argv: string[], stdin?: string) => Promise<RunResult>
 
+export type Listed = Pick<TrackerItem, 'id' | 'title' | 'state'>
+
 export interface Tracker {
-  list(mark: string): Promise<Pick<TrackerItem, 'id' | 'title' | 'state'>[]>
+  kind: 'github' | 'azure-boards'
+  // The queue (`items`: marked, open, not taken by the line) and the items
+  // the tracker says are in progress (`claimed`). `items` is null when the
+  // list could not be read; `result` is the command's result, for a note.
+  scan(): Promise<{ items: Listed[] | null; claimed: Listed[]; result: RunResult | null }>
+  // The queue; empty when it could not be read.
+  list(mark: string): Promise<Listed[]>
+  // True when the item carries the mark. Only a marked item runs.
+  hasMark(id: string): Promise<boolean>
+  // The person who runs the line, as the tracker names an author; null when it is not known.
+  me(): Promise<string | null>
   read(id: string): Promise<TrackerItem | null>
   comment(id: string, markdown: string): Promise<void>
   setState(id: string, state: TrackerState): Promise<void>

@@ -1,7 +1,5 @@
 // The person's commands on the line and on a job: stop, answer, reject.
 // Each takes the lock first, so two sessions never change one job.
-import { closePr, readPrByNumber } from '../adapters/github-pr'
-import { listIssues } from '../adapters/github-issues'
 import { failureText } from '../core/comment'
 import type { FactorySettings } from '../core/factory-settings'
 import { grant, isFinished, move, reject, resume } from '../core/job'
@@ -144,13 +142,16 @@ async function firstFailure(steps: Step[]): Promise<string | null> {
   return null
 }
 
+// The command an adapter of this kind runs, for a failure's text.
+const toolOf = (kind: 'github' | 'azure-boards' | 'azure-repos'): string => (kind === 'github' ? 'gh' : 'az')
+
 // An item the tracker says is in progress, with no job here (a lost state
 // folder): the person drops it on the tracker. There is nothing here to change.
 async function rejectClaimed(ctx: Ctx, itemId: string, said: string): Promise<string> {
   if (ctx.tracker === null || ctx.mark === null || !ITEM_ID.test(itemId)) return none(itemId)
-  const listed = await listIssues(ctx.run, ctx.mark)
+  const listed = await ctx.tracker.scan()
   if (listed.items === null) {
-    const reason = listed.result === null ? 'not a label' : failureText('gh', listed.result)
+    const reason = listed.result === null ? 'not a label' : failureText(toolOf(ctx.tracker.kind), listed.result)
 
     return `${itemId} was not rejected: read the tracker failed (${clean(reason).slice(0, 200)}). Run the command again.`
   }
@@ -182,11 +183,11 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
       [
         'close the pull request',
         async () => {
-          if (ctx.tracker === null || job.pr === null) return
-          const { pr } = await readPrByNumber(ctx.run, job.pr.number)
+          if (ctx.tracker === null || ctx.host === null || job.pr === null) return
+          const { pr } = await ctx.host.read(job.pr.number)
           if (pr !== null && pr.state !== 'open') return
-          const closed = await closePr(ctx.run, job.pr.number)
-          if ('failed' in closed || closed.exitCode !== 0) throw new Error(failureText('gh', closed))
+          const closed = await ctx.host.close(job.pr.number)
+          if ('failed' in closed || closed.exitCode !== 0) throw new Error(failureText(toolOf(ctx.host.kind), closed))
         },
       ],
       ['set the tracker state', async () => ctx.tracker?.setState(itemId, 'rejected')],
