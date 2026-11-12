@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { move, newJob } from '../core/job'
 import { STALE_MS, lockOf, lockText } from '../core/lock'
 import { readJobs, releaseLock, takeLock, writeJob } from '../hooks/jobs'
-import { stateBaseOf, stateFolderOf } from '../core/state-path'
+import { sha256Hex, stateBaseOf, stateFolderOf } from '../core/state-path'
 import { fakeIo } from './kit'
 
 const job = (id: string, at = 1000) => newJob({ id, title: 'Add a thing' }, at)
@@ -86,11 +86,13 @@ test('the state folder of a repo', async () => {
   expect(stateBaseOf(undefined, undefined)).toBe(null)
   expect(stateBaseOf('not-absolute', undefined)).toBe(null)
   const folder = stateFolderOf('/Users/me/code/my app/.git')
-  expect(folder).toMatch(/^[a-z0-9-]{1,48}-[0-9a-f]{8}$/)
+  expect(folder).toMatch(/^[a-z0-9-]{1,48}-[0-9a-f]{16}$/)
   expect(folder.startsWith('users-me-code-my-app-git-')).toBe(true)
   expect(stateFolderOf('/a/b')).not.toBe(stateFolderOf('/a-b'))
-  expect(stateFolderOf('/' + 'x'.repeat(500)).length).toBeLessThanOrEqual(57)
-  expect(stateFolderOf('../..')).toMatch(/^[a-z0-9-]*-?[0-9a-f]{8}$/)
+  expect(stateFolderOf('/' + 'x'.repeat(500)).length).toBeLessThanOrEqual(65)
+  expect(stateFolderOf('../..')).toMatch(/^[0-9a-f]{16}$/)
+  // The name ends with the start of the SHA-256 of the whole path.
+  expect(stateFolderOf('abc').endsWith('ba7816bf8f01cfea')).toBe(true)
 })
 
 test('two working trees of one repository share the jobs', async () => {
@@ -134,4 +136,34 @@ test('two sessions cannot both hold the lock', async () => {
 
   await releaseLock(second, '/r')
   expect(await takeLock(first, '/r', 3000 + STALE_MS + 3)).toEqual({ isHeld: true, holder: null })
+})
+
+test('SHA-256', async () => {
+  expect(sha256Hex('')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+  expect(sha256Hex('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+  expect(sha256Hex('abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq')).toBe(
+    '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1',
+  )
+  expect(sha256Hex('é/ü — 日本')).toBe(sha256Hex('é/ü — 日本'))
+  expect(sha256Hex('a'.repeat(200))).toMatch(/^[0-9a-f]{64}$/)
+})
+
+test('a state folder records its repository, and one that belongs to another is not used', async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  await writeJob(io, '/r', job('1'))
+  expect(io.files[`${DIR}/repo`]).toBe('/r\n')
+
+  // The same folder name, claimed by another repository.
+  io.files[`${DIR}/repo`] = '/somewhere/else\n'
+  expect(await readJobs(io, '/r')).toEqual({
+    jobs: [],
+    skipped: 0,
+    note: 'The state folder belongs to another repository. It is not used.',
+  })
+  let error: unknown = null
+  await writeJob(io, '/r', job('2')).catch(caught => (error = caught))
+  expect(error).not.toBe(null)
+  expect(Object.keys(io.files).some(file => file.includes('2-add-a-thing'))).toBe(false)
+  expect(await takeLock(io, '/r', 1000)).toEqual({ isHeld: false, holder: null })
+  expect(io.files[`${DIR}/lock`]).toBe(undefined)
 })
