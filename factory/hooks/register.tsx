@@ -16,8 +16,10 @@ import { checkedSpawn, isOwnReport, onSpawn, onToolCheck, onTurn, rememberAgent,
 import type { Io } from './io'
 import { answerJob, rejectJob, stopLine } from './commands'
 import { init } from './init'
+import type { Spawn } from './agent-events'
 import { whereText } from './jobs'
-import { advance } from './line'
+import { advance, watch } from './line'
+import { startRun } from './start'
 import { loadSettings } from './readers/settings'
 import { approve, refresh, refreshAgents } from './refresh'
 import { PANE, TITLE } from './state'
@@ -30,6 +32,8 @@ const panel = atom({ plugin: 'factory', key: 'panel' } as const, emptyModel(), {
 
 const MINIMUM = [2, 1, 322] as const
 const REFRESH_MS = 60_000
+// The timer that keeps the line's lock alive and sees an agent that is gone. It starts no agent.
+const WATCH_MS = 15_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
 const GIT_TOP_MS = 5_000
 const AGENT_TYPES = ROLES.map(typeOf)
@@ -215,7 +219,7 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'factory',
-      description: 'Open the Factory work panel (close | init | approve | where | stop | answer | reject)',
+      description: 'Open the Factory work panel (close | init | approve | where | run | stop | answer | reject)',
     })
     // One quick read now, so the status line and the session brief have the
     // branch and the progress before the first prompt. It runs no `gh` and no
@@ -228,6 +232,9 @@ export const register: Register = (on, options) => {
     if (options.openOnStart === true) {
       void $.ui.open({ id: PANE, title: TITLE }).then(() => refresh(ready))
     }
+    $.clock.every(WATCH_MS, () => {
+      void watch(ready).catch(() => undefined)
+    })
     // Slow reads run once a minute, and only while the pane is on screen.
     $.clock.every(REFRESH_MS, () => {
       void ready
@@ -331,19 +338,24 @@ export const register: Register = (on, options) => {
 
     // The commands that change the line or a job: the person's own act, like approve.
     const [word = '', id = ''] = arg.split(/\s+/)
-    if (word === 'stop' || word === 'answer' || word === 'reject') {
+    if (word === 'stop' || word === 'answer' || word === 'reject' || word === 'run') {
       if (e.origin?.kind !== 'composer') return { text: ONLY_A_PERSON_CAN }
+      const ready = io
+      // This hook's own way to start an agent: an agent is fenced only when a
+      // hook that is still running starts it.
+      const spawn: Spawn = a => checkedSpawn(ready, input => $.agent.spawn(input), a)
       const rest = id === '' ? '' : arg.slice(arg.indexOf(id) + id.length).trim()
+      if (word === 'run') return { text: await startRun(ready, spawn, id === '' ? null : id, { hasAgentTypes }) }
       if (word === 'stop') return { text: await stopLine(io) }
       if (word === 'answer') {
-        return { text: id === '' ? 'Say which job: /factory answer <id> [text]' : await answerJob(io, id, rest) }
+        return { text: id === '' ? 'Say which job: /factory answer <id> [text]' : await answerJob(io, id, rest, spawn) }
       }
 
       return { text: id === '' ? 'A reason is needed: /factory reject <id> <reason>' : await rejectJob(io, id, rest) }
     }
 
     return {
-      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
+      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory run [id], /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
     }
   })
 

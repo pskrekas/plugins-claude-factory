@@ -17,6 +17,7 @@ export type GitCall =
   | { do: 'merge-base'; gitDir: string; workTree: string; baseSha: string }
   | { do: 'abort-merge'; gitDir: string; workTree: string }
   | { do: 'diff-text'; from: string; to: string }
+  | { do: 'drop-branch'; jobId: string }
   | { do: 'changed'; from: string; to: string }
   | { do: 'base-head'; base: string }
   | { do: 'show-settings'; sha: string }
@@ -77,6 +78,9 @@ export function gitArgs(call: GitCall): string[] | null {
       return [...inTree(call.gitDir, call.workTree), 'merge', '--no-edit', call.baseSha]
     case 'abort-merge':
       return [...inTree(call.gitDir, call.workTree), 'merge', '--abort']
+    case 'drop-branch':
+      // The local branch of a job that ended. Only ever a job's own branch.
+      return ['git', 'branch', '-D', branchOf(call.jobId)]
     case 'diff-text':
       // No program of the repo's settings is started to show a file.
       return ['git', 'diff', '--no-renames', '--no-ext-diff', '--no-textconv', `${call.from}...${call.to}`]

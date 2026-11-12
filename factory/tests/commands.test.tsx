@@ -42,6 +42,14 @@ function world(on: Parameters<typeof engine>[0], jobs: Job[], extra: Record<stri
 const factoryRuns = (w: { ran: string[] }) =>
   w.ran.filter(line => (line.startsWith('gh issue') && !line.startsWith('gh issue list') && !line.startsWith('gh issue view')) || line.startsWith('gh pr c') || line.startsWith('git worktree remove'))
 
+test('/factory run and /factory plan are a person\'s own, and need a tracker', async ($, on) => {
+  engine(on, { files: {}, run: tools(), now: NOW })
+  await $.session.start(START)
+  expect((await $.command.run(cmd('run', 'sdk'))).text).toBe('Only a person can do this. Type the command at the prompt.')
+  expect((await $.command.run(cmd('run 12', 'plugin'))).text).toBe('Only a person can do this. Type the command at the prompt.')
+  expect((await $.command.run(cmd('run'))).text).toBe('/factory run needs a GitHub tracker in the settings.')
+})
+
 test('stop sets the flag; only a person can', async ($, on) => {
   const w = world(on, [])
   await $.session.start(START)
@@ -57,7 +65,7 @@ test('answer resumes a job that asked a question', async ($, on) => {
   const w = world(on, [asked])
   await $.session.start(START)
 
-  expect((await $.command.run(cmd('answer 14 Use the handwriting font.'))).text).toBe('14 goes on in intake.')
+  expect((await $.command.run(cmd('answer 14 Use the handwriting font.'))).text).toBe('14 goes on in intake. Run /factory run to go on.')
   const now = readJob(w, asked)
   expect([now?.stage, now?.question, now?.feedback]).toEqual(['intake', null, 1])
   expect(w.files[`${STATE}/jobs/${asked.id}/files/feedback-1.md`]).toBe('Use the handwriting font.')
@@ -70,7 +78,7 @@ test('answer on a job stopped for rounds grants one and sends it to Build, round
   const w = world(on, [stopped])
   await $.session.start(START)
 
-  expect((await $.command.run(cmd('answer 12'))).text).toBe('12 goes on in build.')
+  expect((await $.command.run(cmd('answer 12'))).text).toBe('12 goes on in build. Run /factory run to go on.')
   const now = readJob(w, stopped)
   expect([now?.stage, now?.round, now?.granted.rounds, now?.feedback]).toEqual(['build', 2, 1, 0])
 })
@@ -94,7 +102,7 @@ test('answer with text sends a ready job back to Build; with no text it changes 
     '10 is ready. Merge its pull request, or give it text to change something.',
   )
   expect(readJob(w, ready)?.stage).toBe('ready')
-  expect((await $.command.run(cmd('answer 10 Make the button blue.'))).text).toBe('10 goes back to Build, round 2.')
+  expect((await $.command.run(cmd('answer 10 Make the button blue.'))).text).toBe('10 goes back to Build, round 2. Run /factory run to go on.')
   const now = readJob(w, ready)
   expect([now?.stage, now?.round, now?.sentBack]).toEqual(['build', 2, { by: 'you', why: 'Make the button blue.' }])
 })
@@ -234,7 +242,7 @@ test('a remote that names no GitHub repository gives no tracker: nothing is writ
   await $.session.start(START)
 
   expect((await $.command.run(cmd('answer 14 hello'))).text).toBe(
-    '14 goes on in intake. No tracker is set: nothing was written to one.',
+    '14 goes on in intake. No tracker is set: nothing was written to one. Run /factory run to go on.',
   )
   expect(w.ran.some(line => line.startsWith('gh '))).toBe(false)
 })
@@ -303,7 +311,7 @@ test('with no tracker the job still changes, and the answer says nothing was wri
   await $.session.start(START)
 
   expect((await $.command.run(cmd('answer 14 hello'))).text).toBe(
-    '14 goes on in intake. No tracker is set: nothing was written to one.',
+    '14 goes on in intake. No tracker is set: nothing was written to one. Run /factory run to go on.',
   )
   expect(readJob(w, asked)?.stage).toBe('intake')
   expect(w.ran.some(line => line.startsWith('gh issue edit'))).toBe(false)

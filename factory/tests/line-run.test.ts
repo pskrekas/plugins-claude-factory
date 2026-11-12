@@ -4,13 +4,16 @@ import { OUT_FILE } from '../core/agents'
 import { storeKey } from '../core/consent'
 import type { Role } from '../core/factory-settings'
 import { move, newJob, startWork } from '../core/job'
+import { lockText } from '../core/lock'
 import type { Job, Stage } from '../core/job'
 import { stateFolderOf } from '../core/state-path'
 import type { Spawn } from '../hooks/agent-events'
 import { dropFact } from '../hooks/inbox'
-import { readJobs, setStop, takeLock, writeJob } from '../hooks/jobs'
+import { answerJob, rejectJob } from '../hooks/commands'
+import { isStopped, lockInfo, readJobs, setStop, takeLock } from '../hooks/jobs'
 import { advance, watch } from '../hooks/line'
 import { readRun, writeRun } from '../hooks/run'
+import { startRun } from '../hooks/start'
 import { fakeIo } from './kit'
 
 const NOW = 1_700_000_000_000
@@ -26,7 +29,7 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
   const io = fakeIo({ files: { '/r/.git/HEAD': 'x', '/r/.claude/factory.json': settings }, remote: 'git@github.com:a/b.git', now: NOW })
   io.store.set(storeKey('/r/.git'), ['[gate] npm run build', '[gate] npm test'])
   // What the fake git, gh and npm answer; a test changes it as it goes.
-  const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isMerged: false, fail: [] as string[] }
+  const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isMerged: false, fail: [] as string[], list: '[]' }
   const link = (path: string) => {
     const id = path.slice(path.lastIndexOf('/') + 1)
     io.files[`${path}/.git`] = `gitdir: /r/.git/worktrees/${id}\n`
@@ -41,6 +44,7 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
 
       return { exitCode: 0, stdout: JSON.stringify({ number: n, title: `Item ${n}`, state: 'OPEN', body: 'Do it', author: { login: 'me' }, comments: [], url: `https://github.com/a/b/issues/${n}` }) }
     }
+    if (line.startsWith('gh issue list')) return { exitCode: 0, stdout: state.list }
     if (line.startsWith('gh pr create')) return { exitCode: 0, stdout: 'https://github.com/a/b/pull/7\n' }
     if (line.startsWith('gh pr view')) {
       return { exitCode: 0, stdout: JSON.stringify({ number: 7, state: state.isMerged ? 'MERGED' : 'OPEN', isDraft: false, url: 'https://github.com/a/b/pull/7', statusCheckRollup: [] }) }
@@ -321,4 +325,85 @@ test('the same command refused twice stops the job', async () => {
   await advance(w.io, w.spawn)
   const job = await jobOf(w, '12')
   expect([job?.stage, job?.question, job?.asker, job?.refusals]).toEqual(['needs-human', 'The fence refused the same command twice: git push origin main', 'fence', 2])
+})
+
+const ISSUES = JSON.stringify([
+  { number: 4, title: 'Fonts', state: 'OPEN', labels: [{ name: 'factory' }] },
+  { number: 5, title: 'Walls', state: 'OPEN', labels: [{ name: 'factory' }, { name: 'factory:needs-human' }] },
+  { number: 6, title: 'Dark', state: 'OPEN', labels: [{ name: 'factory' }] },
+])
+const READY = { hasAgentTypes: true }
+
+test('/factory run: what it needs before it starts', async () => {
+  const noTracker = lineWorld({ settings: { tracker: undefined } })
+  expect(await startRun(noTracker.io, noTracker.spawn, null, READY)).toBe('/factory run needs a GitHub tracker in the settings.')
+  const noGate = lineWorld()
+  noGate.io.store.set(storeKey('/r/.git'), [])
+  expect(await startRun(noGate.io, noGate.spawn, null, READY)).toBe('No gate, no factory: gate commands are not approved. Approve them with /factory approve.')
+  const empty = lineWorld({ settings: { gate: { fast: [], full: [] } } })
+  expect(await startRun(empty.io, empty.spawn, null, READY)).toBe('No gate, no factory: no gate. Put the fast checks in gate.fast of the settings file on the base branch.')
+  const noTypes = lineWorld()
+  expect(await startRun(noTypes.io, noTypes.spawn, null, { hasAgentTypes: false })).toBe('The agent types of the line are not registered. Start a new session.')
+  const taken = lineWorld()
+  taken.io.files[`${DIR}/lock.1/holder`] = lockText('other', NOW - 1000, '/elsewhere')
+  const busy = await startRun(taken.io, taken.spawn, null, READY)
+  expect(busy.startsWith('Another session runs the line (')).toBe(true)
+  expect(await startRun(taken.io, taken.spawn, '../x', READY)).toBe('Not an item id: /factory run [id]')
+  for (const w of [noTracker, noGate, empty, noTypes, taken]) expect([w.started, await readRun(w.io, '/r')]).toEqual([[], null])
+})
+
+test('/factory run reads the queue once, keeps the lock, clears the stop flag and starts the first stations', async () => {
+  const w = lineWorld()
+  w.state.list = ISSUES
+  await setStop(w.io, '/r', true)
+
+  expect(await startRun(w.io, w.spawn, null, READY)).toBe('The line runs: 2 items in the queue, 0 jobs go on. /factory stop stops it.')
+  expect(await isStopped(w.io, '/r')).toBe(false)
+  expect((await lockInfo(w.io, '/r', NOW)).state).toBe('mine')
+  // Two slots: both items are jobs in Intake, each with its agent.
+  expect([(await jobsOf(w)).map(job => [job.itemId, job.stage]).sort(), w.started.map(one => one.role), (await readRun(w.io, '/r'))?.queue]).toEqual([
+    [['4', 'intake'], ['6', 'intake']],
+    ['intake', 'intake'],
+    [],
+  ])
+})
+
+test('/factory run <id> runs one item', async () => {
+  const w = lineWorld()
+  w.state.list = ISSUES
+  expect(await startRun(w.io, w.spawn, '12', READY)).toBe('The line runs: 1 item in the queue, 0 jobs go on. /factory stop stops it.')
+  expect((await jobsOf(w)).map(job => job.itemId)).toEqual(['12'])
+  expect(w.io.ran.some(line => line.startsWith('gh issue list'))).toBe(false)
+})
+
+test('a new run goes on with the jobs of an earlier session: a station whose agent is gone starts again', async () => {
+  const review = { ...at('12', ['spec', 'build', 'gate', 'review']), reviewers: ['code', 'security'] }
+  const half = startWork({ ...review, results: [{ role: 'reviewer' as const, focus: 'code', answer: { kind: 'ok' as const }, why: null }] }, { agentId: 'old-agent', role: 'reviewer', focus: 'security', startedAt: NOW - 9000 }, NOW)
+  const w = lineWorld({ jobs: [half] })
+  expect(await startRun(w.io, w.spawn, null, READY)).toBe('The line runs: 0 items in the queue, 1 job goes on. /factory stop stops it.')
+  const job = await jobOf(w, '12')
+  // The answer that was kept stays; only the reviewer that was lost starts again.
+  expect([job?.stage, job?.results.map(result => result.focus), job?.work.map(work => [work.focus, work.agentId])]).toEqual(['review', ['code'], [['security', 'a1']]])
+  expect(w.started.map(one => one.description)).toEqual([`factory reviewer:security ${half.id}`])
+})
+
+test('/factory answer starts the station at once when the line runs, and says what to do when it does not', async () => {
+  const asked = { ...at('12', ['spec']), stage: 'needs-human' as const, stoppedIn: 'spec' as const, question: 'The spec did not answer.', asker: 'station' as const }
+  const idle = lineWorld({ jobs: [asked] })
+  expect(await answerJob(idle.io, '12', '', idle.spawn)).toBe('12 goes on in spec. Run /factory run to go on.')
+  expect(idle.started).toEqual([])
+
+  const w = lineWorld({ jobs: [asked] })
+  await begin(w)
+  expect(await answerJob(w.io, '12', '', w.spawn)).toBe('12 goes on in spec.')
+  expect([w.started.map(one => one.role), (await jobOf(w, '12'))?.work.length]).toEqual([['spec'], 1])
+})
+
+test("a reject also removes the gate's copy and the job's branch, so the item can run again", async () => {
+  const job = startWork(at('12', ['spec', 'build']), { agentId: 'x1', role: 'builder', focus: '', startedAt: NOW }, NOW)
+  const w = lineWorld({ jobs: [job] })
+  w.io.files[`${DIR}/gate/${job.id}/README.md`] = 'x'
+  expect(await rejectJob(w.io, '12', 'Not now.')).toBe('12 is rejected. The reason is on the item.')
+  expect(inOrder(lines(w), [`git worktree remove --force ${DIR}/worktrees/${job.id}`, `git worktree remove --force ${DIR}/gate/${job.id}`, `git branch -D factory/${job.id}`])).toBe('ok')
+  expect(await jobOf(w, '12')).toBe(undefined)
 })

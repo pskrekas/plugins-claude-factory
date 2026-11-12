@@ -46,6 +46,9 @@ test('every git call of the factory, word for word', async () => {
   expect(line({ do: 'merge-base', gitDir: GIT_DIR, workTree: WT, baseSha: BASE })).toBe(`${IN_WT} merge --no-edit ${BASE}`)
   expect(line({ do: 'abort-merge', gitDir: GIT_DIR, workTree: WT })).toBe(`${IN_WT} merge --abort`)
   expect(line({ do: 'diff-text', from: BASE, to: SHA })).toBe(`git diff --no-renames --no-ext-diff --no-textconv ${BASE}...${SHA}`)
+  // The local branch of a job that ended, so the item can run again.
+  expect(line({ do: 'drop-branch', jobId: ID })).toBe('git branch -D factory/12-add-dark-mode')
+  expect(gitArgs({ do: 'drop-branch', jobId: '../main' })).toBe(null)
   // A rename is shown as a file that went and a file that came: both names are checked.
   expect(line({ do: 'changed', from: BASE, to: SHA })).toBe(`git diff --name-only --no-renames -z ${BASE}...${SHA}`)
   expect(line({ do: 'uncommitted', gitDir: GIT_DIR, workTree: WT })).toBe(
@@ -119,6 +122,7 @@ test('the factory cannot force, merge into the base, or push another branch', as
     gitArgs({ do: 'merge-base', gitDir: GIT_DIR, workTree: WT, baseSha: BASE }),
     gitArgs({ do: 'abort-merge', gitDir: GIT_DIR, workTree: WT }),
     gitArgs({ do: 'diff-text', from: BASE, to: SHA }),
+    gitArgs({ do: 'drop-branch', jobId: ID }),
     gitArgs({ do: 'changed', from: BASE, to: SHA }),
     gitArgs({ do: 'uncommitted', gitDir: GIT_DIR, workTree: WT }),
     gitArgs({ do: 'head', jobId: ID }),

@@ -21,8 +21,8 @@ import { nextStep } from '../core/step'
 import type { GateResult, Step } from '../core/step'
 import { descriptionOf } from './agent-events'
 import type { Spawn } from './agent-events'
-import { context } from './commands'
-import type { Ctx } from './commands'
+import { context } from './context'
+import type { Ctx } from './context'
 import { runGate } from './gate'
 import { drainFacts } from './inbox'
 import type { Io } from './io'
@@ -30,7 +30,7 @@ import { isStopped, lockInfo, readJobs, releaseLock, retireJob, stateDirOf, take
 import { readInside } from './readers/files'
 import { endRun, readRun, writeRun } from './run'
 import { collect, discardOut, spendOf, writeDiff, writeItem } from './station'
-import { addWorktree, baseHeadOf, headOf, pushCommit, removeCleanCopy, removeWorktree, syncBase } from './worktrees'
+import { addWorktree, baseHeadOf, dropBranch, headOf, pushCommit, removeCleanCopy, removeWorktree, syncBase } from './worktrees'
 
 export type Advanced = { ran: boolean; started: number; moved: number; isDone: boolean; note: string | null }
 
@@ -53,7 +53,7 @@ const mergeAsked = new Map<string, number>()
 let tally = { startedAt: 0, rejected: 0 }
 
 const why = (error: unknown) => clean(String(error instanceof Error ? error.message : error)).slice(0, 200)
-const liveOf = (agents: readonly { id: string; status: string }[]) =>
+export const liveOf = (agents: readonly { id: string; status: string }[]) =>
   agents.filter(agent => agent.status !== 'failed' && agent.status !== 'killed').map(agent => agent.id)
 
 async function freeDiskGb(io: Io, dir: string): Promise<number | null> {
@@ -66,6 +66,8 @@ async function freeDiskGb(io: Io, dir: string): Promise<number | null> {
 async function tidy(io: Io, root: string, dir: string, job: Job, now: number): Promise<void> {
   if ((await io.stat(`${dir}/worktrees/${job.id}`)) !== null) await removeWorktree(io, root, job.id).catch(() => undefined)
   if ((await io.stat(`${dir}/gate/${job.id}`)) !== null) await removeCleanCopy(io, root, job.id).catch(() => undefined)
+  // The local branch goes too, so the item can run again.
+  if (job.branch !== null && (await headOf(io, root, job.id)) !== null) await dropBranch(io, root, job.id).catch(() => undefined)
   await retireJob(io, root, job.id, now).catch(() => undefined)
   gates.delete(job.id)
   repeats.delete(job.id)

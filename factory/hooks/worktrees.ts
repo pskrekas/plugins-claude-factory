@@ -105,6 +105,11 @@ export async function worktreeGitDir(
   return { gitDir: real, workTree }
 }
 
+// Removes the local branch of a job that ended, so its item can run again.
+export async function dropBranch(io: Io, root: string, jobId: string): Promise<Done> {
+  return gitArgs({ do: 'drop-branch', jobId }) === null ? { ok: false, why: BAD } : done(await git(io, root, { do: 'drop-branch', jobId }))
+}
+
 // Sends one commit to the job's own branch on the remote. Run in the repo.
 export async function pushCommit(io: Io, root: string, jobId: string, sha: string): Promise<Done> {
   if (gitArgs({ do: 'push-commit', jobId, sha }) === null) return { ok: false, why: BAD }
