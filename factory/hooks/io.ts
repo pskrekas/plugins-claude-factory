@@ -13,6 +13,8 @@ export type Io = {
   // folder, not the main checkout's), or the session's folder outside git.
   root: () => Promise<string>
   remote: () => Promise<string | null>
+  // This session's id: what the lock file names its holder by.
+  sessionId: () => Promise<string>
   // What a path is, how large, and where it really is once every symbolic
   // link is followed; null when there is nothing there.
   stat: (

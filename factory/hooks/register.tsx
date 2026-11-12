@@ -89,6 +89,7 @@ export const register: Register = (on, options) => {
           .repo()
           .then(repo => repo?.remote ?? null)
           .catch(() => null),
+      sessionId: () => $.session.id(),
       stat: path =>
         $.fs
           .stat(path, { resolve: true })

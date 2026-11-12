@@ -75,6 +75,8 @@ export function engine(
     path?: string
     // Last change of a file, for the newest-first order.
     mtimes?: Record<string, number>
+    // True when git tracks a file under .factory/.
+    tracked?: boolean
   },
 ) {
   const seen = {
@@ -117,6 +119,7 @@ export function engine(
       : []) as never,
   }))
   on('session.root', () => ({ value: seen.root }))
+  on('session.id', () => ({ value: 'session-1' }))
   on('ui.status', (_, e) => {
     seen.status.push(e.text)
 
@@ -196,6 +199,9 @@ export function engine(
     if (e.argv.join(' ') === 'git rev-parse --show-toplevel') {
       return { value: { exitCode: 0, stdout: seen.root + '\n', stderr: '' } as never }
     }
+    if (e.argv.join(' ') === 'git ls-files --error-unmatch .factory') {
+      return { value: { exitCode: world.tracked ? 0 : 1, stdout: '', stderr: '' } as never }
+    }
     seen.cwds.push(e.init?.cwd)
     seen.ran.push(e.argv.join(' '))
     seen.paths.push(e.init?.env?.PATH)
@@ -238,3 +244,72 @@ export const COMPOSE = {
   outputStyle: null,
   traits: [],
 } as never
+
+// An Io held in memory, for code that takes an Io and needs no engine: a file
+// map, a session id, a clock. `git ls-files` says whether .factory is tracked.
+export function fakeIo(
+  world: { files?: Record<string, string>; session?: string; now?: number; tracked?: boolean } = {},
+) {
+  const files = world.files ?? {}
+  const isDir = (path: string) => Object.keys(files).some(file => file.startsWith(path + '/'))
+  const io = {
+    files,
+    session: world.session ?? 'session-1',
+    time: world.now ?? 0,
+    model: emptyModel(),
+    reads: [] as string[],
+    ran: [] as string[],
+    now: async () => io.time,
+    root: async () => '/r',
+    remote: async () => null,
+    sessionId: async () => io.session,
+    stat: async (path: string) => {
+      const text = files[path]
+      if (text !== undefined) return { kind: 'file' as const, size: text.length, mtimeMs: 0, realPath: path }
+
+      return isDir(path) ? { kind: 'dir' as const, size: 0, mtimeMs: 0, realPath: path } : null
+    },
+    isLink: async () => false,
+    readFile: async (path: string) => {
+      io.reads.push(path)
+
+      return files[path] ?? null
+    },
+    listDir: async (path: string) => {
+      const names = new Set<string>()
+      for (const file of Object.keys(files)) {
+        if (!file.startsWith(path + '/')) continue
+        const rest = file.slice(path.length + 1)
+        names.add(rest.includes('/') ? rest.split('/')[0] + '/' : rest)
+      }
+
+      return [...names]
+    },
+    writeFile: async (path: string, text: string) => {
+      files[path] = text
+    },
+    run: async (argv: string[]) => {
+      io.ran.push(argv.join(' '))
+      if (argv.join(' ') === 'git ls-files --error-unmatch .factory') {
+        return { exitCode: world.tracked ? 0 : 1, stdout: '', stderr: '' }
+      }
+
+      return { failed: 'not-found' as const }
+    },
+    storeGet: async () => undefined,
+    storeSet: async () => undefined,
+    getModel: async () => io.model,
+    updateModel: async (change: (model: PanelModel) => PanelModel) => {
+      io.model = change(io.model)
+
+      return io.model
+    },
+    status: () => undefined,
+    toast: () => undefined,
+    sound: () => undefined,
+    agents: async () => [],
+    isPaneDrawn: async () => true,
+  }
+
+  return io
+}
