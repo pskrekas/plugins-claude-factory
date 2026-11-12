@@ -10,6 +10,8 @@ const MAX_SETTINGS_BYTES = 256 * 1024
 
 export type Loaded = {
   root: string
+  // The store key the approvals of this repo are kept under.
+  key: string
   settings: Settings
   error: string | null
   consent: Consent
@@ -23,7 +25,8 @@ export async function loadSettings(io: Io): Promise<Loaded> {
   const text = await readInside(io, root, '.claude/factory.json', MAX_SETTINGS_BYTES)
   const { settings, error } = parseSettings(text)
   const commands = commandsOf(settings)
-  const stored = await io.storeGet(storeKey(root))
+  const key = storeKey(await io.consentKey())
+  const stored = await io.storeGet(key)
 
-  return { root, settings, error, consent: consentOf(text !== null, commands, stored), commands }
+  return { root, key, settings, error, consent: consentOf(text !== null, commands, stored), commands }
 }

@@ -1,6 +1,6 @@
 // One refresh: load the settings, run every reader, write the model.
 import { alertsFor } from '../core/alerts'
-import { approvedOf, storeKey } from '../core/consent'
+import { approvedOf } from '../core/consent'
 import { statusText } from '../core/layout'
 import type { Consent, PanelModel } from '../core/model'
 import { agentRows } from '../core/work'
@@ -34,7 +34,7 @@ export const readers: Reader[] = [taskReader, progressReader, checksReader, work
 
 export async function refresh(
   io: Io,
-  options: { loaded?: Loaded; isLight?: boolean; isListed?: boolean } = {},
+  options: { loaded?: Loaded; isLight?: boolean } = {},
 ): Promise<PanelModel> {
   const loaded = options.loaded ?? (await loadSettings(io))
   const now = await io.now()
@@ -50,15 +50,15 @@ export async function refresh(
 
   const notes: string[] = []
   const pending = loaded.consent === 'needed' ? loaded.commands : []
-  // A command counts as shown only when the pane was open to draw it (or when
-  // /factory approve listed it, which `options.isListed` says). A read with the
-  // pane closed shows nothing to anyone.
-  const isDrawn = options.isListed === true || (await io.isPaneOpen())
+  // A command counts as shown only when the pane was on screen to draw it. A
+  // read with the pane closed, undrawn or behind another tab shows nothing.
+  const isDrawn = await io.isPaneDrawn()
+  const kept = prev.root === loaded.root ? prev.shown.filter(line => pending.includes(line)) : []
   const patch: Partial<PanelModel> = {
     root: loaded.root,
     consent: loaded.consent,
     pendingCommands: pending,
-    shown: isDrawn ? pending : prev.root === loaded.root ? prev.shown.filter(line => pending.includes(line)) : [],
+    shown: isDrawn ? pending : kept,
     settingsError: loaded.error,
     notes,
     readAt: now,
@@ -83,47 +83,52 @@ export async function refresh(
 
 // The agents alone: a cheap read, done when an agent starts or ends.
 export async function refreshAgents(io: Io): Promise<void> {
-  if (!(await io.isPaneOpen())) return
+  if (!(await io.isPaneDrawn())) return
   const [agents, now] = await Promise.all([io.agents(), io.now()])
   await io.updateModel(model => ({ ...model, agents: agentRows(agents, model.agents, now) }))
 }
 
 const count = (lines: string[]) => `${lines.length} command${lines.length === 1 ? '' : 's'}`
-const it = (lines: string[]) => (lines.length === 1 ? 'it' : 'them')
-const again = (lines: string[]) =>
-  `${lines.join('\n')}\nRun /factory approve again to allow ${it(lines)}.`
+const readThem = (lines: string[]) =>
+  `Read ${lines.length === 1 ? 'it' : 'them'}, then run /factory approve again.`
+const NOT_ON_SCREEN =
+  'The panel is not on screen, so nothing was approved. Run /factory, read the commands, then run /factory approve.'
 
 const sameLines = (a: string[], b: string[]) =>
   a.length === b.length && a.every((line, i) => line === b[i])
 
-// `/factory approve`: allows exactly the commands the panel last showed, for
-// the repo it showed them for. The settings file is read again first: a file
-// that was never shown, that changed since, or that belongs to another repo
-// than the one on screen is shown now and approved only by a second run. So
-// the person never approves a line they did not see.
+// `/factory approve`: allows exactly the commands the panel showed, for the
+// repo it showed them for. The settings file is read again first. Nothing is
+// approved unless the pane is on screen and already showed these very lines:
+// a file that was never shown, that changed since, or that belongs to another
+// repo is drawn now and approved only by a second run. The answer holds a
+// count, never the lines: they are read in the pane, and an answer's text goes
+// on to the model.
 export async function approve(io: Io): Promise<string> {
-  const onScreen = await io.getModel()
   const loaded = await loadSettings(io)
   if (loaded.consent !== 'needed') {
     await refresh(io, { loaded })
 
     return 'Nothing to approve.'
   }
+  const onScreen = await io.getModel()
   const lines = loaded.commands
+  if (!(await io.isPaneDrawn())) {
+    await refresh(io, { loaded })
+
+    return NOT_ON_SCREEN
+  }
   const wasShown = onScreen.root === loaded.root && onScreen.shown.length > 0
   if (!wasShown || !sameLines(onScreen.shown, lines)) {
-    // The answer below lists every line: from now on they count as shown.
-    await refresh(io, { loaded, isListed: true })
-    const why = wasShown
-      ? `The settings file changed. It now names ${count(lines)}`
-      : `Not approved yet. The settings file names ${count(lines)}`
+    await refresh(io, { loaded })
 
-    return `${why}:\n${again(lines)}`
+    return wasShown
+      ? `The settings file changed. The panel now shows ${count(lines)}. ${readThem(lines)}`
+      : `Not approved yet. The panel shows ${count(lines)}. ${readThem(lines)}`
   }
-  const key = storeKey(loaded.root)
-  const before = approvedOf(await io.storeGet(key))
-  await io.storeSet(key, [...new Set([...before, ...lines])].sort())
+  const before = approvedOf(await io.storeGet(loaded.key))
+  await io.storeSet(loaded.key, [...new Set([...before, ...lines])].sort())
   await refresh(io)
 
-  return `Approved ${count(lines)}:\n${lines.join('\n')}`
+  return `Approved ${count(lines)}.`
 }

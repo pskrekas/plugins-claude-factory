@@ -22,6 +22,7 @@ export function emptyModel(): PanelModel {
     settingsError: null,
     task: null,
     progress: [],
+    progressMore: 0,
     agents: [],
     checks: [],
     ports: [],

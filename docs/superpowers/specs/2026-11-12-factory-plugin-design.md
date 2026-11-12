@@ -169,7 +169,9 @@ queued job; `w`, `t`, `o` open a MORE line.
 - **Alerts** (a toast and a short sound): a job needs the person; a job is ready; a
   progress file says blocked; a check turns wrong.
 - **Session brief:** at session start the plugin adds one short section to the system
-  prompt: the task, the branch, the progress, the number of jobs that need the person.
+  prompt, built once and not changed during the session: the ticket id, the branch,
+  the progress percents, the owed count (later: the number of jobs that need the
+  person). It holds no text other people wrote (an issue's title, a file's heading).
 
 ### 4.4 Commands
 
@@ -359,8 +361,11 @@ optional. Example with neutral values:
   able to run for a long time.
 - A check's command must name a program on `PATH` (no `/` in its first word): a check
   runs by itself each minute, and a file of the repo can change after the approval.
-  Every command of the plugin runs with a `PATH` that has no relative entry and no
-  entry inside the repo. An approved command that runs code from the repo (a script
+  In this phase every command of the plugin (its own `git` and `gh` reads, the
+  checks) runs with a `PATH` that has no relative entry and no entry inside the repo;
+  the gate's `PATH`, which may need a repo's own tools, is decided in phase 2. A check
+  is not run when one of its arguments names a file of the repo. A settings file gets
+  at most 20 checks and 20 ports. An approved command that runs code from the repo (a script
   through an interpreter, a test runner) runs what the repo holds at that time; the
   approval covers the command line, not that code.
 - `owed`: a markdown file of checkboxes; open boxes are the count.
@@ -429,14 +434,19 @@ comment; the plugin checks before it sends.
   a prompt. Intake, which reads it first, has no shell and no write tool beyond its one
   file.
 - **Consent for commands.** A settings file arrives with a clone, and it names
-  commands. The plugin runs none of them (checks, gate, a custom station prompt) until
-  the person has seen the list and approved it. The approval is stored outside the
-  repo (`$.store`), keyed by the repo's path, as the full list of approved command
-  lines (never a digest); a command that is not in the list asks again. `/factory
-  approve` allows only the lines the panel showed, for the repo it showed them for. A
-  command is shown in full, in printable ASCII; one with a control character is
-  refused. Until then the panel shows "settings not approved" and the
-  general parts only. This is part of phase 1.
+  commands. The plugin runs none of them until the person has seen the list and
+  approved it. "Seen" is exact: `/factory approve` allows only the lines the pane
+  showed while it was on screen (placed, and the tab the surface shows), for the repo
+  it showed them for; lines the pane has not shown are shown first and approved by a
+  second run. Only the person's own Enter at the prompt can approve. The approval is
+  stored outside the repo (`$.store`), keyed by the repository's main checkout (so its
+  worktrees share it), as the full list of approved command lines (never a digest); a
+  command that is not in the list asks again. A command is shown in full, in printable
+  ASCII; one with a control character is refused. The list holds the checks' commands;
+  the gate's commands get their own approval in phase 2, so a line approved for one
+  purpose never runs for another. Until approval the panel shows "settings not
+  approved", the number of commands, and the parts that run no settings command. This
+  is part of phase 1.
 - **One orchestrator per repo.** `.factory/lock` holds the session id and a heartbeat
   time. A second session shows the line read-only and says who holds the lock. A lock
   with no heartbeat for five minutes can be taken.

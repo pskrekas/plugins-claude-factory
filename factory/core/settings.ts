@@ -37,6 +37,9 @@ const BAD_PATTERN = 'not a valid pattern'
 const CONTROL = 'control character in a command'
 const OUTSIDE = 'path must be inside the repo'
 const NOT_BRANCH = 'not a branch name'
+const MAX_LIST = 20 // checks and ports each start a program: a settings file gets this many
+const TOO_MANY = `at most ${MAX_LIST}`
+const MAX_FILES_PATH = 200
 const NOT_PATH = 'a check must name a program on PATH, not a path'
 
 // A key's parser: the value, or a string saying why it is refused.
@@ -186,7 +189,7 @@ function tracker(v: unknown): Parsed<Settings['tracker']> {
 }
 
 function progress(v: unknown): Parsed<Settings['progress']> {
-  if (!isObject(v) || !isText(v.files)) return { no: WRONG }
+  if (!isObject(v) || !isText(v.files) || v.files.length > MAX_FILES_PATH) return { no: WRONG }
   if (!isInside(v.files)) return { no: OUTSIDE }
   // Plain text marks, never patterns (see core/progress.ts).
   const marks = { done: '- [x]', open: '- [ ]', blocked: 'BLOCKED' }
@@ -202,6 +205,7 @@ function progress(v: unknown): Parsed<Settings['progress']> {
 
 function checks(v: unknown): Parsed<CheckSpec[]> {
   if (!Array.isArray(v)) return { no: WRONG }
+  if (v.length > MAX_LIST) return { no: TOO_MANY }
   const list: CheckSpec[] = []
   for (const item of v) {
     if (!isObject(item) || !isText(item.name)) return { no: WRONG }
@@ -232,6 +236,7 @@ function checks(v: unknown): Parsed<CheckSpec[]> {
 
 function ports(v: unknown): Parsed<Settings['ports']> {
   if (!isObject(v)) return { no: WRONG }
+  if (Object.keys(v).length > MAX_LIST) return { no: TOO_MANY }
   const list: Settings['ports'] = []
   for (const [name, port] of Object.entries(v)) {
     if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
@@ -319,10 +324,12 @@ export function lineOf(argv: string[]): string {
 }
 
 // Every command the settings file can make the plugin run, one line each.
+// These are the checks. The gate's commands do not run in this phase and are
+// not on this list: a line approved for one purpose must never start running
+// for another, so the gate gets its own approval when it exists.
 export function commandsOf(settings: Settings): string[] {
   const lines = new Set<string>()
   for (const check of settings.checks) if (check.run) lines.add(lineOf(check.run))
-  for (const argv of [...settings.gate.fast, ...settings.gate.full]) lines.add(lineOf(argv))
 
   return [...lines].sort()
 }

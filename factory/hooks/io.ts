@@ -9,12 +9,18 @@ import type { RunResult } from '../core/run'
 
 export type Io = {
   now: () => Promise<number>
-  // The repository's root, or the working directory outside a repository.
+  // The top of the working tree the session is in (a linked worktree's own
+  // folder, not the main checkout's), or the session's folder outside git.
   root: () => Promise<string>
+  // What approvals are kept under: the repository's main checkout, so every
+  // worktree of one repo shares them. Outside git, the same as `root`.
+  consentKey: () => Promise<string>
   remote: () => Promise<string | null>
   // What a path is, how large, and where it really is once every symbolic
   // link is followed; null when there is nothing there.
-  stat: (path: string) => Promise<{ kind: 'file' | 'dir' | 'other'; size: number; realPath: string } | null>
+  stat: (
+    path: string,
+  ) => Promise<{ kind: 'file' | 'dir' | 'other'; size: number; mtimeMs: number; realPath: string } | null>
   // True when the path itself is a symbolic link (also one that leads nowhere).
   isLink: (path: string) => Promise<boolean>
   // A file's text, or null when it cannot be read.
@@ -33,5 +39,7 @@ export type Io = {
   toast: (text: string) => void
   sound: () => void
   agents: () => Promise<readonly AgentInfo[]>
-  isPaneOpen: () => Promise<boolean>
+  // True only when the pane is on screen: placed, and the tab the surface
+  // shows. A pane that waits undrawn, or sits behind another, shows nothing.
+  isPaneDrawn: () => Promise<boolean>
 }

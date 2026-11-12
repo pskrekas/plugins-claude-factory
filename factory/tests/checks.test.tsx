@@ -158,3 +158,18 @@ test('a check whose argument names a file of the repo is not run', async ($, on)
   expect(rows.find(row => /^script\s+names a repo file$/.test(row))).toBeDefined()
   expect(world.ran).not.toContain('node scripts/x.js')
 })
+
+test('a check whose argument is only the name of a repo folder still runs', async ($, on) => {
+  const world = engine(on, {
+    files: {
+      '/r/.claude/factory.json':
+        '{"checks": [{"name": "account", "run": ["cloud", "config", "get", "account"], "want": "me@example.com"}]}',
+      '/r/config/app.yaml': 'x',
+    },
+    run: argv => (argv[0] === 'cloud' ? { exitCode: 0, stdout: 'me@example.com' } : undefined),
+  })
+  await approved($)
+
+  expect((await paneText($, 60)).find(row => /^account\s+ok$/.test(row))).toBeDefined()
+  expect(world.ran).toContain('cloud config get account')
+})

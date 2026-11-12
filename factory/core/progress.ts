@@ -46,20 +46,38 @@ export function nameOf(text: string, path: string): string {
   return parts.length > 1 ? (parts[parts.length - 2] ?? path) : path
 }
 
-// One path segment of a glob as a pattern: `*` is any run of characters but `/`.
-export function segmentPattern(segment: string): RegExp {
-  const escaped = segment.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')
+// True when `name` matches one path segment of a glob, where `*` is any run
+// of characters. No regular expression: the pattern comes from a settings file
+// nobody approved yet, and this takes time in proportion to the name's length
+// however many stars it has.
+export function matchSegment(pattern: string, name: string): boolean {
+  const parts = pattern.split('*')
+  const first = parts[0] ?? ''
+  const last = parts[parts.length - 1] ?? ''
+  if (parts.length === 1) return pattern === name
+  if (name.length < first.length + last.length) return false
+  if (!name.startsWith(first) || !name.endsWith(last)) return false
+  const end = name.length - last.length
+  let at = first.length
+  for (const part of parts.slice(1, -1)) {
+    const found = name.indexOf(part, at)
+    if (found < 0 || found + part.length > end) return false
+    at = found + part.length
+  }
 
-  return new RegExp(`^${escaped}$`)
+  return true
 }
 
 // Supports `*` inside one path segment only.
 export function matchGlob(pattern: string, paths: string[]): string[] {
-  const segments = pattern.split('/').map(segmentPattern)
+  const segments = pattern.split('/')
 
   return paths.filter(path => {
     const parts = path.split('/')
 
-    return parts.length === segments.length && parts.every((part, i) => segments[i]?.test(part))
+    return (
+      parts.length === segments.length &&
+      parts.every((part, i) => matchSegment(segments[i] ?? '', part))
+    )
   })
 }

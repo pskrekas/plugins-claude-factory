@@ -61,6 +61,8 @@ export type PanelModel = {
   settingsError: string | null
   task: TaskState | null
   progress: ProgressState[]
+  // Progress files that exist and are not listed (only the newest are).
+  progressMore: number
   agents: AgentRow[]
   checks: CheckState[]
   ports: PortState[]

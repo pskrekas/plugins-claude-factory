@@ -11,6 +11,7 @@ function fakeIo(): Io & { model: PanelModel } {
     model: emptyModel(),
     now: async () => 9000,
     root: async () => '/r',
+    consentKey: async () => '/r',
     remote: async () => null,
     stat: async () => null,
     isLink: async () => false,
@@ -30,7 +31,7 @@ function fakeIo(): Io & { model: PanelModel } {
     toast: () => undefined,
     sound: () => undefined,
     agents: async () => [],
-    isPaneOpen: async () => true,
+    isPaneDrawn: async () => true,
   }
 
   return io

@@ -91,7 +91,7 @@ test('a check must have a name and a command of strings', async () => {
   expect(error).toBe('checks: wrong type')
 })
 
-test('commands are listed once and sorted', async () => {
+test('the commands to approve are the checks, once each, sorted', async () => {
   const text = JSON.stringify({
     checks: [
       { name: 'a', run: ['x', 'y'] },
@@ -100,7 +100,9 @@ test('commands are listed once and sorted', async () => {
     gate: { fast: [['npm', 'test']], full: [['npm', 'test'], ['npm', 'run', 'build']] },
   })
   const { settings } = parseSettings(text)
-  expect(commandsOf(settings)).toEqual(['npm run build', 'npm test', 'x y'])
+  // Only checks run in this phase: a gate command is not on the approval list,
+  // so a line approved for the gate can never start running as a check.
+  expect(commandsOf(settings)).toEqual(['x y'])
 })
 
 test('a control character in a command is refused', async () => {
@@ -151,4 +153,18 @@ test('a base branch that could be read as an option is refused', async () => {
     })
   }
   expect(parseSettings('{"baseBranch": "release/1.2_x"}').settings.baseBranch).toBe('release/1.2_x')
+})
+
+test('a settings file cannot ask for more than 20 checks or 20 ports', async () => {
+  const ports = Object.fromEntries(Array.from({ length: 21 }, (_, i) => ['p' + i, 3000 + i]))
+  expect(parseSettings(JSON.stringify({ ports }))).toEqual({ settings: DEFAULTS, error: 'ports: at most 20' })
+  const checks = Array.from({ length: 21 }, (_, i) => ({ name: 'd' + i, minFreeGb: 1 }))
+  expect(parseSettings(JSON.stringify({ checks }))).toEqual({ settings: DEFAULTS, error: 'checks: at most 20' })
+  expect(parseSettings(JSON.stringify({ checks: checks.slice(0, 20) })).error).toBe(null)
+})
+
+test('a progress path is at most 200 characters', async () => {
+  expect(parseSettings(JSON.stringify({ progress: { files: 'a/'.repeat(101) + '*.md' } })).error).toBe(
+    'progress: wrong type',
+  )
 })

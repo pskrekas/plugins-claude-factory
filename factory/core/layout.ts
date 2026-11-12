@@ -35,7 +35,8 @@ export function fit(left: string, right: string, columns: number): { left: strin
 
     return text.slice(0, room - 1) + '…'
   }
-  const r = cut(right, columns)
+  // The right side never takes more than half the row from a name on the left.
+  const r = cut(right, left === '' ? columns : Math.max(1, Math.floor(columns / 2)))
   const room = r ? columns - r.length - 1 : columns
 
   return { left: cut(left, Math.max(0, room)), right: r }
@@ -56,7 +57,8 @@ export function rowsOf(model: PanelModel, columns: number, now: number): Row[] {
 
   if (model.consent === 'none') add('No settings file. Run /factory init.', '', 'dim')
   if (model.consent === 'needed') {
-    head('SETTINGS NOT APPROVED')
+    // The count is on the first row: a long list can run below the pane's edge.
+    head(`SETTINGS NOT APPROVED · ${plural(model.pendingCommands.length, 'command')}`)
     // The person approves what is shown: a command is wrapped, never cut.
     for (const command of model.pendingCommands) {
       for (const piece of wrap(clean(command), columns)) add(piece, '', 'dim')
@@ -85,6 +87,7 @@ export function rowsOf(model: PanelModel, columns: number, now: number): Row[] {
       add(item.name, item.percent === null ? '-' : `${item.percent}%`)
       if (item.blocked) add(`BLOCKED: ${item.blocked}`, '', 'bad')
     }
+    if (model.progressMore > 0) add(`+ ${model.progressMore} more`, '', 'dim')
   }
 
   const running = model.agents.filter(agent => agent.isRunning)

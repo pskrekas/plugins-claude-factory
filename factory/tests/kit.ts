@@ -20,9 +20,10 @@ export const PANE = {
   },
 } as const
 
-// The engine stamps `origin` and `presentation` in a session; a test leaves them out.
-export function cmd(args: string): CommandRunInput {
-  return { command: 'factory', args } as CommandRunInput
+// A /factory command as the person typed it (`composer`), or as it came from
+// somewhere else. The engine stamps `presentation` in a session; a test leaves it out.
+export function cmd(args: string, kind = 'composer'): CommandRunInput {
+  return { command: 'factory', args, origin: { kind } } as CommandRunInput
 }
 
 // A model with every section filled.
@@ -72,6 +73,8 @@ export function engine(
     // A path that is a symbolic link, and the real path it leads to.
     links?: Record<string, string>
     path?: string
+    // Last change of a file, for the newest-first order.
+    mtimes?: Record<string, number>
   },
 ) {
   const seen = {
@@ -85,7 +88,13 @@ export function engine(
     paths: [] as (string | undefined)[],
     agents: (world.agents ?? []) as unknown[],
     isOpen: false,
+    // The pane is on screen: placed, and the tab the surface shows.
+    isPlaced: true,
+    isShownTab: true,
+    // The working tree the session is in, and the main checkout when it differs.
     root: '/r',
+    repoRoot: null as string | null,
+    cwds: [] as (string | undefined)[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
   }
   mock.store(on)
@@ -103,8 +112,11 @@ export function engine(
     return { value: undefined }
   })
   on('ui.panes', () => ({
-    value: (seen.isOpen ? [{ id: 'factory', title: 'Factory' }] : []) as never,
+    value: (seen.isOpen
+      ? [{ id: 'factory', title: 'Factory', isShown: seen.isShownTab, isFocused: false, isPlaced: seen.isPlaced }]
+      : []) as never,
   }))
+  on('session.root', () => ({ value: seen.root }))
   on('ui.status', (_, e) => {
     seen.status.push(e.text)
 
@@ -124,7 +136,9 @@ export function engine(
   on('agent.list', () => ({ value: seen.agents as never }))
   on('agent.spawn', () => ({ model: 'm', agentId: 'a1' }) as never)
   on('turn.complete', () => ({}) as never)
-  on('session.repo', () => ({ value: { root: seen.root, remote: world.remote ?? null } as never }))
+  on('session.repo', () => ({
+    value: { root: seen.repoRoot ?? seen.root, remote: world.remote ?? null } as never,
+  }))
   on('session.cwd', () => ({ value: seen.root }))
   const real = (path: string) => world.links?.[path] ?? path
   const isDir = (path: string) =>
@@ -142,7 +156,7 @@ export function engine(
       value: {
         kind: text === undefined ? 'dir' : 'file',
         size: text?.length ?? 0,
-        mtimeMs: 0,
+        mtimeMs: world.mtimes?.[target] ?? 0,
         isLink: target !== e.path,
         realPath: target,
       } as never,
@@ -178,6 +192,11 @@ export function engine(
   })
   on('env.get', (_, e) => ({ value: e.name === 'PATH' ? (world.path ?? '/usr/bin:/bin') : undefined }))
   on('process.run', (_, e) => {
+    // The top of the working tree: answered here, and not counted as a run.
+    if (e.argv.join(' ') === 'git rev-parse --show-toplevel') {
+      return { value: { exitCode: 0, stdout: seen.root + '\n', stderr: '' } as never }
+    }
+    seen.cwds.push(e.init?.cwd)
     seen.ran.push(e.argv.join(' '))
     seen.paths.push(e.init?.env?.PATH)
     const answer = world.run?.(e.argv)

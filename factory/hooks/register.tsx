@@ -21,6 +21,8 @@ const panel = atom({ plugin: 'factory', key: 'panel' } as const, emptyModel(), {
 const MINIMUM = [2, 1, 322] as const
 const REFRESH_MS = 60_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
+const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
+const GIT_TOP_MS = 5_000
 
 // Theme keys, so the colours follow the person's theme.
 const COLOR: Record<Tone, string | undefined> = {
@@ -47,6 +49,7 @@ export const register: Register = (on, options) => {
   // Built in `session.start`, which runs before the first prompt and again
   // after every reload. See hooks/io.ts for why it exists.
   let io: Io | null = null
+  let brief: string | null = null
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -60,14 +63,32 @@ export const register: Register = (on, options) => {
       return started
     }
 
-    const root = () =>
-      $.session
-        .repo()
-        .then(repo => repo?.root ?? $.session.cwd())
-        .catch(() => $.session.cwd())
+    // The top of the working tree, found once per session folder. In a linked
+    // worktree `$.session.repo()` names the main checkout, which is not where
+    // this session's files and branch are.
+    const tops = new Map<string, string>()
+    const root = async () => {
+      const at = await $.session.root().catch(() => $.session.cwd())
+      const known = tops.get(at)
+      if (known !== undefined) return known
+      const env = { PATH: safePath(await $.env.get('PATH').catch(() => undefined), at) }
+      const top = await $.process
+        .run(['git', 'rev-parse', '--show-toplevel'], { cwd: at, env, timeoutMs: GIT_TOP_MS })
+        .then(done => (done.exitCode === 0 ? done.stdout.trim() : ''))
+        .catch(() => '')
+      const found = top !== '' ? top : at
+      tops.set(at, found)
+
+      return found
+    }
     io = {
       now: () => $.clock.now(),
       root,
+      consentKey: () =>
+        $.session
+          .repo()
+          .then(repo => repo?.root ?? root())
+          .catch(() => root()),
       remote: () =>
         $.session
           .repo()
@@ -79,7 +100,12 @@ export const register: Register = (on, options) => {
           .then(found =>
             found.realPath === undefined
               ? null
-              : { kind: found.kind, size: found.size, realPath: found.realPath },
+              : {
+                  kind: found.kind,
+                  size: found.size,
+                  mtimeMs: found.mtimeMs,
+                  realPath: found.realPath,
+                },
           )
           .catch(() => null),
       isLink: path =>
@@ -126,10 +152,10 @@ export const register: Register = (on, options) => {
         if (options.sound !== false) void $.audio.play({ asset: 'fx/alert.wav' }).catch(() => undefined)
       },
       agents: () => $.agent.list().catch(() => []),
-      isPaneOpen: () =>
+      isPaneDrawn: () =>
         $.ui
           .panes()
-          .then(panes => panes.some(pane => pane.id === PANE))
+          .then(panes => panes.some(pane => pane.id === PANE && pane.isPlaced && pane.isShown))
           .catch(() => false),
     }
     const ready = io
@@ -141,26 +167,29 @@ export const register: Register = (on, options) => {
     // One quick read now, so the status line and the session brief have the
     // branch and the progress before the first prompt. It runs no `gh` and no
     // command from the settings file.
-    await refresh(ready, { isLight: true }).catch(() => undefined)
+    // The brief is built here, once: it is part of the system prompt, and a
+    // system prompt that changes during a session loses the prompt cache.
+    brief = await refresh(ready, { isLight: true })
+      .then(briefOf)
+      .catch(() => null)
     if (options.openOnStart === true) {
       void $.ui.open({ id: PANE, title: TITLE }).then(() => refresh(ready))
     }
-    // Slow reads run once a minute, and only while the pane is open.
+    // Slow reads run once a minute, and only while the pane is on screen.
     $.clock.every(REFRESH_MS, () => {
       void ready
-        .isPaneOpen()
-        .then(isOpen => (isOpen ? refresh(ready) : undefined))
+        .isPaneDrawn()
+        .then(isDrawn => (isDrawn ? refresh(ready) : undefined))
         .catch(() => undefined)
     })
 
     return started
   })
 
-  // The session brief: the last section of the system prompt, from the model
-  // as it is. It never reads anything itself: a brief must not delay a prompt.
+  // The session brief: the last section of the system prompt, with the text
+  // built at session start. It reads nothing: a brief must not delay a prompt.
   on('prompt.compose', async ($, e, next) => {
     const composed = await next(e)
-    const brief = briefOf(await read($, panel))
     if (brief === null) return composed
 
     return {
@@ -198,7 +227,14 @@ export const register: Register = (on, options) => {
 
       return { text: 'Factory pane opened.' }
     }
-    if (arg === 'approve') return { text: await approve(io) }
+    if (arg === 'approve') {
+      // An approval is the person's own act: only their Enter at the prompt counts.
+      if (e.origin?.kind !== 'composer') return { text: ONLY_A_PERSON }
+      // Their command opens the pane, so the commands can be drawn and read.
+      await $.ui.open({ id: PANE, title: TITLE })
+
+      return { text: await approve(io) }
+    }
     if (arg === 'init') return { text: await init(io) }
 
     return { text: 'Commands: /factory, /factory close, /factory init, /factory approve' }

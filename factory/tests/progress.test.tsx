@@ -55,6 +55,19 @@ test('glob matches one segment', async () => {
   expect(matchGlob('docs/*.md', ['docs/x.md', 'docs/y.txt', 'docsXx.md'])).toEqual(['docs/x.md'])
 })
 
+test('a glob with many stars is matched in no time', async () => {
+  const name = 'a'.repeat(4000)
+  const started = Date.now()
+  expect(matchGlob('*a*a*a*a*a*a*a*a*a*a*a*a*b', [name])).toEqual([])
+  expect(matchGlob('*a*a*a*a*a*a*a*a*a*a*a*a*b', [name + 'b'])).toEqual([name + 'b'])
+  expect(Date.now() - started).toBeLessThan(200)
+  expect(matchGlob('pre*mid*end', ['pre-mid-end', 'premidend', 'pre-end', 'xpre-mid-end'])).toEqual([
+    'pre-mid-end',
+    'premidend',
+  ])
+  expect(matchGlob('a*a', ['a', 'aa', 'aba'])).toEqual(['aa', 'aba'])
+})
+
 test('a path that leaves the repo is refused by the settings', async () => {
   for (const files of ['../x/*.md', '/etc/*', '~/notes/*.md', 'a/../../b.md', 'a\\\\b.md']) {
     const { settings, error } = parseSettings(JSON.stringify({ progress: { files } }))
@@ -102,7 +115,7 @@ test('progress shows while the settings wait for approval, and runs nothing', as
   await $.command.run(cmd(''))
 
   const rows = await paneText($)
-  expect(rows).toContain('SETTINGS NOT APPROVED')
+  expect(rows).toContain('SETTINGS NOT APPROVED · 1 command')
   expect(rows.find(row => /^Plan A\s+50%$/.test(row))).toBeDefined()
   expect(settingsRuns(world)).toEqual([])
 })
@@ -162,4 +175,22 @@ test('a settings file that is a link to a file outside the repo is not used', as
   const rows = await paneText($)
   expect(rows).toContain('No settings file. Run /factory init.')
   expect(settingsRuns(world)).toEqual([])
+})
+
+test('the eight newest progress files show, and the rest are counted', async ($, on) => {
+  const files: Record<string, string> = { '/r/.claude/factory.json': SETTINGS }
+  const mtimes: Record<string, number> = {}
+  for (let i = 1; i <= 10; i++) {
+    const path = `/r/docs/2026-01-${String(i).padStart(2, '0')}/progress.md`
+    files[path] = `# Plan ${i}\n- [x] a\n- [ ] b`
+    mtimes[path] = i * 1000
+  }
+  engine(on, { files, mtimes })
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  const rows = await paneText($)
+  const plans = rows.filter(row => row.startsWith('Plan ')).map(row => row.split(/\s+/)[1])
+  expect(plans).toEqual(['10', '9', '8', '7', '6', '5', '4', '3'])
+  expect(rows).toContain('+ 2 more')
 })

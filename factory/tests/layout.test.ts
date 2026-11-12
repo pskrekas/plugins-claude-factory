@@ -56,7 +56,7 @@ test('needed consent lists the commands and hides the repo sections', async () =
     r => r.left,
   )
   expect(rows.slice(0, 3)).toEqual([
-    'SETTINGS NOT APPROVED',
+    'SETTINGS NOT APPROVED · 1 command',
     'npm test',
     'Run /factory approve to allow these commands.',
   ])
@@ -84,6 +84,29 @@ test('no row is wider than the pane, at 24 to 120 columns', async () => {
 test('fit cuts the left side with an ellipsis', async () => {
   expect(fit('abcdefghij', 'ok', 8)).toEqual({ left: 'abcd…', right: 'ok' })
   expect(fit('abc', 'ok', 8)).toEqual({ left: 'abc', right: 'ok' })
+})
+
+test('a right side as wide as the pane is cut to half, and the name stays', async () => {
+  expect(fit('cloud account', 'other.person@example.com', 24)).toEqual({
+    left: 'cloud acco…',
+    right: 'other.perso…',
+  })
+  const model = {
+    ...FULL,
+    checks: [{ name: 'cloud account', state: 'wrong' as const, got: 'other.person@example.com' }],
+  }
+  for (let columns = 8; columns <= 60; columns++) {
+    for (const r of rowsOf(model, columns, 5000)) {
+      expect(r.left.length + (r.right ? 1 + r.right.length : 0)).toBeLessThanOrEqual(columns)
+      if (r.right !== '' && columns >= 12) expect(r.left.length).toBeGreaterThan(0)
+    }
+  }
+})
+
+test('progress files that are not listed are counted', async () => {
+  const text = rowsOf({ ...FULL, progressMore: 2 }, 60, 5000).map(r => r.left)
+  expect(text[text.indexOf('BLOCKED: disk is full') + 1]).toBe('+ 2 more')
+  expect(rowsOf(FULL, 60, 5000).map(r => r.left)).not.toContain('+ 0 more')
 })
 
 test('status text', async () => {
