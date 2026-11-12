@@ -1,6 +1,8 @@
 import { atom, read } from 'claude-code'
 import type { Register } from 'claude-code'
 
+import { rowsOf } from '../core/layout'
+import type { Tone } from '../core/layout'
 import { emptyModel } from '../core/model'
 import { PANE, TITLE } from './state'
 
@@ -11,6 +13,16 @@ const panel = atom({ plugin: 'factory', key: 'panel' } as const, emptyModel(), {
 })
 
 const MINIMUM = [2, 1, 322] as const
+
+// Theme keys, so the colours follow the person's theme.
+const COLOR: Record<Tone, string | undefined> = {
+  plain: undefined,
+  dim: undefined,
+  head: undefined,
+  good: 'success',
+  warn: 'warning',
+  bad: 'error',
+}
 
 // True when `version` (2.1.322, 2.1.322-dev.…) is at least MINIMUM.
 function isSupported(version: string): boolean {
@@ -63,10 +75,26 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const model = await read($, panel)
+    const columns = Math.max(1, e.props.bodyColumns ?? e.viewport?.columns ?? 60)
+    const rows = rowsOf(model, columns, await $.clock.now())
 
     return (
       <Box flexDirection="column">
-        {model.consent === 'none' && <Text dimColor>No settings file. Run /factory init.</Text>}
+        {rows.map(row => {
+          const gap = Math.max(1, columns - row.left.length - row.right.length)
+
+          return (
+            <Text bold={row.tone === 'head'} dimColor={row.tone === 'dim'} color={COLOR[row.tone]}>
+              {row.left}
+              {row.right !== '' && ' '.repeat(gap)}
+              {row.right !== '' && (
+                <Text dimColor={row.rightTone === 'dim'} color={COLOR[row.rightTone]}>
+                  {row.right}
+                </Text>
+              )}
+            </Text>
+          )
+        })}
       </Box>
     )
   })

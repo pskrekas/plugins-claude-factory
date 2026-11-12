@@ -6,6 +6,7 @@ test('the pane mounts on every surface and says there is no settings file', asyn
   on('command.register', () => ({ value: { command: 'factory' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('clock.now', () => ({ value: 0 }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
