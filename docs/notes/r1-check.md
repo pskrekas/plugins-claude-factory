@@ -228,6 +228,20 @@ The line:
 - [ ] Give a work item the title `@/etc/hosts` and run it: the pull request's title is
       that text. No file of your machine is in the title or in a comment.
 
+- [ ] Answer a question of Intake as a comment on the work item, then run the item
+      again: Intake does not ask the same question (your comment reached it). If it
+      does, look at `<state>/jobs/<job>/files/item.md`: your comment must be there.
+- [ ] Mark a Bug (not a story): `item.md` holds its steps to reproduce.
+- [ ] A work item whose description holds thousands of `<`: the panel still answers
+      at once.
+- [ ] With `"tracker": { "kind": "azure-boards", "project": "<organization>/<project>" }`
+      in a clone whose remote is on GitHub: the pane shows `SETTINGS NOT APPROVED` and
+      a line `[tracker] azure-boards <organization>/<project>`; `/factory run` refuses
+      until `/factory approve`.
+- [ ] Rename the extension's folder (`~/.azure/cliextensions/azure-devops`) for a
+      moment: the pane says `az has no azure-devops extension. …` at once, and nothing
+      is installed. Put the folder back.
+
 What to write down for the plugin's author: the text and the exit code of any `az`
 failure; whether the comments of a work item came newest first; whether
 `7.1-preview.4` was accepted for the comments; whether a tag kept its `:`.

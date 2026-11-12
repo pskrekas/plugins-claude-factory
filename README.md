@@ -136,7 +136,7 @@ No code that an agent wrote, and no command that an agent chose, runs on your ma
 Every tool call of an agent of the line goes through the plugin first.
 
 - **Files (the file tools).** With its read and write tools an agent reads only inside its job (the job's worktree and the job's folder) and writes one file, its report. Only the builder also writes code, in its worktree. A path is judged by where it really is, so a link that leads out of the job is refused.
-- **Shell on this machine (only with `"container": false`).** Refused: `git push`, `gh` and `az repos` (the plugin talks to the host), changes to git settings and refs, leaving the job's branch or moving another one (`git checkout <branch>`, `git switch`, `git branch -f`), any naming of the git folder, a write to a full path outside the job (scratch space under `/tmp` is allowed), the commands in `factory.forbiddenCommands` (put your deploy and release commands there), and a few forms the fence cannot read (a variable or a pattern in a program name, a write to a place only the shell knows, a shell inside a shell inside a shell). The shell can read anywhere you can.
+- **Shell on this machine (only with `"container": false`).** Refused: `git push`, `gh` and `az` (the plugin talks to the host), changes to git settings and refs, leaving the job's branch or moving another one (`git checkout <branch>`, `git switch`, `git branch -f`), any naming of the git folder, a write to a full path outside the job (scratch space under `/tmp` is allowed), the commands in `factory.forbiddenCommands` (put your deploy and release commands there), and a few forms the fence cannot read (a variable or a pattern in a program name, a write to a place only the shell knows, a shell inside a shell inside a shell). The shell can read anywhere you can.
 - **Twice is enough.** The same command refused twice stops the job and asks you.
 - **Its limit.** For shell commands this is best effort. A script that the builder writes and runs is not read by the fence. That is why the builder's commands run in a container unless you say otherwise.
 - **Shell in a container.** Only the commands in `factory.forbiddenCommands` are refused, as text.
@@ -211,13 +211,13 @@ A job's worktree is in the state folder (`worktrees/<job>`), not in the repo.
 
 ### What it writes on Azure DevOps
 
-Only for a repo whose settings say `"tracker": { "kind": "azure-boards" }`, or whose remote `origin` is an Azure DevOps repository (for pull requests). Every `az` call names the organization of that remote (`--org https://dev.azure.com/<organization>`) and tells `az` to detect nothing, so `az`'s own defaults are not used.
+Only for a repo whose settings say `"tracker": { "kind": "azure-boards" }`, or whose remote `origin` is an Azure DevOps repository (for pull requests). Every `az` call that reads or writes names its organization (`--org https://dev.azure.com/<organization>`: the remote's, or the one you approved, see Mixes) and tells `az` to detect nothing, so `az`'s own defaults are not used. `az` is also told not to install a missing extension by itself.
 
-- **Tags.** The mark is a tag on a work item (`factory` by default): only you put it there. The line adds one state tag beside it, `<mark>:in-progress`, `<mark>:needs-human`, `<mark>:done` or `<mark>:rejected`, and takes the old one away. It reads the tags just before it writes them, so your other tags stay. A work item with a state tag is not in the queue. **It never changes a work item's own state** (New, Active, Closed, …): take the `<mark>:` tag away to put an item back in the queue.
+- **Tags.** The mark is a tag on a work item (`factory` by default): only you put it there. The line adds one state tag beside it, `<mark>:in-progress`, `<mark>:needs-human`, `<mark>:done` or `<mark>:rejected`, and takes the old one away. It reads the tags just before it writes them, so your other tags stay; a tag of yours that starts with `<mark>:` is taken as the line's and removed. The read and the write are two calls: a tag that you change in the moment between them (well under a second) is written over. A work item with a state tag is not in the queue. **It never changes a work item's own state** (New, Active, Closed, …): take the `<mark>:` tag away to put an item back in the queue.
 - **Comments.** On the work item's discussion, as text (nothing in it is read as markup), and as a new thread on the pull request. `az` reads a value that starts with `@` from a file, so no title and no comment is ever an argument: the plugin writes each one to a file of its own state folder, passes `--<name>=@<file>`, and removes the file. A comment that holds one of `factory.forbiddenCommentWords` is not sent.
-- **Pull requests.** It opens a draft pull request from the job's branch `factory/<job>`, links it to the work item, marks it ready (`--draft false`), comments on it, or abandons it for a rejected item. **It never completes one**: no `az` call of the plugin holds `--status completed`, `--auto-complete` or `--bypass-policy`. A pull request that you complete reads as merged, and the job is done.
-- **What an agent reads.** A work item's description and comments are HTML; an agent gets them as plain text (no tag, no script), and only the comments of the item's author and yours.
-- **Mixes.** GitHub Issues with the code on Azure Repos: `"tracker": { "kind": "github", "project": "<owner>/<name>" }`. Azure Boards with the code on GitHub: `"tracker": { "kind": "azure-boards", "project": "<organization>/<project>" }`; the pull request is then a comment on the work item, not a link.
+- **Pull requests.** It opens a draft pull request from the job's branch `factory/<job>`, links it to the work item (Azure DevOps may then offer to close the work item when you complete the pull request), marks it ready (`--draft false`), comments on it, or abandons it for a rejected item. **It never completes one**: no `az` call of the plugin holds `--status completed`, `--auto-complete` or `--bypass-policy`. A pull request that you complete reads as merged, and the job is done.
+- **What an agent reads.** A work item's description and comments are HTML; an agent gets them as plain text (no markup, no script), with a bug's steps to reproduce and a story's acceptance criteria, and only the comments of the item's author and yours (the newest fifty are read). An item whose comments cannot be read is not started.
+- **Mixes.** GitHub Issues with the code on Azure Repos: `"tracker": { "kind": "github", "project": "<owner>/<name>" }`. Azure Boards with the code on GitHub: `"tracker": { "kind": "azure-boards", "project": "<organization>/<project>" }`; the pull request is then a comment on the work item, not a link. Such a place comes from the settings file, not from the remote, and a settings file arrives with a clone: the pane shows it as a line `[tracker] azure-boards <organization>/<project>`, and it is used only after `/factory approve`. With an Azure DevOps remote the organization is always the remote's.
 - **Not checked on a real organization yet.** The `az` calls are built from the tool's help and its code (`docs/notes/az-check.md`). The hand check is in `docs/notes/r1-check.md`.
 
 ## Settings
@@ -335,7 +335,7 @@ Each `gh` call of the second list ends with `-R <owner>/<name>`. The line's `git
 ```
 az boards query --wiql "SELECT … WHERE [System.TeamProject] = '<project>' AND [System.Tags] CONTAINS '<mark>' AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') …" --project <project> …
 az boards work-item show --id <n> --expand fields …
-az devops invoke --area wit --resource comments --route-parameters project=<project> workItemId=<n> --api-version 7.1-preview.4 …
+az devops invoke --area wit --resource comments --route-parameters project=<project> workItemId=<n> --query-parameters $top=50 order=desc --api-version 7.1-preview …
 az boards work-item update --id <n> --fields=System.Tags=<the tags> …
 az boards work-item update --id <n> --discussion=@<file> …
 az repos pr work-item add --id <pr> --work-items <n> …
@@ -374,7 +374,9 @@ Before a `git` call on a job's folder it runs `find <folder> -mindepth 1 -iname 
 
 **`gh could not start` or `gh is not logged in`.** Install the GitHub CLI, then run `gh auth login`.
 
-**`az could not start`, `az is not logged in`, or `az has no azure-devops extension`.** Install the Azure CLI; run `az login`; run `az extension add --name azure-devops`. An `az` with no extension tries to install it by itself and can wait a long time: the plugin stops each call after 30 seconds.
+**`az could not start`, `az is not logged in`, or `az has no azure-devops extension`.** Install the Azure CLI; run `az login`; run `az extension add --name azure-devops`. The plugin tells `az` not to install a missing extension by itself, and stops each call after 30 seconds.
+
+**`The tracker's place (…) is named by the settings file, not by the remote. …`** Read the `[tracker]` line in the pane, then `/factory approve`.
 
 **`The remote origin names no Azure DevOps project. …`** The settings say `azure-boards`, and the remote is not on `dev.azure.com`. Set `tracker.project` to `<organization>/<project>`.
 

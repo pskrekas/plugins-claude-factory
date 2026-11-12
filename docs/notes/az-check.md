@@ -23,6 +23,9 @@ DevOps REST API, as the extension passes it on. The hand check
 | Is there a command for a pull request comment, or to read a work item's comments? | No. Both go through `az devops invoke` (`--area`, `--resource`, `--route-parameters key=value …`, `--api-version`, `--http-method`, `--in-file <a JSON file>`). | the help, `team/invoke.py` |
 | What happens when the `azure-devops` extension is missing? | `az` answers `'boards …' is misspelled or not recognized by the system`, and first tries to install the extension by itself, which can wait a long time. Every call of the plugin has a time limit. | seen on the machine, with a wrong command name |
 | What does `az` say when nobody is logged in? | `Before you can run Azure DevOps commands, you need to run the login command (az login if using AAD/MSA identity else az devops login if using PAT token) …` | `common/services.py` |
+| Which version text does `az devops invoke` take? | One the extension can read as a number after it takes `-preview` out: `7.1-preview` is 7.1; `7.1-preview.4` stops the call with an error (found in the final review, by running the extension's own line). | `team/invoke.py`, `apiVersionToFloat` |
+| Does `az` install a missing extension by itself? | Yes, when nobody can be asked (no terminal): it installs, then runs the command again. The plugin runs every `az` with `AZURE_EXTENSION_USE_DYNAMIC_INSTALL=no`. | `azure/cli/core/extension/dynamic_install.py` |
+| Does a work item update test what it replaces? | No. `az boards work-item update` sends `add` operations with no test of the revision: a read and a write of the tags are two calls with a moment between them. | `boards/work_item.py` |
 | How long is a call? | The help of a command took about 1 s with `AZURE_CORE_COLLECT_TELEMETRY=no`. A real call was not timed. | seen on the machine |
 
 ## The JSON the adapters read (from the documentation)
@@ -38,6 +41,10 @@ Sample names only: organization `acme`, project `Shop`, repository `web`.
 - **Who is logged in**: `az account show --query user.name --output tsv` prints one line, the account's name.
 
 ## Not known until the hand check
+
+- Which `comments` resource `az devops invoke` picks for `--area wit`, when the service lists more than one.
+- Whether the account name of `az account show` is the `uniqueName` Azure DevOps gives an author (it decides whose comments an agent reads; a mismatch drops the runner's own comments, never adds a stranger's).
+- Whether a bug's steps are in `Microsoft.VSTS.TCM.ReproSteps` in the project's process.
 
 - The exact text of each failure, and its exit code.
 - Whether a tag keeps a `:` as written (`factory:in-progress`).
