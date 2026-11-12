@@ -25,7 +25,7 @@ import type { GateResult, Step } from '../core/step'
 import { descriptionOf } from './agent-events'
 import type { Spawn } from './agent-events'
 import { containerName } from '../core/container-args'
-import { removeContainer } from './container'
+import { containersGone, removeContainer } from './container'
 import { context } from './context'
 import type { Ctx } from './context'
 import { runGate, baseContainer } from './gate'
@@ -97,15 +97,13 @@ async function freeDiskGb(io: Io, dir: string): Promise<number | null> {
 // local branch. The job itself stays in the state folder for the rest of its
 // day: what it spent is in the day's total and under the day's limit.
 export async function tidy(io: Io, root: string, dir: string, job: Job): Promise<void> {
-  if ((await io.stat(`${dir}/worktrees/${job.id}`)) !== null) await removeWorktree(io, root, job.id).catch(() => undefined)
-  // The containers go before the folders they hold. A job that ran on this machine asks docker nothing.
-  if (job.shell === 'container') {
-    for (const kind of ['job', 'gate'] as const) {
-      const name = containerName(kind, job.id, dir.slice(dir.lastIndexOf('/') + 1))
-      if (name !== null) await removeContainer(io, name).catch(() => undefined)
-    }
-  }
-  if ((await io.stat(`${dir}/gate/${job.id}`)) !== null) await removeCleanCopy(io, root, job.id).catch(() => undefined)
+  // The containers go before the folders they hold: nothing may run in a
+  // folder while git removes it. While docker does not say that they are
+  // gone, the folders stay. A job that ran on this machine asks docker nothing.
+  const isOpen = job.shell !== 'container' || (await containersGone(io, root, job.id).catch(() => false))
+  if (!isOpen) io.toast(`Factory: a container of ${clean(job.itemId)} could not be stopped. Its folders stay in ${dir}. Start Docker, then remove them.`)
+  if (isOpen && (await io.stat(`${dir}/worktrees/${job.id}`)) !== null) await removeWorktree(io, root, job.id).catch(() => undefined)
+  if (isOpen && (await io.stat(`${dir}/gate/${job.id}`)) !== null) await removeCleanCopy(io, root, job.id).catch(() => undefined)
   // The local branch goes too, so the item can run again.
   if (job.branch !== null && (await headOf(io, root, job.id)) !== null) await dropBranch(io, root, job.id).catch(() => undefined)
   for (const map of [gates, repeats, mergeAsked, fails, abandoned]) map.delete(job.id)

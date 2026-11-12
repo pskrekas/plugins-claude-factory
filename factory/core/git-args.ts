@@ -110,7 +110,8 @@ export function gitArgs(call: GitCall): string[] | null {
       return ['git', 'worktree', 'add', '--detach', call.path, call.sha]
     case 'uncommitted':
       // What the job's worktree holds that its branch does not.
-      return [...inTree(call.gitDir, call.workTree), 'status', '--porcelain', '--no-renames', '--untracked-files=all', '-z']
+      // It starts no git inside a folder of the worktree (a submodule).
+      return [...inTree(call.gitDir, call.workTree), 'status', '--porcelain', '--no-renames', '--untracked-files=all', '--ignore-submodules=all', '-z']
     case 'add-all':
       // Every file the builder left in the job's folder (ignored files stay out).
       return [...inTree(call.gitDir, call.workTree), 'add', '-A']

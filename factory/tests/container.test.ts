@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { stateFolderOf } from '../core/state-path'
-import { dockerState, makeGate, removeContainer, runArgv, runOnce, sweepContainers } from '../hooks/container'
+import { containersGone, dockerState, isMaybeAlive, makeGate, removeContainer, runArgv, runOnce, sweepContainers } from '../hooks/container'
 import { fakeIo } from './kit'
 
 const LABEL = stateFolderOf('/r/.git')
@@ -46,7 +46,7 @@ test("a builder's command runs in a container of its own over the job's worktree
   const command = 'npm test -- "a b"; echo $(id) &'
   expect(await runOnce(io, '/r', ID, SPEC, command, 120_000)).toEqual({ ok: true, text: 'exit 3\nout line\n[stderr]\nerr line\n', exitCode: 3, isGone: true })
   // One run, then the container is removed by name: also one that a time limit or a lost docker left alive.
-  expect(docker(io)).toEqual([`docker run --rm --name ${JOB} --label factory.state=${LABEL} --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -v ${WT}/.git:${WT}/.git:ro -w ${WT} --entrypoint sh node:22 -c ${command}`, `docker rm -f ${JOB}`])
+  expect(docker(io)).toEqual([`docker run --pull never --rm --name ${JOB} --label factory.state=${LABEL} --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -w ${WT} --entrypoint sh node:22 -c ${command}`, `docker rm -f ${JOB}`])
   expect(io.timeouts[io.ran.findIndex(line => line.startsWith('docker run'))]).toBe(120_000)
 
   const long = world({ 'docker run': { exitCode: 0, stdout: 'x'.repeat(100_000) + 'THE-END' } })
@@ -67,9 +67,9 @@ test('a command that does not end in time is stopped: its container is removed',
     expect([JSON.stringify(rm), (await runOnce(stuck, '/r', ID, SPEC, 'sleep 999', 5000)).isGone]).toEqual([JSON.stringify(rm), false])
   }
   // Gone means: docker removed it, or says there is none, or says it is being removed.
-  for (const stderr of ['Error response from daemon: No such container: x', 'Error response from daemon: removal of container x is already in progress']) {
-    expect([stderr, await removeContainer(world({ 'docker rm': { exitCode: 1, stderr } }), JOB)]).toEqual([stderr, true])
-  }
+  // Gone means: docker removed it, or says there is none. "Is being removed" is not gone yet.
+  expect(await removeContainer(world({ 'docker rm': { exitCode: 1, stderr: 'Error response from daemon: No such container: x' } }), JOB)).toBe(true)
+  expect(await removeContainer(world({ 'docker rm': { exitCode: 1, stderr: 'Error response from daemon: removal of container x is already in progress' } }), JOB)).toBe(false)
   expect(await removeContainer(world({ 'docker rm': { exitCode: 0 } }), JOB)).toBe(true)
   expect(await removeContainer(world({ 'docker rm': { exitCode: 1, stderr: 'permission denied' } }), JOB)).toBe(false)
   expect(await removeContainer(world({}), JOB)).toBe(false)
@@ -105,13 +105,13 @@ test("the gate's container is made new over the gate's clean copy; one that cann
   const io = world({ 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 0 } })
   expect(await makeGate(io, '/r', ID, SPEC)).toEqual({ ok: true, name: GATE, folder: `${DIR}/gate/${ID}` })
   // A container an earlier gate run left is never used again.
-  expect(docker(io).map(line => line.split(' ').slice(0, 3).join(' '))).toEqual(['docker rm -f', 'docker run -d'])
+  expect(docker(io).map(line => line.split(' ').slice(0, 3).join(' '))).toEqual(['docker rm -f', 'docker run --pull'])
   expect(docker(io).at(-1)).toContain(`-v ${DIR}/gate/${ID}:${DIR}/gate/${ID} -w ${DIR}/gate/${ID} --entrypoint sleep node:22 infinity`)
   expect(docker(io).at(-1)?.includes('.git:')).toBe(false)
-  // The copy's `.git` file (git made the copy) cannot be changed from inside.
+  // Nothing inside the folder is a mount's source, also not git's own `.git` file: a builder can put a link in its place.
   const linked = world({ 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 0 } }, { [`${DIR}/gate/${ID}/.git`]: 'gitdir: x\n' })
   await makeGate(linked, '/r', ID, SPEC)
-  expect(docker(linked).at(-1)).toContain(`-v ${DIR}/gate/${ID}:${DIR}/gate/${ID} -v ${DIR}/gate/${ID}/.git:${DIR}/gate/${ID}/.git:ro -w ${DIR}/gate/${ID} --entrypoint sleep node:22`)
+  expect(docker(linked).at(-1)?.includes('.git')).toBe(false)
 
   const broken = world({ 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 125, stderr: 'docker: invalid reference format.\nSee docker run --help' } })
   expect(await makeGate(broken, '/r', ID, SPEC)).toEqual({ ok: false, why: 'docker: docker: invalid reference format. See docker run --help' })
@@ -134,4 +134,22 @@ test('containers of jobs that are gone are removed; the others stay', async () =
   expect(docker(io).at(-1)).toBe(`docker rm -f ${JOB}`)
   // With no docker there is nothing to sweep.
   expect(await sweepContainers(world({}), '/r', [])).toBe(0)
+})
+
+test("a job's containers are gone only when docker says so for both; a container that may be alive is remembered until it is removed", async () => {
+  const io = world({ 'docker rm': { exitCode: 0 } })
+  expect(await containersGone(io, '/r', ID)).toBe(true)
+  expect(docker(io)).toEqual([`docker rm -f ${JOB}`, `docker rm -f ${GATE}`])
+  const half = world({ [`docker rm -f ${JOB}`]: { exitCode: 0 }, [`docker rm -f ${GATE}`]: { exitCode: 1, stderr: 'Cannot connect to the Docker daemon' } })
+  expect(await containersGone(half, '/r', ID)).toBe(false)
+  expect(await containersGone(world({}), '/r', ID)).toBe(false)
+  expect(await containersGone(world({ docker: { exitCode: 0 } }), '/r', '../x')).toBe(false)
+
+  // A command whose container docker did not confirm as gone: the name is remembered.
+  const stuck = world({ 'docker run': { exitCode: 0, stdout: 'ok' }, 'docker rm': { exitCode: 1, stderr: 'Cannot connect to the Docker daemon' } })
+  expect((await runOnce(stuck, '/r', ID, SPEC, 'ls', 1000)).isGone).toBe(false)
+  expect(isMaybeAlive(JOB)).toBe(true)
+  // Whoever removes it next (the shell tool, the line, a tidy) clears the mark.
+  expect(await removeContainer(world({ 'docker rm': { exitCode: 0 } }), JOB)).toBe(true)
+  expect(isMaybeAlive(JOB)).toBe(false)
 })

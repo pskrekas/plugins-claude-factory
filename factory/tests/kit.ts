@@ -409,6 +409,19 @@ export function fakeIo(
       }
       const args = argv.filter(arg => arg !== '-p' && arg !== '-f')
       const [program, a, b] = args
+      // `find <folder> … -iname .git -print`: every entry below the folder that is named `.git`, by any case.
+      if (program === 'find' && a !== undefined) {
+        const hits = new Set<string>()
+        for (const file of Object.keys(files)) {
+          if (!file.startsWith(a + '/')) continue
+          const parts = file.slice(a.length + 1).split('/')
+          parts.forEach((part, i) => {
+            if (part.toLowerCase() === '.git') hits.add(`${a}/${parts.slice(0, i + 1).join('/')}`)
+          })
+        }
+
+        return { exitCode: 0, stdout: [...hits].sort().map(hit => hit + '\n').join(''), stderr: '' }
+      }
       // mkdir makes a folder only if nothing is there: it is the atomic step of the lock.
       if (program === 'mkdir' && a !== undefined) {
         if (argv.includes('-p') && isDir(a)) return done(true)

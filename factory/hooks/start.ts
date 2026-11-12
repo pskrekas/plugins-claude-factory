@@ -83,10 +83,12 @@ export async function startRun(io: Io, spawn: Spawn, only: string | null, ready:
   }
   // Only a marked item runs, also when it is named: the mark is the person's own word (design 8.1).
   if (only !== null && !(await hasMark(ctx.run, only, ctx.mark))) return `${clean(only)} does not carry the mark "${ctx.mark}". Only a marked item runs.`
+  // A session that already runs the line may have a builder's command or a gate in a container now.
+  const wasMine = (await lockInfo(io, ctx.root, ctx.now)).state === 'mine'
   const lock = await takeLock(io, ctx.root, ctx.now)
   if (!lock.isHeld) return `Another session runs the line (${clean(lock.holder ?? 'unknown')}). Nothing was changed.`
   try {
-    return await begin(io, spawn, only, ctx, gate.container !== false)
+    return await begin(io, spawn, only, ctx, gate.container !== false && !wasMine)
   } catch (error) {
     // Nothing is left half-started: no run file, no lock.
     await endRun(io, ctx.root).catch(() => undefined)
@@ -100,7 +102,8 @@ async function begin(io: Io, spawn: Spawn, only: string | null, ctx: Ctx, hasDoc
   if (ctx.tracker === null || ctx.mark === null) return ''
   await setStop(io, ctx.root, false)
   // Containers that a crash, a closed session or a time limit left behind go.
-  // This session holds the lock: no gate and no builder of this repository runs now.
+  // Only when this session did not run the line before this call: then no
+  // gate and no builder of this repository runs now.
   if (hasDocker) await sweepContainers(io, ctx.root, []).catch(() => 0)
 
   // The jobs of an earlier session go on. An agent of theirs that is gone is

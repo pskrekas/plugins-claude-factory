@@ -48,14 +48,14 @@ async function userOf(io: Io): Promise<string | null> {
 }
 
 // What a docker call needs to know of a job's folder (its worktree, or the
-// gate's clean copy): the real folder, the container's name, the person's
-// user id, and whether the folder holds git's own `.git` file.
+// gate's clean copy): the real folder, the container's name and the person's
+// user id.
 async function placeOf(
   io: Io,
   root: string,
   jobId: string,
   kind: 'job' | 'gate',
-): Promise<{ ok: true; name: string; folder: string; user: string; label: string; hasGitFile: boolean } | { ok: false; why: string }> {
+): Promise<{ ok: true; name: string; folder: string; user: string; label: string } | { ok: false; why: string }> {
   const dir = await stateDirOf(io, root)
   const there = dir === null || !isJobId(jobId) ? null : await io.stat(`${dir}/${kind === 'job' ? 'worktrees' : 'gate'}/${jobId}`)
   if (dir === null || there === null || there.kind !== 'dir') return { ok: false, why: 'the job has no folder' }
@@ -67,10 +67,8 @@ async function placeOf(
   if (name === null) return { ok: false, why: 'the job has no folder' }
   const user = await userOf(io)
   if (user === null) return { ok: false, why: 'the user id could not be read' }
-  // The folder's `.git` file is git's own (a job's worktree, the gate's copy): it is read-only inside.
-  const gitFile = await io.stat(`${folder}/.git`)
 
-  return { ok: true, name, folder, user, label, hasGitFile: gitFile !== null && gitFile.kind === 'file' }
+  return { ok: true, name, folder, user, label }
 }
 
 const whyNot = (result: RunResult | null): string =>
@@ -118,10 +116,12 @@ export async function runOnce(
   if (result !== null && 'failed' in result && result.failed === 'not-found') return { ok: false, why: NOT_HERE, isGone: true }
   // Nothing of the command stays alive, however the call ended.
   let isGone = await removeContainer(io, place.name)
+  if (!isGone) maybeAlive.add(place.name)
   if (isGone && result !== null && !('failed' in result) && isDockersOwn(result) && /already in use/i.test(result.stderr)) {
     // A container of this name was there (a run that was lost). It is removed now: once more.
     result = await docker(io, call, timeoutMs)
     isGone = await removeContainer(io, place.name)
+    if (!isGone) maybeAlive.add(place.name)
   }
   if (result === null) return { ok: false, why: 'the container settings are not usable', isGone }
   if ('failed' in result) {
@@ -143,22 +143,44 @@ export async function runArgv(io: Io, name: string, cwd: string, argv: string[],
   return (await docker(io, { do: 'argv', name, cwd, argv }, timeoutMs)) ?? { failed: 'other' }
 }
 
+// The containers of commands that docker did not confirm as gone, by name: a
+// program of such a command may still run in its job's folder.
+const maybeAlive = new Set<string>()
+export const isMaybeAlive = (name: string): boolean => maybeAlive.has(name)
+
 // Removes a container by name, with every program in it. True only when
-// docker says so: it removed the container, there is none of that name, or
-// it is being removed. On any other answer the container may still run.
+// docker says so: it removed the container, or there is none of that name.
+// On any other answer the container may still run.
 export async function removeContainer(io: Io, name: string): Promise<boolean> {
   const result = await docker(io, { do: 'remove', name })
   if (result === null || 'failed' in result) return false
+  const isGone = result.exitCode === 0 || /no such container/i.test(result.stderr)
+  if (isGone) maybeAlive.delete(name)
 
-  return result.exitCode === 0 || /no such container|is already in progress/i.test(result.stderr)
+  return isGone
 }
 
-// The same for the container of a job's commands.
-export async function removeJobContainer(io: Io, root: string, jobId: string): Promise<boolean> {
+// The name of a job's container of one kind, or null.
+export async function boxName(io: Io, root: string, jobId: string, kind: 'job' | 'gate'): Promise<string | null> {
   const dir = await stateDirOf(io, root)
-  const name = dir === null ? null : containerName('job', jobId, dir.slice(dir.lastIndexOf('/') + 1))
+
+  return dir === null ? null : containerName(kind, jobId, dir.slice(dir.lastIndexOf('/') + 1))
+}
+
+// Removes the container of one kind of a job. True only when docker says that it is gone.
+export async function removeOf(io: Io, root: string, jobId: string, kind: 'job' | 'gate'): Promise<boolean> {
+  const name = await boxName(io, root, jobId, kind)
 
   return name !== null && (await removeContainer(io, name))
+}
+
+// Removes both containers of a job. True only when docker says that both are
+// gone: only then may a folder of the job be removed or read on this machine.
+export async function containersGone(io: Io, root: string, jobId: string): Promise<boolean> {
+  const job = await removeOf(io, root, jobId, 'job')
+  const gate = await removeOf(io, root, jobId, 'gate')
+
+  return job && gate
 }
 
 // Removes every container of this repository's factory whose name is not in

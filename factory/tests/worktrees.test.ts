@@ -54,7 +54,7 @@ test('every git call of the factory, word for word', async () => {
   // A rename is shown as a file that went and a file that came: both names are checked.
   expect(line({ do: 'changed', from: BASE, to: SHA })).toBe(`git diff --name-only --no-renames -z ${BASE}...${SHA}`)
   expect(line({ do: 'uncommitted', gitDir: GIT_DIR, workTree: WT })).toBe(
-    `${IN_WT} status --porcelain --no-renames --untracked-files=all -z`,
+    `${IN_WT} status --porcelain --no-renames --untracked-files=all --ignore-submodules=all -z`,
   )
   // The tip of the job's own branch: the ref that a push sends, by its full name.
   expect(line({ do: 'head', jobId: ID })).toBe('git rev-parse --verify refs/heads/factory/12-add-dark-mode^{commit}')
@@ -266,7 +266,7 @@ test('sync with the base: a conflict is undone and named', async () => {
   io.answer = git({ ...REFS, 'git fetch': { exitCode: 0 }, [`${IN_WT} merge --no-edit`]: { exitCode: 1, stdout: 'CONFLICT (content): x' }, [`${IN_WT} merge --abort`]: { exitCode: 0 } })
 
   expect(await syncBase(io, '/r', ID, 'main')).toEqual({ ok: false, why: 'conflict with main' })
-  expect(io.ran).toEqual([
+  expect(io.ran.filter(line => line.startsWith("git "))).toEqual([
     'git fetch origin main',
     'git rev-parse --verify refs/remotes/origin/main^{commit}',
     `${IN_WT} merge --no-edit ${BASE}`,
@@ -328,7 +328,7 @@ test("the plugin commits what the builder left; a clean folder gets no commit", 
   const clean = fakeIo({ files: LINKED })
   clean.answer = git({ [`${IN_WT} status`]: { exitCode: 0, stdout: '' } })
   expect(await commitAll(clean, '/r', JOB12)).toEqual({ ok: true, isNew: false })
-  expect(clean.ran.filter(one => one.startsWith('git '))).toEqual([`${IN_WT} status --porcelain --no-renames --untracked-files=all -z`])
+  expect(clean.ran.filter(one => one.startsWith('git '))).toEqual([`${IN_WT} status --porcelain --no-renames --untracked-files=all --ignore-submodules=all -z`])
 
   const dirty = fakeIo({ files: LINKED })
   dirty.answer = git({
@@ -338,7 +338,7 @@ test("the plugin commits what the builder left; a clean folder gets no commit", 
   })
   expect(await commitAll(dirty, '/r', { id: ID, itemId: '#PROJ 12!', round: 3 })).toEqual({ ok: true, isNew: true })
   expect(dirty.ran.filter(one => one.startsWith('git '))).toEqual([
-    `${IN_WT} status --porcelain --no-renames --untracked-files=all -z`,
+    `${IN_WT} status --porcelain --no-renames --untracked-files=all --ignore-submodules=all -z`,
     `${IN_WT} add -A`,
     `${IN_WT} diff --cached --raw --no-renames --no-abbrev -z`,
     `${IN_WT} commit --no-verify --no-gpg-sign -m Factory: item PROJ-12, round 3`,
@@ -374,4 +374,27 @@ test('a commit that cannot be made says why', async () => {
   const odd = fakeIo({ files: { '/r/.git/HEAD': 'x', [`${WT}/.git`]: 'gitdir: /elsewhere\n' } })
   expect(await commitAll(odd, '/r', JOB12)).toEqual({ ok: false, why: 'the worktree is not the one git made' })
   expect(odd.ran.filter(one => one.startsWith('git '))).toEqual([])
+})
+
+test("a git repository inside the job's folder stops every git call on the folder", async () => {
+  for (const [inner, shown] of [['nested/.git/config', 'nested/.git'], ['nested/.GIT/config', 'nested/.GIT'], ['a/b/.git', 'a/b/.git'], ['.GIT/x', '.GIT']] as const) {
+    const io = fakeIo({ files: { ...LINKED, [`${WT}/${inner}`]: 'x' } })
+    io.answer = git({ ...REFS, 'git fetch': { exitCode: 0 }, [IN_WT]: { exitCode: 0 } })
+    expect([inner, await worktreeGitDir(io, '/r', ID)]).toEqual([inner, null])
+    expect(await commitAll(io, '/r', JOB12)).toEqual({ ok: false, why: `the code folder holds a git repository of its own (${shown}): the line does not commit one` })
+    expect(await uncommittedFiles(io, '/r', ID)).toBe(null)
+    expect((await syncBase(io, '/r', ID, 'main')).ok).toBe(false)
+    // Git was not started on the folder at all: a repository inside it can name a program for git to run.
+    expect(io.ran.some(line => line.startsWith(IN_WT))).toBe(false)
+  }
+  // The look itself: one fixed call, in the repo.
+  const plain = fakeIo({ files: LINKED })
+  plain.answer = git({ [IN_WT]: { exitCode: 0 } })
+  expect(await worktreeGitDir(plain, '/r', ID)).toEqual({ gitDir: GIT_DIR, workTree: WT })
+  expect(plain.ran).toEqual([`find ${WT} -mindepth 1 -iname .git -print`])
+  // A folder that cannot be listed is not used.
+  const blind = fakeIo({ files: LINKED })
+  blind.answer = argv => (argv[0] === 'find' ? { exitCode: 1, stdout: '', stderr: 'find: permission denied' } : undefined)
+  expect(await worktreeGitDir(blind, '/r', ID)).toBe(null)
+  expect(await commitAll(blind, '/r', JOB12)).toEqual({ ok: false, why: 'the worktree is not the one git made' })
 })

@@ -7,7 +7,7 @@ import type { CheckRun } from '../core/gate'
 import type { Job } from '../core/job'
 import { GATE_MARK, isBranchName, lineOf, parseSettings } from '../core/settings'
 import type { Settings } from '../core/settings'
-import { makeGate, removeContainer, runArgv } from './container'
+import { makeGate, removeOf, runArgv } from './container'
 import type { Io } from './io'
 import { writeJobFile } from './jobs'
 import { consentKeyOf } from './readers/repo'
@@ -142,6 +142,9 @@ export async function runGate(
   // A branch that changed no file would pass on the base's own content.
   const isEmpty = changed.length === 0
   if (hits.length === 0 && !isEmpty) {
+    // A container that an earlier gate run left may still run in the old
+    // copy: docker must say that it is gone before git touches the folder.
+    if (spec !== false && !(await removeOf(io, root, job.id, 'gate'))) return stop("the gate's container could not be stopped (start Docker)")
     const copy = await addCleanCopy(io, root, job.id, sha)
     if (!copy.ok) return stop('the clean copy could not be made')
     let box: { name: string; folder: string } | null = null
@@ -167,8 +170,10 @@ export async function runGate(
       }
     } finally {
       // The container goes first: nothing runs in the copy when it is removed.
-      if (box !== null) await removeContainer(io, box.name).catch(() => undefined)
-      await removeCleanCopy(io, root, job.id)
+      // While docker does not say that it is gone, the copy stays; the next
+      // gate run removes both.
+      const isGone = spec === false || (await removeOf(io, root, job.id, 'gate').catch(() => false))
+      if (isGone) await removeCleanCopy(io, root, job.id)
     }
   }
 

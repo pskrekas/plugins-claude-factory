@@ -9,7 +9,7 @@ import type { Who } from '../core/fence'
 import { isJobId } from '../core/job'
 import type { Usage } from '../core/price'
 import { clean } from '../core/rows'
-import { removeJobContainer, runOnce } from './container'
+import { boxName, isMaybeAlive, removeContainer, runOnce } from './container'
 import { baseContainer } from './gate'
 import { dropFact } from './inbox'
 import type { Io } from './io'
@@ -45,8 +45,6 @@ const FENCED_TOOLS = ['Bash', SHELL_TOOL, 'Write', 'Edit', 'Read', 'Glob', 'Grep
 const NOT_YET = 'The fence does not know this agent yet. Try again in a moment.'
 let forbidden: { at: number; commands: string[][] } | null = null
 let box: { at: number; answer: { ok: true; container: ContainerSpec | false | null } | { ok: false; why: string } } | null = null
-// Where each job's builder runs its commands. It is set when a job is made and never changes.
-const shells = new Map<string, Shell>()
 const NOT_A_BUILDER = 'This tool is for the builder of the factory line.'
 // One side at a time (design 8.3). While a command of a job runs in its
 // container, a program in it could change a path of the job's folder between
@@ -60,12 +58,13 @@ const fileCalls = new Map<string, number>() // per job: its file calls that run 
 const SHELL_RUNS = 'A command of this job runs in its container. Wait for it to end, then call again.'
 const FILE_RUNS = 'A file call of this job runs. Wait for it to end, then call again.'
 const TWO_SHELLS = 'Another command of this job runs. Wait for it to end, then call again.'
-// The jobs with a command whose container docker did not confirm as gone: a
-// program of it may still run, so the job's folder stays closed.
-const unconfirmed = new Set<string>()
+// A command whose container docker did not confirm as gone may still have a
+// program in the job's folder (`isMaybeAlive`): the folder stays closed until
+// someone removes that container.
 const STUCK = 'A container of this job may still run: docker did not confirm that it stopped. Start Docker; the next command of the job tries again.'
-// Why a file call of a job must wait, or null.
-const closedFor = (jobId: string): string | null => (unconfirmed.has(jobId) ? STUCK : shellRuns.has(jobId) ? SHELL_RUNS : null)
+// Why a file call of a job must wait, or null. `box` is the name of the job's container.
+const closedFor = (jobId: string, box: string | null): string | null => (box !== null && isMaybeAlive(box) ? STUCK : shellRuns.has(jobId) ? SHELL_RUNS : null)
+const NO_CHECK = 'The factory could not check this call.'
 const NOT_RUN = 'The command was not run'
 const SHELL_MS = { usual: 120_000, most: 600_000, least: 1_000 }
 
@@ -192,14 +191,9 @@ async function boxOf(io: Io): Promise<{ ok: true; container: ContainerSpec | fal
 }
 
 // Where the builder of a job runs its commands, or null when the job is gone.
+// Read from the job each time: an item can run again under the same job id.
 async function shellOf(io: Io, root: string, jobId: string): Promise<Shell | null> {
-  const hit = shells.get(jobId)
-  if (hit !== undefined) return hit
-  const job = await readJob(io, root, jobId)
-  if (job === null) return null
-  shells.set(jobId, job.shell)
-
-  return job.shell
+  return (await readJob(io, root, jobId))?.shell ?? null
 }
 
 // Where a path really is: the real path of the nearest part of it that
@@ -237,20 +231,27 @@ export async function onToolCheck(
   io: Io,
   e: { agentId?: string; tool: string; input: unknown },
 ): Promise<{ decision: 'allow' } | { decision: 'deny'; reason: string } | null> {
-  const root = await io.root()
-  const agent = await agentOf(io, root, e.agentId)
+  // A call of the session itself is never the fence's.
   if (e.agentId === undefined) return null
-  if (agent === null) {
-    // Between the start of one of the line's agents and the moment its id is
-    // known, an agent that is not known could be that one: it is refused, not
-    // passed on. (The hand-back is never the fence's to answer.)
-    return unsettled > 0 && FENCED_TOOLS.includes(e.tool) ? { decision: 'deny', reason: NOT_YET } : null
-  }
-  // Told early; `onFileCall` is the one that holds the rule.
-  const closed = FILE_TOOLS.includes(e.tool) ? closedFor(agent.jobId) : null
-  if (closed !== null) return { decision: 'deny', reason: closed }
+  const agentId = e.agentId
+  // A check that fails must not let the call through: the engine skips a hook that throws.
+  try {
+    const root = await io.root()
+    const agent = await agentOf(io, root, agentId)
+    if (agent === null) {
+      // Between the start of one of the line's agents and the moment its id is
+      // known, an agent that is not known could be that one: it is refused, not
+      // passed on. (The hand-back is never the fence's to answer.)
+      return unsettled > 0 && FENCED_TOOLS.includes(e.tool) ? { decision: 'deny', reason: NOT_YET } : null
+    }
+    // Told early; `onFileCall` is the one that holds the rule.
+    const closed = FILE_TOOLS.includes(e.tool) ? closedFor(agent.jobId, await boxName(io, root, agent.jobId, 'job')) : null
+    if (closed !== null) return { decision: 'deny', reason: closed }
 
-  return verdictOf(io, root, agent, e.agentId, e.tool, e.input)
+    return await verdictOf(io, root, agent, agentId, e.tool, e.input)
+  } catch {
+    return { decision: 'deny', reason: NO_CHECK }
+  }
 }
 
 // The fence's answer for one call of an agent of the line; a refusal is also
@@ -291,10 +292,16 @@ export async function onShell(
   io: Io,
   e: { agentId?: string; command?: unknown; timeout_ms?: unknown },
 ): Promise<{ result: string } | { deny: string }> {
+  // A check that fails must not let the call through.
+  return shell(io, e).catch(() => ({ deny: `${NOT_RUN}: the factory could not check the call.` }))
+}
+
+async function shell(io: Io, e: { agentId?: string; command?: unknown; timeout_ms?: unknown }): Promise<{ result: string } | { deny: string }> {
   const root = await io.root()
   const agent = await agentOf(io, root, e.agentId)
   const job = agent === null || agent.role !== 'builder' ? null : await readJob(io, root, agent.jobId)
-  if (e.agentId === undefined || job === null || job.shell !== 'container' || job.stage !== 'build') return { deny: NOT_A_BUILDER }
+  // Only the builder that is at work on the job now: one the line gave up on runs no command.
+  if (e.agentId === undefined || job === null || job.shell !== 'container' || job.stage !== 'build' || !job.work.some(work => work.agentId === e.agentId)) return { deny: NOT_A_BUILDER }
   const command = typeof e.command === 'string' ? e.command : ''
   if (command.trim() === '') return { deny: `${NOT_RUN}: give one command as text.` }
   const refused = forbiddenIn(command, await forbiddenOf(io))
@@ -306,6 +313,7 @@ export async function onShell(
   const where = await boxOf(io)
   if (!where.ok) return { deny: `${NOT_RUN}: ${where.why}.` }
   if (where.container === null || where.container === false) return { deny: `${NOT_RUN}: the settings name no container.` }
+  const box = await boxName(io, root, job.id, 'job')
   const asked = typeof e.timeout_ms === 'number' && Number.isFinite(e.timeout_ms) && e.timeout_ms > 0 ? e.timeout_ms : SHELL_MS.usual
   // One side at a time. Nothing is awaited between this look and the mark.
   if (shellRuns.has(job.id)) return { deny: TWO_SHELLS }
@@ -314,12 +322,8 @@ export async function onShell(
   try {
     // A container of an earlier command that docker did not confirm as gone
     // is removed first. While that fails, nothing of the job runs.
-    if (unconfirmed.has(job.id)) {
-      if (!(await removeJobContainer(io, root, job.id))) return { deny: STUCK }
-      unconfirmed.delete(job.id)
-    }
+    if (box !== null && isMaybeAlive(box) && !(await removeContainer(io, box))) return { deny: STUCK }
     const ran = await runOnce(io, root, job.id, where.container, command, Math.round(Math.min(SHELL_MS.most, Math.max(SHELL_MS.least, asked))))
-    if (!ran.isGone) unconfirmed.add(job.id)
 
     return ran.ok ? { result: ran.text } : { deny: `${NOT_RUN}: ${ran.why.replace(/\.$/, '')}.` }
   } finally {
@@ -336,24 +340,41 @@ export async function onShell(
 // call ends nothing of the job runs, so what the fence sees now is what the
 // tool will use. Any other call goes on unchanged.
 export async function onFileCall<T>(io: Io, e: { agentId?: string; tool: string; [key: string]: unknown }, next: () => Promise<T>): Promise<T | { deny: string }> {
+  // A call of the session itself, or of a tool that is no file tool, is not the line's.
   if (e.agentId === undefined || !FILE_TOOLS.includes(e.tool)) return next()
-  const root = await io.root()
-  const agent = await agentOf(io, root, e.agentId)
-  if (agent === null || (await shellOf(io, root, agent.jobId)) !== 'container') return next()
-  const { jobId } = agent
-  // Nothing is awaited between this look and the count.
-  const closed = closedFor(jobId)
-  if (closed !== null) return { deny: closed }
-  fileCalls.set(jobId, (fileCalls.get(jobId) ?? 0) + 1)
+  const agentId = e.agentId
+  let isCalled = false
   try {
-    const verdict = await verdictOf(io, root, agent, e.agentId, e.tool, e)
-    if (verdict !== null && verdict.decision === 'deny') return { deny: verdict.reason }
+    const root = await io.root()
+    const agent = await agentOf(io, root, agentId)
+    if (agent === null || (await shellOf(io, root, agent.jobId)) !== 'container') {
+      isCalled = true
 
-    return await next()
-  } finally {
-    const left = (fileCalls.get(jobId) ?? 1) - 1
-    if (left > 0) fileCalls.set(jobId, left)
-    else fileCalls.delete(jobId)
+      return await next()
+    }
+    const { jobId } = agent
+    const box = await boxName(io, root, jobId, 'job')
+    // Nothing is awaited between this look and the count.
+    const closed = closedFor(jobId, box)
+    if (closed !== null) return { deny: closed }
+    fileCalls.set(jobId, (fileCalls.get(jobId) ?? 0) + 1)
+    try {
+      const verdict = await verdictOf(io, root, agent, agentId, e.tool, e)
+      if (verdict !== null && verdict.decision === 'deny') return { deny: verdict.reason }
+      isCalled = true
+
+      return await next()
+    } finally {
+      const left = (fileCalls.get(jobId) ?? 1) - 1
+      if (left > 0) fileCalls.set(jobId, left)
+      else fileCalls.delete(jobId)
+    }
+  } catch (error) {
+    // An error of the tool itself is the tool's. A check that failed must not
+    // let the call through: the engine skips a hook that throws.
+    if (isCalled) throw error
+
+    return { deny: `${NO_CHECK} It was not run.` }
   }
 }
 

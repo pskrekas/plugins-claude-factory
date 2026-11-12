@@ -3,6 +3,7 @@
 import { failureText } from '../core/comment'
 import { branchOf, commitMessage, gitArgs, isCommitId } from '../core/git-args'
 import type { GitCall } from '../core/git-args'
+import { clean } from '../core/rows'
 import type { RunResult } from '../core/run'
 import type { Io } from './io'
 import { stateDirOf } from './jobs'
@@ -101,8 +102,25 @@ export async function worktreeGitDir(
   const back = await pointer(io, `${real}/gitdir`)
   const [named, own] = await Promise.all([back === null || back === '' ? null : io.stat(back), io.stat(dot)])
   if (named === null || own === null || named.realPath !== own.realPath) return null
+  // A git repository inside the folder (a `.git` below the top, or a second
+  // one beside git's own by another case) can name a program in its own
+  // settings, and git would start that program when it looks into the
+  // folder. With one there, no git call is made on the folder at all.
+  const entries = await gitEntries(io, root, workTree)
+  if (entries === null || entries.length !== 1 || entries[0] !== dot) return null
 
   return { gitDir: real, workTree }
+}
+
+const FIND_TIMEOUT_MS = 60_000
+
+// Every entry of a job's folder that is named `.git`, by any case; null when
+// the folder cannot be listed. `find` follows no link.
+async function gitEntries(io: Io, root: string, workTree: string): Promise<string[] | null> {
+  const found = await io.run(['find', workTree, '-mindepth', '1', '-iname', '.git', '-print'], { cwd: root, timeoutMs: FIND_TIMEOUT_MS })
+  if ('failed' in found || found.exitCode !== 0 || found.isCut === true) return null
+
+  return found.stdout.split('\n').filter(line => line !== '')
 }
 
 // Removes the local branch of a job that ended, so its item can run again.
@@ -235,7 +253,13 @@ export async function uncommittedFiles(io: Io, root: string, jobId: string): Pro
 // the folder is not committed: the gate's copy would not hold its files.
 export async function commitAll(io: Io, root: string, job: { id: string; itemId: string; round: number }): Promise<Done & { isNew?: boolean }> {
   const tree = await worktreeGitDir(io, root, job.id)
-  if (tree === null) return { ok: false, why: NOT_GITS }
+  if (tree === null) {
+    // Say which one, when the reason is a git repository inside the folder.
+    const path = await worktreePath(io, root, job.id)
+    const inner = path === null ? undefined : (await gitEntries(io, root, path))?.find(entry => entry !== `${path}/.git`)
+
+    return { ok: false, why: inner === undefined || path === null ? NOT_GITS : `the code folder holds a git repository of its own (${clean(inner.slice(path.length + 1)).slice(0, 100)}): the line does not commit one` }
+  }
   const left = await git(io, root, { do: 'uncommitted', ...tree })
   if (left === null || !passed(left)) return { ok: false, why: done(left).why ?? 'git failed' }
   if (!('failed' in left) && left.stdout === '') return { ok: true, isNew: false }

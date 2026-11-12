@@ -211,3 +211,12 @@ test("the container builder's shell tool: any command but a forbidden one; it ha
   expect(sh('ls', { ...reviewer, shell: 'container' })).toBe(null)
   expect(fenceOf({ tool: 'Bash', input: { command: 'npm test' } }, who)).toEqual({ decision: 'allow' })
 })
+
+test('the git file of the folder is not written to, by any spelling of its name', async () => {
+  for (const name of ['.git', '.GIT', '.Git', '.git/config', '.GIT/config', '.gIt/hooks/pre-commit']) {
+    expect([name, fenceOf({ tool: 'Write', input: { file_path: `${WT}/${name}`, content: 'x' } }, who)?.decision]).toEqual([name, 'deny'])
+    expect([name, fenceOf({ tool: 'Edit', input: { file_path: `${WT}/${name}`, old_string: 'a', new_string: 'b' } }, { ...who, shell: 'container' })?.decision]).toEqual([name, 'deny'])
+  }
+  expect(fenceOf({ tool: 'Write', input: { file_path: `${WT}/.gitignore`, content: 'x' } }, who)).toEqual({ decision: 'allow' })
+  expect(fenceOf({ tool: 'Write', input: { file_path: `${WT}/src/.github/x.yml`, content: 'x' } }, who)).toEqual({ decision: 'allow' })
+})

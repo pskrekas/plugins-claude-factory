@@ -105,8 +105,9 @@ function writeVerdict(input: Record<string, unknown>, who: Who): Verdict {
   if (file === null) return deny(NOT_UNDERSTOOD, '')
   const full = resolvePath(file, who.worktree)
   if (full === null) return deny(NOT_HERE, file)
-  const git = `${who.worktree}/.git`
-  const inCode = who.role === 'builder' && isIn(full, who.worktree) && !isIn(full, git)
+  // The folder's `.git`, by any case: some disks do not tell `.GIT` from `.git`.
+  const first = isIn(full, who.worktree) ? (full.slice(who.worktree.length + 1).split('/')[0] ?? '') : ''
+  const inCode = who.role === 'builder' && isIn(full, who.worktree) && first.toLowerCase() !== '.git'
 
   // Outside the code, an agent writes its one file and no other.
   return inCode || full === who.outFile ? ALLOW : deny(NOT_HERE, file)
@@ -205,7 +206,9 @@ const SPLIT = /;|&&|\|\||\||&|\n|\$\(|`|\(|\)/
 
 // The first simple command of `command` that the repository forbids, or null.
 // Also one behind another command, or given to a shell as text. Best effort,
-// as every text check of a command is.
+// as every text check of a command is: a command built from pieces gets past
+// it. In a container the container is the wall, not this check; it holds no
+// login of the person.
 export function forbiddenIn(command: string, forbidden: string[][], depth = 0): string | null {
   // A command that the shell builds (a variable, a command inside a command)
   // cannot be read word by word. It is refused when every word of a forbidden

@@ -823,7 +823,7 @@ test('in a container: the job says so, its builder has no shell of this machine,
       `${IN_TREE(id)} status --porcelain`,
       `${IN_TREE(id)} commit --no-verify --no-gpg-sign -m Factory: item 12, round 1`,
       `git worktree add --detach ${gate} ${SHA1}`,
-      `docker run -d --name ${boxOf('gate', id)} `,
+      `docker run --pull never -d --name ${boxOf('gate', id)} `,
       `docker exec -w ${gate} ${boxOf('gate', id)} npm test`,
       `docker rm -f ${boxOf('gate', id)}`,
       `git worktree remove --force ${gate}`,
@@ -831,7 +831,7 @@ test('in a container: the job says so, its builder has no shell of this machine,
     ]),
   ).toBe('ok')
   // The gate's container holds the clean copy, not the builder's folder.
-  expect(dockerOf(w).find(line => line.startsWith(`docker run -d --name ${boxOf('gate', id)} `))?.includes(tree)).toBe(false)
+  expect(dockerOf(w).find(line => line.startsWith(`docker run --pull never -d --name ${boxOf('gate', id)} `))?.includes(tree)).toBe(false)
   // No command of the gate ran on this machine.
   expect(w.io.ran.some(line => line.startsWith('npm '))).toBe(false)
 })
@@ -846,6 +846,19 @@ test('a job that ends has no container', async () => {
   await watch(w.io)
   expect((await jobOf(w, '12'))?.stage).toBe('done')
   expect(dockerOf(w)).toEqual([`docker rm -f ${boxOf('job', '12-item-12')}`, `docker rm -f ${boxOf('gate', '12-item-12')}`])
+  // The containers go first: nothing runs in a folder when git removes it.
+  expect(inOrder(w.io.ran, [`docker rm -f ${boxOf('job', '12-item-12')}`, `docker rm -f ${boxOf('gate', '12-item-12')}`, `git worktree remove --force ${DIR}/worktrees/12-item-12`])).toBe('ok')
+  // Docker does not confirm: the folders stay, and the person is told.
+  const stuck = lineWorld({ jobs: [{ ...at('14', ['spec', 'build', 'gate', 'review', 'approve', 'ready'], { pr: { number: 7, url: 'https://github.com/a/b/pull/7' } }), shell: 'container' }], settings: { factory: { container: BOX } } })
+  stuck.state.hasDocker = true
+  stuck.state.fail = ['docker rm']
+  await begin(stuck)
+  stuck.state.isMerged = true
+  stuck.io.time += 301_000
+  await watch(stuck.io)
+  expect((await jobOf(stuck, '14'))?.stage).toBe('done')
+  expect(lines(stuck).some(line => line.startsWith('git worktree remove'))).toBe(false)
+  expect(stuck.io.toasts).toContain(`Factory: a container of 14 could not be stopped. Its folders stay in ${DIR}. Start Docker, then remove them.`)
   // A job that ran on this machine asks docker nothing.
   const host = lineWorld({ jobs: [at('13', ['spec', 'build', 'gate', 'review', 'approve', 'ready'], { pr: { number: 7, url: 'https://github.com/a/b/pull/7' } })] })
   host.state.hasDocker = true
@@ -878,4 +891,37 @@ test("a builder's container that cannot be stopped keeps its work from being com
   const job = await jobOf(w, '12')
   expect([job?.stage, job?.question, job?.stoppedIn]).toEqual(['needs-human', "The line could not go on: the builder's container could not be stopped (start Docker)", 'build'])
   expect(lines(w).some(line => line.includes(' add -A') || line.includes(' commit '))).toBe(false)
+})
+
+test("a reject of a job that builds in a container stops its containers before a folder is removed", async () => {
+  const job = { ...startWork(at('12', ['spec', 'build']), { agentId: 'x1', role: 'builder' as const, focus: '', startedAt: NOW }, NOW), shell: 'container' as const }
+  const w = lineWorld({ jobs: [job], settings: { factory: { container: BOX } } })
+  w.state.hasDocker = true
+  w.io.files[`${DIR}/gate/${job.id}/README.md`] = 'x'
+  expect(await rejectJob(w.io, '12', 'Not now.')).toBe('12 is rejected. The reason is on the item.')
+  expect(inOrder(w.io.ran, [`docker rm -f ${boxOf('job', job.id)}`, `docker rm -f ${boxOf('gate', job.id)}`, `git worktree remove --force ${DIR}/worktrees/${job.id}`, `git worktree remove --force ${DIR}/gate/${job.id}`])).toBe('ok')
+
+  // Docker does not confirm: the job is rejected, and its folders are left.
+  const other = { ...startWork(at('13', ['spec', 'build']), { agentId: 'x2', role: 'builder' as const, focus: '', startedAt: NOW }, NOW), shell: 'container' as const }
+  const stuck = lineWorld({ jobs: [other], settings: { factory: { container: BOX } } })
+  stuck.state.hasDocker = true
+  stuck.state.fail = ['docker rm']
+  stuck.io.files[`${DIR}/gate/${other.id}/README.md`] = 'x'
+  expect(await rejectJob(stuck.io, '13', 'Not now.')).toBe('13 is rejected. The reason is on the item. Not cleaned up: stop the containers (docker did not confirm that they are gone: start Docker; a later /factory run cleans up); remove the worktree (a container may still run in it); remove the gate\'s copy (a container may still run in it).')
+  expect(lines(stuck).some(line => line.startsWith('git worktree remove'))).toBe(false)
+  // The job stays (rejected), so that a later run tidies it.
+  expect((await jobOf(stuck, '13'))?.stage).toBe('rejected')
+})
+
+test('/factory run a second time in the session that runs the line removes no container', async () => {
+  const w = lineWorld({ settings: { factory: { container: BOX } } })
+  w.state.hasDocker = true
+  w.state.list = ISSUES
+  await startRun(w.io, w.spawn, null, READY)
+  expect(dockerOf(w).filter(line => line.startsWith('docker ps')).length).toBe(1)
+  // A builder's command or a gate may run now: a sweep would stop it.
+  w.state.containers = `${boxOf('job', '4-fonts')}\n`
+  await startRun(w.io, w.spawn, null, READY)
+  expect(dockerOf(w).filter(line => line.startsWith('docker ps')).length).toBe(1)
+  expect(dockerOf(w).some(line => line.startsWith('docker rm'))).toBe(false)
 })

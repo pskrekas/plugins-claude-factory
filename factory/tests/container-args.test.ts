@@ -8,7 +8,7 @@ const SPEC = { image: 'node:22', network: 'on' as const, memory: '4g', cpus: 2 }
 const NAME = 'factory-job-12-add-dark-mode.r-1'
 const GATE = 'factory-gate-12-add-dark-mode.r-1'
 const line = (call: Parameters<typeof dockerArgs>[0]) => dockerArgs(call)?.join(' ') ?? null
-const make = { do: 'make' as const, name: NAME, spec: SPEC, folder: WT, user: '501:20', label: 'r-1', hasGitFile: true }
+const make = { do: 'make' as const, name: NAME, spec: SPEC, folder: WT, user: '501:20', label: 'r-1' }
 const once = { ...make, do: 'once' as const, command: 'npm test' }
 
 test('every docker call of the factory, word for word', async () => {
@@ -22,15 +22,15 @@ test('every docker call of the factory, word for word', async () => {
   // One command of a builder: a container of its own, gone when the command ends (`--rm`).
   // The image's own start program is not used: the shell is.
   expect(line(once)).toBe(
-    `docker run --rm --name ${NAME} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -v ${WT}/.git:${WT}/.git:ro -w ${WT} --entrypoint sh node:22 -c npm test`,
+    `docker run --pull never --rm --name ${NAME} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -w ${WT} --entrypoint sh node:22 -c npm test`,
   )
   // The gate's container stays for the gate's commands (`-d`), and does nothing by itself.
   expect(line({ ...make, name: GATE })).toBe(
-    `docker run -d --name ${GATE} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -v ${WT}/.git:${WT}/.git:ro -w ${WT} --entrypoint sleep node:22 infinity`,
+    `docker run --pull never -d --name ${GATE} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -w ${WT} --entrypoint sleep node:22 infinity`,
   )
-  // With no network, and with no git file in the folder.
-  expect(line({ ...make, spec: { ...SPEC, network: 'none' }, hasGitFile: false })).toBe(
-    `docker run -d --name ${NAME} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network none --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -w ${WT} --entrypoint sleep node:22 infinity`,
+  // With no network.
+  expect(line({ ...make, spec: { ...SPEC, network: 'none' } })).toBe(
+    `docker run --pull never -d --name ${NAME} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network none --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -w ${WT} --entrypoint sleep node:22 infinity`,
   )
   expect(line({ do: 'remove', name: NAME })).toBe(`docker rm -f ${NAME}`)
   expect(line({ do: 'list', label: 'r-1' })).toBe('docker ps -a --filter label=factory.state=r-1 --format {{.Names}}')
@@ -61,6 +61,7 @@ test('a value that breaks a rule gives no call at all', async () => {
     { ...make, folder: '/a/../b' },
     { ...make, folder: '/a:b' },
     { ...make, folder: '/a b\n' },
+    { ...make, folder: '/a\tb' },
     { ...make, user: 'root' },
     { ...make, user: '0:0 --privileged' },
     { ...make, label: 'a b' },
@@ -70,6 +71,8 @@ test('a value that breaks a rule gives no call at all', async () => {
     { ...make, spec: { ...SPEC, network: 'host' as 'on' } },
   ]
   for (const call of bad) expect([JSON.stringify(call).slice(0, 90), dockerArgs(call)]).toEqual([JSON.stringify(call).slice(0, 90), null])
+  // A space in a folder's name is not a rule broken (a home folder can hold one).
+  expect(dockerArgs({ ...make, folder: '/Users/a b/state/r-1/worktrees/' + ID })?.includes('/Users/a b/state/r-1/worktrees/' + ID)).toBe(true)
   expect(dockerArgs({ do: 'image', image: '-x' })).toBe(null)
   expect(dockerArgs({ do: 'remove', name: 'postgres' })).toBe(null)
   expect(dockerArgs({ do: 'remove', name: 'factory-' })).toBe(null)
@@ -87,7 +90,7 @@ test('a container sees one folder and gets no added right', async () => {
   const every = [
     dockerArgs({ do: 'image', image: 'node:22' }),
     dockerArgs(make),
-    dockerArgs({ ...make, name: GATE, hasGitFile: false }),
+    dockerArgs({ ...make, name: GATE }),
     dockerArgs({ ...once, command: '--privileged -v /:/host docker.sock' }),
     dockerArgs({ do: 'argv', name: NAME, cwd: WT, argv: ['npm', 'test'] }),
     dockerArgs({ do: 'remove', name: NAME }),
@@ -108,8 +111,10 @@ test('a container sees one folder and gets no added right', async () => {
     expect(list[list.indexOf('--security-opt') + 1]).toBe('no-new-privileges')
     // Exactly the job's folder is mounted (and its git file, read-only, over it).
     const mounts = list.filter((_, i) => list[i - 1] === '-v')
-    expect(mounts.every(mount => mount === `${WT}:${WT}` || mount === `${WT}/.git:${WT}/.git:ro`)).toBe(true)
-    expect(mounts.length).toBeGreaterThan(0)
+    // Exactly the job's folder is mounted. Nothing inside the folder is ever a mount's source: the builder writes there.
+    expect(mounts).toEqual([`${WT}:${WT}`])
+    // Docker fetches no image by itself.
+    expect(list[list.indexOf('--pull') + 1]).toBe('never')
     // A container that stays is the gate's; a builder's is gone with its one command.
     expect(list.includes('--rm') !== list.includes('-d')).toBe(true)
   }

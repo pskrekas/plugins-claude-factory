@@ -28,8 +28,8 @@ export const containerName = (kind: 'job' | 'gate', jobId: string, label: string
 
 export type DockerCall =
   | { do: 'image'; image: string }
-  | { do: 'make'; name: string; spec: ContainerSpec; folder: string; user: string; label: string; hasGitFile: boolean }
-  | { do: 'once'; name: string; spec: ContainerSpec; folder: string; user: string; label: string; hasGitFile: boolean; command: string }
+  | { do: 'make'; name: string; spec: ContainerSpec; folder: string; user: string; label: string }
+  | { do: 'once'; name: string; spec: ContainerSpec; folder: string; user: string; label: string; command: string }
   | { do: 'argv'; name: string; cwd: string; argv: string[] }
   | { do: 'remove'; name: string }
   | { do: 'list'; label: string }
@@ -43,8 +43,8 @@ const labelIn = (name: string): string | null => {
 
   return isJobId(rest.slice(0, dot)) && isLabel(label) ? label : null
 }
-// An absolute path with no `..`, no `:` (the mount's own separator), no space and no control character.
-const isFolder = (path: string) => path.startsWith('/') && !path.split('/').includes('..') && !/[\s:\u0000-\u001f\u007f]/.test(path)
+// An absolute path with no `..`, no `:` (the mount's own separator) and no control character.
+const isFolder = (path: string) => path.startsWith('/') && !path.split('/').includes('..') && !/[:\u0000-\u001f\u007f]/.test(path)
 const isSpec = (spec: ContainerSpec) =>
   isImage(spec.image) && (spec.network === 'on' || spec.network === 'none') && /^[1-9][0-9]{0,5}[mg]$/.test(spec.memory) && spec.cpus >= 0.5 && spec.cpus <= 16
 
@@ -69,6 +69,8 @@ export function dockerArgs(call: DockerCall): string[] | null {
 
       return [
         'docker', 'run',
+        // Docker fetches no image by itself: the person does.
+        '--pull', 'never',
         // A builder's container is gone when its one command ends; the gate's stays for the gate's commands.
         call.do === 'once' ? '--rm' : '-d',
         '--name', call.name,
@@ -84,11 +86,10 @@ export function dockerArgs(call: DockerCall): string[] | null {
         // The person's own user id, so files in the mounted folder stay the person's.
         '--user', call.user,
         '-e', 'HOME=/tmp',
-        // The one folder it sees, at its own path.
+        // The one folder it sees, at its own path. Nothing inside that folder
+        // is ever the source of a mount: a builder writes there, and docker
+        // follows a link that it finds in a mount's source.
         '-v', `${folder}:${folder}`,
-        // The folder's `.git` is a file that names the repository's git folder
-        // (which is not in the container). It cannot be changed from inside.
-        ...(call.hasGitFile ? ['-v', `${folder}/.git:${folder}/.git:ro`] : []),
         '-w', folder,
         // The image's own start program is not used. The command is one
         // argument, the last: only the shell inside the container reads it.

@@ -10,6 +10,7 @@ import { limitOf } from '../core/limits'
 import { clean } from '../core/rows'
 import type { Spawn } from './agent-events'
 import { context } from './context'
+import { containersGone } from './container'
 import type { Ctx } from './context'
 import type { Io } from './io'
 import {
@@ -196,12 +197,24 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
     // The job is rejected now, here and on the tracker. What follows only
     // tidies up: a step that fails is named, and does not undo the reject.
     const left: string[] = []
+    // Nothing may run in a folder while git removes it: for a job that builds
+    // in a container, docker must first say that its containers are gone.
+    let isOpen = job.shell !== 'container'
     const tidy: Step[] = [
+      [
+        'stop the containers',
+        async () => {
+          if (isOpen) return
+          if (!(await containersGone(io, ctx.root, job.id))) throw new Error('docker did not confirm that they are gone: start Docker; a later /factory run cleans up')
+          isOpen = true
+        },
+      ],
       [
         'remove the worktree',
         async () => {
           const path = await worktreePath(io, ctx.root, job.id)
           if (job.branch === null || path === null || (await io.stat(path)) === null) return
+          if (!isOpen) throw new Error('a container may still run in it')
           const removed = await removeWorktree(io, ctx.root, job.id)
           if (!removed.ok) throw new Error(removed.why ?? 'git failed')
         },
@@ -211,6 +224,7 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
         async () => {
           const copy = await worktreePath(io, ctx.root, job.id)
           if (copy === null || (await io.stat(copy.replace('/worktrees/', '/gate/'))) === null) return
+          if (!isOpen) throw new Error('a container may still run in it')
           const removed = await removeCleanCopy(io, ctx.root, job.id)
           if (!removed.ok) throw new Error(removed.why ?? 'git failed')
         },
@@ -224,7 +238,8 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
           if (!dropped.ok) throw new Error(dropped.why ?? 'git failed')
         },
       ],
-      ['retire the job', async () => retireJob(io, ctx.root, job.id, ctx.now)],
+      // A job whose folders were left stays, so that a later run tidies it.
+      ['retire the job', async () => (isOpen ? retireJob(io, ctx.root, job.id, ctx.now) : undefined)],
     ]
     for (const [name, step] of tidy) {
       try {
