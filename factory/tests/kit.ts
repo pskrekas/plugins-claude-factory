@@ -130,6 +130,10 @@ export function engine(
   const isDir = (path: string) =>
     Object.keys(seen.files).some(file => file.startsWith(path.replace(/\/$/, '') + '/'))
   on('fs.stat', (_, e) => {
+    // Without `resolve`, a link is described as the link itself.
+    if (e.resolve !== true && world.links?.[e.path] !== undefined) {
+      return { value: { kind: 'other', size: 0, mtimeMs: 0, isLink: true } as never }
+    }
     const target = real(e.path)
     const text = seen.files[target]
     if (text === undefined && !isDir(target)) throw new Error('ENOENT: no such file ' + e.path)

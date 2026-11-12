@@ -13,6 +13,7 @@ function fakeIo(): Io & { model: PanelModel } {
     root: async () => '/r',
     remote: async () => null,
     stat: async () => null,
+    isLink: async () => false,
     readFile: async () => null,
     listDir: async () => [],
     writeFile: async () => undefined,

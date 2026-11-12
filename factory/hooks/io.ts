@@ -15,6 +15,8 @@ export type Io = {
   // What a path is, how large, and where it really is once every symbolic
   // link is followed; null when there is nothing there.
   stat: (path: string) => Promise<{ kind: 'file' | 'dir' | 'other'; size: number; realPath: string } | null>
+  // True when the path itself is a symbolic link (also one that leads nowhere).
+  isLink: (path: string) => Promise<boolean>
   // A file's text, or null when it cannot be read.
   readFile: (path: string) => Promise<string | null>
   // The names in a directory (folders end with '/'), or [] when it cannot be listed.

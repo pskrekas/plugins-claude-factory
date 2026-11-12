@@ -8,6 +8,7 @@ import type { Tone } from '../core/layout'
 import { emptyModel } from '../core/model'
 import { failureOf } from '../core/run'
 import type { Io } from './io'
+import { init } from './init'
 import { approve, refresh, refreshAgents } from './refresh'
 import { PANE, TITLE } from './state'
 
@@ -81,6 +82,11 @@ export const register: Register = (on, options) => {
               : { kind: found.kind, size: found.size, realPath: found.realPath },
           )
           .catch(() => null),
+      isLink: path =>
+        $.fs
+          .stat(path)
+          .then(found => found.isLink)
+          .catch(() => false),
       readFile: path =>
         $.fs
           .read(path)
@@ -193,8 +199,9 @@ export const register: Register = (on, options) => {
       return { text: 'Factory pane opened.' }
     }
     if (arg === 'approve') return { text: await approve(io) }
+    if (arg === 'init') return { text: await init(io) }
 
-    return { text: `Unknown: /factory ${arg}` }
+    return { text: 'Commands: /factory, /factory close, /factory init, /factory approve' }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
