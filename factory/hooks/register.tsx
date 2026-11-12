@@ -10,6 +10,7 @@ import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
 import type { Io } from './io'
 import { init } from './init'
+import { whereText } from './jobs'
 import { approve, refresh, refreshAgents } from './refresh'
 import { PANE, TITLE } from './state'
 
@@ -164,7 +165,7 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'factory',
-      description: 'Open the Factory work panel (close | init | approve)',
+      description: 'Open the Factory work panel (close | init | approve | where)',
     })
     // One quick read now, so the status line and the session brief have the
     // branch and the progress before the first prompt. It runs no `gh` and no
@@ -238,8 +239,9 @@ export const register: Register = (on, options) => {
       return { text: await approve(io) }
     }
     if (arg === 'init') return { text: await init(io) }
+    if (arg === 'where') return { text: await whereText(io, await io.root()) }
 
-    return { text: 'Commands: /factory, /factory close, /factory init, /factory approve' }
+    return { text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where' }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

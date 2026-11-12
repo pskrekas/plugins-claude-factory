@@ -53,6 +53,13 @@ async function claim(io: Io, state: State): Promise<boolean> {
   return who !== 'theirs'
 }
 
+// What `/factory where` answers: the state folder of this repository.
+export async function whereText(io: Io, root: string): Promise<string> {
+  const state = await stateOf(io, root)
+
+  return state === null ? NO_HOME : `The factory keeps its state for this repository in:\n${state.dir}`
+}
+
 export async function readJobs(io: Io, root: string): Promise<Jobs> {
   const state = await stateOf(io, root)
   if (state === null) return { jobs: [], skipped: 0, note: NO_HOME }

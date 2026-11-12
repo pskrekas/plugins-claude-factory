@@ -1,0 +1,67 @@
+{
+  "id": "10-multiple-walls",
+  "itemId": "10",
+  "title": "Multiple walls",
+  "stage": "ready",
+  "round": 1,
+  "risk": "low",
+  "surfaces": [],
+  "reviewers": [
+    "code"
+  ],
+  "stoppedIn": null,
+  "question": null,
+  "sentBack": null,
+  "pr": {
+    "number": 19,
+    "url": "https://example.com/pull/19"
+  },
+  "createdAt": 1794490000000,
+  "updatedAt": 1794490540000,
+  "agentMs": 540000,
+  "costUsd": 2.1,
+  "history": [
+    {
+      "at": 1794490000000,
+      "from": null,
+      "to": "intake",
+      "reason": "started"
+    },
+    {
+      "at": 1794490060000,
+      "from": "intake",
+      "to": "spec",
+      "reason": "accepted, risk low"
+    },
+    {
+      "at": 1794490150000,
+      "from": "spec",
+      "to": "build",
+      "reason": "spec written"
+    },
+    {
+      "at": 1794490400000,
+      "from": "build",
+      "to": "gate",
+      "reason": "built"
+    },
+    {
+      "at": 1794490430000,
+      "from": "gate",
+      "to": "review",
+      "reason": "checks passed"
+    },
+    {
+      "at": 1794490500000,
+      "from": "review",
+      "to": "approve",
+      "reason": "reviewers passed"
+    },
+    {
+      "at": 1794490540000,
+      "from": "approve",
+      "to": "ready",
+      "reason": "full checks passed"
+    }
+  ]
+}

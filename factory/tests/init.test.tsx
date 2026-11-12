@@ -98,6 +98,6 @@ test('an unknown argument lists the commands', async ($, on) => {
   await $.session.start(START)
 
   expect((await $.command.run(cmd('nope'))).text).toBe(
-    'Commands: /factory, /factory close, /factory init, /factory approve',
+    'Commands: /factory, /factory close, /factory init, /factory approve, /factory where',
   )
 })
