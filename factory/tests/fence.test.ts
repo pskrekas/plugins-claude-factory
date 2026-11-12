@@ -41,6 +41,12 @@ test('ways around the words are refused too', async () => {
     'git send-pack origin HEAD', 'git http-push http://example.com/x',
     // A program name or a git command that is spelled with quotes, a backslash or a variable.
     'g\\it push', 'gi""t push', '$GIT push', 'git pu""sh', 'git $CMD origin',
+    // A program or a git command that the shell would fill in, and git's helper programs.
+    'gi? push', '/usr/bin/gi[t] push', 'git pus? origin', 'git {push,status}', '~/bin/git push', 'git-receive-pack x', '/usr/libexec/git-core/git-push origin',
+    // A git variable named in any way.
+    'export "GIT_DIR"=/x', 'declare -x GIT_DIR=/x', 'read GIT_DIR < f', 'printf -v GIT_WORK_TREE /x', 'X=GIT_DIR; eval "$X=/x"',
+    // The git folder by another spelling, or by a pattern.
+    'cd .GIT', 'cd .Git/hooks', 'cd .gi?', 'cd .g*', 'echo x > .GIT/config', 'rm -rf ./.Git',
     // Into the git folder, then a write with no path.
     'cd .git && echo x > config', 'cd ./.git/hooks; cp /tmp/x pre-commit', `cd ${WT}/.git`, 'pushd .git',
   ]
@@ -85,6 +91,9 @@ test('a file is read only inside the job: its worktree and its folder', async ()
   expect(fenceOf({ tool: 'Glob', input: { pattern: `${WT}*/secret` } }, reviewer)?.decision).toBe('deny')
   expect(fenceOf({ tool: 'Glob', input: { pattern: '/s/jobs/1?-a/files/item.md' } }, reviewer)?.decision).toBe('deny')
   expect(fenceOf({ tool: 'Glob', input: { pattern: `${WT}/src/*.ts` } }, reviewer)).toEqual(ALLOW)
+  // A group of choices can hold a path of its own, and two dots can hide in a name.
+  for (const pattern of ['{/etc,src}/**', 'src/{a,../../../x}/*', `${WT}/{src,/etc}/x`, 'src/..x/../**', '**/..'])
+    expect([pattern, fenceOf({ tool: 'Glob', input: { pattern } }, reviewer)?.decision]).toEqual([pattern, 'deny'])
 })
 
 test('a file is written only where the role writes', async () => {

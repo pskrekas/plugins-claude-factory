@@ -79,7 +79,9 @@ function readVerdict(tool: string, input: Record<string, unknown>, who: Who): Ve
   if (tool === 'Glob') {
     const pattern = text(input.pattern)
     if (pattern === null) return deny(NOT_UNDERSTOOD, '')
-    if (pattern.split('/').includes('..') || pattern.startsWith('~')) return deny(OUTSIDE, pattern)
+    // No two dots anywhere and no group of choices: each could name a place
+    // that the check of the first folder does not see.
+    if (pattern.includes('..') || pattern.includes('{') || pattern.startsWith('~')) return deny(OUTSIDE, pattern)
     // The folder before the first wildcard must be inside the job: a wildcard
     // in the name of the job's own folder could match its neighbours.
     const literal = pattern.slice(0, pattern.search(/[*?[{]|$/))
@@ -105,8 +107,15 @@ const PREFIXES = ['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'xa
 const SHELLS = ['sh', 'bash', 'zsh', 'dash', 'ksh']
 const GIT_SETTINGS = ['config', 'replace', 'update-ref', 'remote', 'worktree', 'symbolic-ref']
 const GIT_SENDS = ['push', 'send-pack', 'http-push']
-const isOdd = (word: string | undefined) => word !== undefined && /['"\\$]/.test(word)
-const namesGitFolder = (word: string) => word === '.git' || word.endsWith('/.git') || word.includes('.git/')
+// A word the shell would change before it runs: quotes, a backslash, a
+// variable, a pattern, a group of choices, a home folder.
+const isOdd = (word: string | undefined) => word !== undefined && /['"\\$*?[\]{}~]/.test(word)
+// By any case: some disks do not tell `.GIT` from `.git`.
+const namesGitFolder = (text: string) => {
+  const word = text.toLowerCase()
+
+  return word === '.git' || word.endsWith('/.git') || word.includes('.git/')
+}
 const GIT_PLACES = ['-c', '-C', '--git-dir', '--work-tree', '--exec-path', '--namespace']
 const WRITERS = ['rm', 'mv', 'cp', 'ln', 'tee', 'chmod', 'chown', 'truncate', 'dd', 'touch', 'mkdir', 'rmdir', 'install', 'rsync']
 const baseName = (word: string) => word.slice(word.lastIndexOf('/') + 1)
@@ -156,11 +165,13 @@ function gitVerdict(words: string[], simple: string): Deny | null {
 
 function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
   // Git told where to look, or what to run, through the environment.
-  if (simple.trim().split(/\s+/).some(word => /^['"]?GIT_[A-Z0-9_]*=/.test(word))) return deny(SETTINGS, simple)
+  // Any mention of one of git's own variables is refused, however it is set.
+  if (/GIT_[A-Z0-9_]+/.test(simple.replace(/['"\\]/g, ''))) return deny(SETTINGS, simple)
   const words = wordsOf(simple)
   const program = baseName(words[0] ?? '')
   if (program === '') return null
-  if (isOdd(words[0])) return deny(NOT_PLAIN, simple)
+  // Git's helper programs (`git-receive-pack`, …) are git by another name.
+  if (isOdd(words[0]) || program.startsWith('git-')) return deny(NOT_PLAIN, simple)
   // A shell or `eval` runs the text it is given: that text is judged too. The
   // text follows `-c`, also when the flag is joined with others (`-lc`).
   if (SHELLS.includes(program) || program === 'eval') {
@@ -173,7 +184,9 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
     }
   }
   // Into the git folder: what follows would write there with no path to see.
-  if ((program === 'cd' || program === 'pushd') && words.slice(1).some(namesGitFolder)) return deny(GIT_FOLDER, simple)
+  if ((program === 'cd' || program === 'pushd') && words.slice(1).some(word => namesGitFolder(word) || (word.startsWith('.') && isOdd(word)))) {
+    return deny(GIT_FOLDER, simple)
+  }
   if (program === 'git') {
     const refused = gitVerdict(words, simple)
     if (refused !== null) return refused
@@ -190,7 +203,8 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
 }
 
 function commandVerdict(command: string, who: Who, depth: number): Deny | null {
-  for (const simple of command.split(/;|&&|\|\||\||&|\n|\$\(|`|\(|\)|\{|\}/)) {
+  // Braces stay in the words: a group of choices in a command is refused as not plain.
+  for (const simple of command.split(/;|&&|\|\||\||&|\n|\$\(|`|\(|\)/)) {
     const refused = simpleVerdict(simple, who, depth)
     if (refused !== null) return refused
   }
