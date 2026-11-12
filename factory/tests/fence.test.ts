@@ -77,8 +77,17 @@ test('the builder stays on its branch, and writes inside its job', async () => {
     const verdict = bash(command)
     expect([command, verdict?.decision === 'deny' ? verdict.reason : verdict?.decision]).toEqual([command, 'This write is outside the job.'])
   }
-  for (const ok of [`cp a ${WT}/src/b.ts`, 'mv src/a.ts src/b.ts', `echo x > ${JOB}/out/build.md`, 'rm -rf ./dist', 'mkdir -p build/out'])
+  for (const ok of [`cp a ${WT}/src/b.ts`, 'mv src/a.ts src/b.ts', `echo x > ${JOB}/out/build.md`, 'rm -rf ./dist', 'mkdir -p build/out', 'cd src && cd .. && echo x > a.txt', 'cd src/deep; rm -rf ../old', 'echo a=b > notes.txt'])
     expect([ok, bash(ok)]).toEqual([ok, ALLOW])
+  // The same write with the mark joined to the path, forced, in an option, or after a change of folder.
+  for (const command of ['echo x>/Users/me/.zshrc', 'echo x 2>>/etc/hosts', 'echo x >| /etc/hosts', 'echo x &>/etc/hosts', 'cp a --target-directory=/usr/local/bin', 'cd /Users/me && echo x > .zshrc', 'cd .. && rm -rf 13-b', 'cd src; cd ../..; touch x', 'pushd /etc']) {
+    const verdict = bash(command)
+    expect([command, verdict?.decision === 'deny' ? verdict.reason : verdict?.decision]).toEqual([command, 'This write is outside the job.'])
+  }
+  // A new branch through the file form of checkout, and a branch moved by a fetch.
+  for (const command of ['git checkout -b try --', 'git checkout --', 'git checkout --detach HEAD~1 -- x', 'git checkout --orphan new -- x', 'git fetch . HEAD:main', 'git fetch origin main:main', 'git pull . other'])
+    expect([command, bash(command)?.decision]).toEqual([command, 'deny'])
+  expect(bash('git fetch origin main')).toEqual(ALLOW)
 })
 
 test("a repo's forbidden commands are refused, with or without what follows them", async () => {

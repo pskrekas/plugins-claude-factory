@@ -167,7 +167,15 @@ function gitVerdict(words: string[], simple: string): Deny | null {
   if (sub !== undefined && GIT_SETTINGS.includes(sub)) return deny(SETTINGS, simple)
   // The builder stays on its job's branch and moves no other one: from another
   // branch, or with a branch moved, it could merge into the base.
-  if (sub === 'switch' || (sub === 'checkout' && !rest.includes('--'))) return deny(STAY, simple)
+  if (sub === 'switch') return deny(STAY, simple)
+  if (sub === 'checkout') {
+    // Only the form that takes files back: `checkout [<commit>] -- <path>…`.
+    const dash = rest.indexOf('--')
+    const isFiles = dash >= 0 && dash < rest.length - 1 && !rest.slice(0, dash).some(word => word.startsWith('-'))
+    if (!isFiles) return deny(STAY, simple)
+  }
+  // A fetch or a pull that writes a local branch, or takes from this repository itself.
+  if ((sub === 'fetch' || sub === 'pull') && rest.some(word => word.includes(':') || word === '.')) return deny(STAY, simple)
   if (sub === 'branch' && rest.some(word => !word.startsWith('-') || BRANCH_CHANGES.includes(word))) return deny(STAY, simple)
   // A new branch or tag whose name could be read in the base's place.
   if ((sub === 'branch' || sub === 'tag') && isRemoteName(rest.find(word => !word.startsWith('-')))) return deny(REF, simple)
@@ -179,7 +187,7 @@ function gitVerdict(words: string[], simple: string): Deny | null {
   return null
 }
 
-function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
+function simpleVerdict(simple: string, who: Who, depth: number, at: { cwd: string }): Deny | null {
   // Git told where to look, or what to run, through the environment.
   // Any mention of one of git's own variables is refused, however it is set.
   const bare = simple.replace(/['"\\]/g, '')
@@ -214,6 +222,14 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
     return deny(NOT_PLAIN, simple)
   }
   if (program === 'popd' || program === 'dirs') return deny(NOT_PLAIN, simple)
+  // The shell stays inside the job (or in scratch space): a write after a
+  // change of folder is then inside it too.
+  const isInJob = (full: string | null) => full !== null && (isIn(full, who.worktree) || full === who.outFile || SCRATCH.some(folder => isIn(full, folder)))
+  if (program === 'cd' || program === 'pushd') {
+    const to = resolvePath(words.slice(1).find(word => !word.startsWith('-')) ?? '', at.cwd)
+    if (!isInJob(to) || to === null) return deny(OUT_WRITE, simple)
+    at.cwd = to
+  }
   if (SETTERS.includes(program) && words.slice(1).some(isOdd)) return deny(NOT_PLAIN, simple)
   if (program === 'printf' && words.includes('-v')) return deny(NOT_PLAIN, simple)
   if (program === 'git') {
@@ -233,21 +249,23 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
   // A path in a write is inside the job (the worktree, the one report file)
   // or in scratch space. The text check cannot tell what is read from what is
   // written, so every full path and every path with `..` is held to this.
-  for (const word of raw) {
-    const path = unquote(word).replace(/^\d*>>?/, '')
+  // A path can follow a write mark or an `=` with no space (`x>/path`, `--to=/path`).
+  for (const path of raw.flatMap(word => unquote(word).split(/[>=]/))) {
     if (!path.startsWith('/') && !path.split('/').includes('..')) continue
-    const full = resolvePath(path, who.worktree)
-    const isInside = full !== null && (isIn(full, who.worktree) || full === who.outFile || SCRATCH.some(folder => isIn(full, folder)))
-    if (!isInside) return deny(OUT_WRITE, simple)
+    if (!isInJob(resolvePath(path, at.cwd))) return deny(OUT_WRITE, simple)
   }
 
   return null
 }
 
 function commandVerdict(command: string, who: Who, depth: number): Deny | null {
-  // Braces stay in the words: a group of choices in a command is refused as not plain.
-  for (const simple of command.split(/;|&&|\|\||\||&|\n|\$\(|`|\(|\)/)) {
-    const refused = simpleVerdict(simple, who, depth)
+  // The folder the shell is in, followed from one simple command to the next:
+  // a write with a relative path is judged from there.
+  const at = { cwd: who.worktree }
+  // `>|` is a write mark, not a pipe. Braces stay in the words: a group of
+  // choices in a command is refused as not plain.
+  for (const simple of command.replace(/>\|/g, '>').split(/;|&&|\|\||\||&|\n|\$\(|`|\(|\)/)) {
+    const refused = simpleVerdict(simple, who, depth, at)
     if (refused !== null) return refused
   }
 
