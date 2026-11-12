@@ -43,6 +43,11 @@ test('every prompt: what it reads is data, one file, its own answer words and no
     for (const word of ALL_WORDS) expect([role, word, has(prompt, word)]).toEqual([role, word, (WORDS[role] ?? []).includes(word)])
     expect(prompt.split('\n').length).toBeLessThanOrEqual(60)
   }
+  // Only the builder is told of a code folder to write in; the others write one file.
+  for (const role of ROLES) {
+    expect([role, PROMPTS[role].includes('Write no other file.')]).toEqual([role, role !== 'builder'])
+    expect([role, PROMPTS[role].includes('outside the code folder')]).toEqual([role, role === 'builder'])
+  }
   // The roles' own rules (design 5.1 and 8.1).
   expect(PROMPTS.builder).toContain('do not push')
   expect(PROMPTS.builder).toContain('commit')
