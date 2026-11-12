@@ -93,3 +93,54 @@ number 1) and a settings file with `"tracker": { "kind": "github" }`, with
 
 The gate, the worktrees and the pull request calls have tests only: nothing
 calls them until the line runs (part 2).
+
+## The line, by hand (phase 2b, part 2)
+
+To do by the owner. It needs a scratch GitHub repository with a small npm project
+(`npm test` passes), cloned, with `gh` logged in. The agents cost quota: the two
+issues below are small on purpose.
+
+Before:
+
+- [ ] `claude --plugin-dir <this repo>/factory` in the scratch repo. `/factory init`.
+      In `.claude/factory.json` keep `gate.fast` as `[["npm","install"],["npm","test"]]`.
+      Commit the file to `main` and push.
+- [ ] `/factory`, read the commands, `/factory approve` (twice if it says so).
+- [ ] Make two issues and put the label `factory` on each. One is clear and small
+      ("Add a function `double(n)` to `index.js`, with a test"). One is vague
+      ("Make it better").
+
+The dry run:
+
+- [ ] `/factory plan` answers `The plan runs Intake on 2 items. …`. No permission
+      question appears. The chat stays free: type a prompt, it is answered.
+- [ ] After a minute or two the pane shows `PLAN` with one `accept · risk low` and one
+      `asks: …` or `reject: …`, and `1 item would run now.`
+- [ ] The two issues have no new label and no new comment.
+
+The run:
+
+- [ ] `/factory run`. The clear issue gets the label `factory:in-progress` and a comment.
+      The pane shows its row move: INTAKE, SPEC, BUILD (`builder runs · 1 m`).
+- [ ] No permission question appears while the builder works.
+- [ ] A draft pull request appears, from the branch `factory/<n>-…`.
+- [ ] The row moves to GATE, REVIEW, APPROVE. Then NEEDS YOU shows
+      `PR <n> is ready. You merge.`, with a toast and a sound.
+- [ ] The pull request is not a draft any more. The issue has a comment with the pull
+      request's address and the label `factory:needs-human`.
+- [ ] The vague issue is under NEEDS YOU with a question (or is closed with the
+      reason). `/factory answer <id> <text>` lets it go on.
+- [ ] The session's model said nothing about the agents during the run.
+
+Stops and restarts:
+
+- [ ] Start a run on a third issue, and in the middle `/factory stop`. The agent that
+      runs finishes; no new station starts; the first row ends with `stopped`.
+- [ ] A second terminal in the same repo: `/factory` shows `another session runs the line`.
+- [ ] Close the session in the middle of a station. Open a new one: the pane shows
+      `no session runs the line`. `/factory run` goes on with the job.
+- [ ] Merge the ready pull request on GitHub. Within about five minutes of an open
+      session the job leaves NEEDS YOU and TODAY counts it.
+
+What to write down: any permission question that did appear, any dim line that starts
+with `factory:`, and how long and how much each station took.

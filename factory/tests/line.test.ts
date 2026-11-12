@@ -246,6 +246,16 @@ test('an item the tracker says is claimed, with no job here, is a row under NEED
   expect(only).toContain('NEEDS YOU (1)')
 })
 
+test('a job row says what runs now, and a second try', async () => {
+  const build = VIEW.jobs[1]!
+  const meta = (over: Partial<typeof build>) => jobRows({ ...build, ...over }, 120)[1]?.left
+  expect(meta({ work: { text: 'builder', count: 1, minutes: 4 } })?.startsWith('builder runs · 4 m · ')).toBe(true)
+  expect(meta({ work: { text: 'reviewers', count: 2, minutes: 0 } })?.startsWith('2 reviewers run · 0 m · ')).toBe(true)
+  expect(meta({ work: { text: 'builder', count: 1, minutes: 4 }, tries: 1 })?.startsWith('builder runs · 4 m · second try · ')).toBe(true)
+  expect(meta({ work: null, tries: 0 })).toBe(jobRows(build, 120)[1]?.left)
+  expect(meta({ work: null })?.includes('runs')).toBe(false)
+})
+
 test('the rows of a plan: what Intake said of each item, and how many would run', async () => {
   const plan = [
     { itemId: '4', verdict: 'accept' as const, risk: 'low' as const, note: '' },

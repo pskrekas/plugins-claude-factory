@@ -24,7 +24,20 @@ const GH_TIMEOUT_MS = 15_000
 export type LineInfo = Pick<FactoryView, 'lock' | 'holder' | 'isStopped' | 'claimed'>
 const NOBODY: LineInfo = { lock: 'free', holder: null, isStopped: false, claimed: [] }
 
-const viewOfJob = (job: Job, f: FactorySettings): JobView => ({
+// The agents at work on a job, in a few words.
+function workOf(job: Job, now: number): JobView['work'] {
+  const [first] = job.work
+  if (first === undefined) return null
+  const since = Math.min(...job.work.map(work => work.startedAt))
+
+  return {
+    text: job.work.length === 1 ? first.role : `${first.role}s`,
+    count: job.work.length,
+    minutes: Math.max(0, Math.round((now - since) / 60_000)),
+  }
+}
+
+const viewOfJob = (job: Job, f: FactorySettings, now: number): JobView => ({
   itemId: job.itemId,
   title: job.title,
   stage: job.stage,
@@ -36,6 +49,8 @@ const viewOfJob = (job: Job, f: FactorySettings): JobView => ({
   prNumber: job.pr?.number ?? null,
   minutes: Math.round(job.agentMs / 60_000),
   costUsd: job.costUsd,
+  work: workOf(job, now),
+  tries: job.tries,
 })
 
 // What the pane needs of the jobs: the running ones, then the waiting ones
@@ -71,7 +86,7 @@ export function viewOf(
   const showRunning = Math.min(running.length, MAX_JOBS - showWaiting)
 
   return {
-    jobs: [...running.slice(0, showRunning), ...waiting.slice(0, showWaiting)].map(job => viewOfJob(job, f)),
+    jobs: [...running.slice(0, showRunning), ...waiting.slice(0, showWaiting)].map(job => viewOfJob(job, f, now)),
     // The numbers are of all jobs, so the line is right also when some are not shown.
     // A claimed item with no job waits for the person, at the last station.
     counts: countsFor(jobs, queue).map((count, at, all) => (at === all.length - 1 ? count + claimed.length : count)),

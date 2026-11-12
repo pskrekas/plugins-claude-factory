@@ -167,8 +167,13 @@ function stationCells(job: JobView, isShort: boolean): { text: string; tone: Ton
 export function jobRows(job: JobView, columns: number): Row[] {
   const id = clean(job.itemId)
   const sender = job.sentBack ? ` · ${job.sentBack.by} sent it back: ${job.sentBack.why}` : ''
+  // What runs now comes first: it is what a person looks for.
+  const now =
+    job.work === null
+      ? ''
+      : `${job.work.count === 1 ? `${job.work.text} runs` : `${job.work.count} ${job.work.text} run`} · ${job.work.minutes} m · `
   const meta =
-    `${job.round > 1 ? '↺ ' : ''}round ${job.round} of ${job.maxRounds}${sender}` +
+    `${now}${job.tries > 0 ? 'second try · ' : ''}${job.round > 1 ? '↺ ' : ''}round ${job.round} of ${job.maxRounds}${sender}` +
     ` · ${job.minutes} m · ${money(job.costUsd)}`
   const second = plain(meta, '', 'dim', 'plain', columns)
 

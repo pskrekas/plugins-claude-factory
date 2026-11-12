@@ -52,7 +52,7 @@ export const FULL: PanelModel = {
 
 // What `state.get` answers for the panel atom holding `model`.
 export function stored(model: PanelModel) {
-  return { value: { value: { shape: 'panel-4', value: model }, version: 1 } }
+  return { value: { value: { shape: 'panel-5', value: model }, version: 1 } }
 }
 
 type Run = { exitCode: number; stdout: string; stderr?: string }
@@ -483,6 +483,8 @@ const jobView = (over: Partial<JobView> & Pick<JobView, 'itemId' | 'stage'>): Jo
   prNumber: null,
   minutes: 0,
   costUsd: null,
+  work: null,
+  tries: 0,
   ...over,
 })
 

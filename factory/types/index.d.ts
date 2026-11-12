@@ -73,6 +73,11 @@ export type JobView = {
   prNumber: number | null
   minutes: number
   costUsd: number | null
+  // The agents at work on the job now: what they are (`builder`, `reviewers`),
+  // how many, and for how long. Null between stations.
+  work: { text: string; count: number; minutes: number } | null
+  // How often the station that runs now failed.
+  tries: number
 }
 
 export type FactoryView = {

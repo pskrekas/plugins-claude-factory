@@ -1,10 +1,12 @@
 # Factory
 
-**A Claude Code plugin that shows the state of your work in a docked panel.** A later version adds a software factory on top of it.
+**A Claude Code plugin with a docked work panel and a software factory line.**
 
 The panel answers four questions without a prompt: what is my task, how far is each build, what waits for me, and is my environment correct. It knows no project: a repo tells it what to show through one settings file, `.claude/factory.json`.
 
-This is an early version. It has the panel, and the parts of the factory line that code and a person do: jobs, the gate, the writes to GitHub, and the commands to stop the line, answer a job and reject a job. The agents that do the work at each station (a marked tracker item goes through Intake, Spec, Build, Gate, Review and Approve, and comes out as a ready pull request that a person merges) are the next phase. The design is in [`docs/superpowers/specs`](docs/superpowers/specs).
+The line turns a marked GitHub issue into a pull request that is ready for you to merge. The issue goes through Intake, Spec, Build, Gate, Review and Approve. An agent does the work at each station; the plugin's own code moves the job, runs the checks, and writes to GitHub. You merge. The plugin never does.
+
+This is an early version, for GitHub Issues and GitHub pull requests. Read **"Before you run the line"** first. The design is in [`docs/superpowers/specs`](docs/superpowers/specs).
 
 ## Install
 
@@ -50,11 +52,13 @@ The status line shows the task id, the first progress percent, the checks and a 
 | `/factory init` | looks at the repo and writes a first `.claude/factory.json`; it never overwrites one |
 | `/factory where` | says where the factory keeps its state for this repository |
 | `/factory approve` | opens the pane and allows the commands it shows (see below). Only your own Enter at the prompt counts |
+| `/factory plan` | the dry run: Intake judges each item of the queue (ten at most). It builds nothing, opens no pull request and writes nothing to the tracker. The pane shows what Intake said |
+| `/factory run [id]` | runs the line: one pass over the queue as it is now (or over one item), and the jobs that are already there. It ends when every job is ready, waits for you, or is refused |
 | `/factory stop` | the line starts no new station. Agents that run finish theirs. It works from any session |
 | `/factory answer <id> [text]` | lets a job that waits for you go on. The text is given to the next agent; a question for the item's author needs text. For a job that one of its own limits stopped, it grants that limit once more (one round, or the job's cost or time limit again). A limit of the day is not lifted: raise it in the settings, or wait for the next day. For a ready job, text sends it back to Build |
 | `/factory reject <id> <reason>` | drops a job: a comment with the reason on the item, the pull request closed, the item closed as not planned, the worktree removed. It also drops an item that the tracker says is in progress and that has no job on this machine |
 
-`stop`, `answer` and `reject` change things, so only your own Enter at the prompt counts for them too. Two sessions never change one job: `answer` and `reject` first take the lock, and say so when another session holds it.
+`plan`, `run`, `stop`, `answer` and `reject` change things, so only your own Enter at the prompt counts for them too. Two sessions never change one job: one session holds the lock while the line runs, and a command says so when another session holds it.
 
 While the pane is on screen it reads again once a minute.
 
@@ -62,9 +66,64 @@ Two options, in `/config`: `openOnStart` (open the pane when a session starts, o
 
 It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
 
-## The factory line (not running yet)
+## The factory line
 
-The next version runs the line: a tracker item with a mark goes through Intake, Spec, Build, Gate, Review and Approve, and comes out as a ready pull request that a person merges. This version knows what a job is, draws it, and has the hands of the line: the code that writes to GitHub, makes worktrees and runs the gate. No agent runs yet, so nothing starts a job by itself.
+### Before you run the line
+
+- **The builder agent has a shell with your rights.** No sandbox is around it. A fence (below) refuses what the line must never do, but for shell commands a fence is a check of text, and text can hide what it does. Run the line on a repository and on issues that you trust, or inside a container or a virtual machine. An issue is text that someone else wrote; the agents are told to read it as data, and that is a rule for a model, not a wall.
+- **It costs money or quota.** Each station is an agent. Set the limits (`factory.costLimitUsd`, `factory.timeLimitMin`, `factory.slots`, `factory.maxRounds`) before the first run, and try `/factory plan` first.
+- **The gate runs the branch's code** with your rights, before a reviewer has read it.
+- **What does not depend on the fence:** every agent reads a clean checkout and never your working folder; the gate runs in its own clean copy of one commit; only the plugin pushes, and only a job's own branch; nothing merges; your branch protection on GitHub still holds.
+
+### Start
+
+1. `/factory init` writes a first `.claude/factory.json`. Edit it: the gate lists must start with the install command. Commit it to the base branch and push: the gate reads the file from there.
+2. `/factory`, read the commands in the pane, then `/factory approve`.
+3. Put the label `factory` on an issue. Only you put it there: it is what lets an issue into the line.
+4. `/factory plan` to see what Intake says. `/factory run` to run the line.
+5. A ready job is a pull request for you to merge. A job under **NEEDS YOU** has a question: `/factory answer <id> <text>`, or `/factory reject <id> <reason>`.
+
+### The stations
+
+| Station | Done by | Result |
+| --- | --- | --- |
+| Intake | one agent, the strongest model, no shell | accepts the item (with a risk: low, medium, high), asks its author one question, or refuses it |
+| Spec | one agent, no shell | `spec.md`: what to build and how it is checked |
+| Build | one agent with a shell, in the job's own worktree and branch `factory/<job>` | commits. The plugin pushes them and opens a draft pull request |
+| Gate | the plugin's code | runs the fast checks. A fail goes back to Build with the report |
+| Review | one agent for each routed reviewer (`code`; `ux` and `ui` for a screen change; `security`), no shell | each says OK or CHANGES. One CHANGES sends the job back to Build |
+| Approve | one agent, no shell | READY, or one question for you. On READY the plugin brings the base into the branch, runs the full checks, and marks the pull request ready |
+| You | you | merge, answer, or reject |
+
+Each way back to Build is a round. After `maxRounds` (3) with no pass the job stops and asks you. A risk above `maxRisk` (`low`) stops after Intake and asks you.
+
+Each agent reads the job's files and writes exactly one file. Its answer is one line with a fixed word (`DONE`, `OK`, `CHANGES`, `READY`, …); the plugin reads that word and nothing else of what the agent says. An answer the line cannot read starts the station once more, then asks you. An agent that does not answer within `factory.stationTimeoutMin` (30) makes its job ask; `/factory answer <id>` starts the station again.
+
+Agents start only from the plugin's own running code, in the job's folder. The session's model is not told about them and does not see their reports: you can keep using the chat while the line runs. One gate runs at a time, and the other jobs wait while it runs. When you close the session the agents stop; `/factory run` in a new session goes on with every job from where it was.
+
+### The fence
+
+Every tool call of an agent of the line goes through the plugin first.
+
+- **Files.** An agent reads only inside its job: the job's worktree and the job's folder. It writes one file, its report. Only the builder also writes code, in its worktree. A path is judged by where it really is, so a link that leads out of the job is refused.
+- **Shell (the builder only).** Refused: `git push`, `gh` and `az repos` (the plugin talks to the host), changes to git settings and refs, any naming of the git folder, the commands in `factory.forbiddenCommands` (put your deploy and release commands there), and a few forms the fence cannot read (a variable or a pattern in a program name, a write to a place only the shell knows, a shell inside a shell inside a shell).
+- **Twice is enough.** The same command refused twice stops the job and asks you.
+- **Its limit.** For shell commands this is best effort. A script that the builder writes and runs is not read by the fence.
+
+### Limits and cost
+
+`factory.slots` (2) jobs at one time. A cost limit and a time limit for each job and for each day; at a limit the job stops and asks, and `/factory answer` grants a job's own limit once more. No new job starts when the disk has less than `factory.minFreeDiskGb` (15) free.
+
+Cost is an estimate from the token counts of each agent and the prices you give in `factory.prices` (US dollars per million tokens, by model id). With no price for a model the pane says `cost unknown` and the time limits apply. On a subscription the figure shows relative use, not a bill.
+
+```json
+"factory": {
+  "prices": { "<model id>": { "input": 3, "output": 15, "cacheRead": 0.3, "cacheWrite": 3.75 } },
+  "forbiddenCommands": [["npm", "publish"], ["terraform", "apply"]]
+}
+```
+
+### What the pane shows
 
 The **FACTORY** section of the pane shows:
 
@@ -77,15 +136,18 @@ The **FACTORY** section of the pane shows:
 ```
 
 - the stations, with the number of jobs at each one, and the two loops back to Build (lit while a job is on them);
-- one row per running job: a cell for each station (`done`, `now`, `fail`, `changes`), then its round, who sent it back, its time and its cost;
+- one row per running job: a cell for each station (`done`, `now`, `fail`, `changes`), then what runs now (`builder runs · 4 m`), its round, who sent it back, its time and its cost;
 - **NEEDS YOU**: the jobs that wait for a person (a question, or a pull request to merge), and the items the tracker says are in progress that have no job on this machine (a lost state folder, or another machine runs them);
+- **PLAN**: after `/factory plan`, what Intake said of each item, and how many would run;
 - the size of the queue (open GitHub issues that carry the mark) and the totals of the day.
 
 The first row says who runs the line: `2 of 2 slots busy` (this session), `another session runs the line`, or `no session runs the line`; and `stopped` after `/factory stop`.
 
 A job is a file, `job.json`, in a folder of its own. The plugin keeps these under your home folder, never in the repo: `~/.local/state/claude-factory/<repo>/jobs/` (or under `$XDG_STATE_HOME`). `/factory where` prints the folder for the repo you are in. The folder is named after the path of the repository, so a repo that you move to another place starts with no jobs. A `.factory/` folder that a repo brings along is never read, so a repo cannot show you jobs of its own.
 
-Nothing creates a job yet. To see the section, copy the three sample jobs into the state folder and open the pane:
+A job that ended stays in that folder for the day's totals, without its worktree and its branch. It is moved to `retired/` when its item runs again.
+
+To see the section with no run, copy the three sample jobs into the state folder and open the pane:
 
 ```sh
 mkdir -p "<the folder /factory where printed>/jobs"
@@ -150,7 +212,7 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 | `checks` | `run` with `want`: ok when the output equals `want`. `run` alone: ok on exit 0. `minFreeGb`: ok when the disk has that much free. At most 20. |
 | `ports` | a name and a port on this machine. At most 20. |
 | `owed` | a markdown file; its open checkboxes are counted. |
-| `factory` | how the line runs, used when it runs: `slots` (2), `maxRounds` (3), `maxRisk` (`low`), `costLimitUsd` and `timeLimitMin` (`{ job, day }`), `minFreeDiskGb` (15), `protectedPaths`, `forbiddenCommands`, `forbiddenCommentWords`, `models`, `reviewers`. One refused value refuses the whole `factory` key. |
+| `factory` | how the line runs: `slots` (2), `maxRounds` (3), `maxRisk` (`low`), `costLimitUsd` and `timeLimitMin` (`{ job, day }`), `minFreeDiskGb` (15), `stationTimeoutMin` (30), `prices`, `protectedPaths`, `forbiddenCommands`, `forbiddenCommentWords`, `models` (a tier for each role: `strongest`, `strong`, `fast`), `reviewers`. One refused value refuses the whole `factory` key. |
 
 ## What it can reach
 
@@ -208,11 +270,11 @@ gh pr view <n> --json …
 gh pr ready <n>
 gh pr comment <n> --body-file -
 gh pr close <n>
+
+git branch -D factory/<job>                              (a job that ended)
 ```
 
 Each `gh` call of the second list ends with `-R <owner>/<name>`. The line's `git` calls run with `GIT_NO_REPLACE_OBJECTS=1`, and all of them run in your repository's folder. `git …` stands for `git --git-dir=<repo's git folder>/worktrees/<job> --work-tree=<state>/worktrees/<job> -c core.fsmonitor=false -c core.hooksPath=/dev/null`: a call that needs a job's worktree names it, so git reads no setting from a folder that an agent can write to.
-
-In this version only `/factory answer` and `/factory reject` make calls of the second list (the label, comment and close calls, and the removal of a worktree). The others wait for the line.
 
 `git` reads the repository's own git settings, as it does when you type the command.
 
@@ -227,6 +289,12 @@ In this version only `/factory answer` and `/factory reject` make calls of the s
 **`SETTINGS NOT APPROVED`.** Read the commands in the pane, then run `/factory approve`. If the pane had not shown them yet, or the file changed since, the pane shows them now; read them and run the command again.
 
 **`Another session runs the line (…). Nothing was changed.`** Another Claude Code session in this repository holds the lock; the text names its folder. Run the command there, or close that session and wait five minutes.
+
+**`No gate, no factory: …`.** `/factory run` needs fast checks in `gate.fast`, in the settings file as it is on the base branch on the remote, and approved with `/factory approve`.
+
+**`Factory: an agent started outside the fence. The line is stopped.`** The plugin starts each agent and checks that its fence saw the start. This says it did not: the line stops itself. Tell the plugin's author; it means Claude Code changed how a plugin starts an agent.
+
+**A job says `The <role> did not answer.`** Its agent ended with no answer, or the session was closed. `/factory answer <id>` starts the station again.
 
 **`No job for <id>.`** There is no job of that item on this machine, and the tracker does not say it is in progress.
 
@@ -251,7 +319,7 @@ All behaviour is in `factory/core/` as pure functions with tests. `factory/hooks
 
 ## Next
 
-The agents of the line and the loop that moves a job from station to station (`/factory plan`, `/factory run`), on GitHub Issues first, then Azure DevOps, Jira and Asana.
+Azure DevOps (Boards and Repos), then Jira, Asana and a tracker through an MCP server. The keys in the pane. A run of one command that is longer than ten minutes.
 
 ## License
 
