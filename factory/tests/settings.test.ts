@@ -48,7 +48,15 @@ test('a ticket pattern that is not valid, or that can run for a very long time, 
   expect(parseSettings('{"ticketPattern": "(ab)*c"}')).toEqual(refused)
   expect(parseSettings('{"ticketPattern": "(a|aa){2,}"}')).toEqual(refused)
   expect(parseSettings('{"ticketPattern": "(a)\\\\1"}')).toEqual(refused)
-  expect(parseSettings(JSON.stringify({ ticketPattern: 'a'.repeat(201) }))).toEqual(refused)
+  expect(parseSettings(JSON.stringify({ ticketPattern: 'a'.repeat(101) }))).toEqual(refused)
+  // Only a small subset is accepted: no alternation, no look-around, no lazy
+  // repeat, and at most two repeats with no upper limit.
+  for (const pattern of ['a|b', '(?=a)b', '(?:a)b', 'a+?', '((a))', 'a**', '\\d*\\d*\\d*x', 'a{2,}b+c*', '\\p{L}+', '[[a]]']) {
+    expect(parseSettings(JSON.stringify({ ticketPattern: pattern }))).toEqual(refused)
+  }
+  for (const pattern of ['PROJ-\\d+', '^([A-Z]+-\\d+)', 'issue-(\\d{1,6})$', 'feat/[a-z0-9_.]+-\\d+', 'a.c']) {
+    expect(parseSettings(JSON.stringify({ ticketPattern: pattern })).error).toBe(null)
+  }
   expect(parseSettings('{"ticketPattern": "PROJ-(\\\\d+)"}').settings.ticketPattern).toBe('PROJ-(\\d+)')
   expect(parseSettings('{"ticketPattern": "[A-Z]{2,5}-\\\\d+"}').error).toBe(null)
 })
@@ -120,4 +128,13 @@ test('an argument outside printable ASCII is shown with visible escapes', async 
   ).settings
   expect(commandsOf(a)).toEqual(['echo "ab\\u202ecd\\u200b" "\\u00e9"'])
   expect(/^[\x20-\x7e]*$/.test(commandsOf(a).join(''))).toBe(true)
+})
+
+test('a check must name a program on PATH, never a path', async () => {
+  for (const program of ['./check.sh', 'scripts/check', '/usr/bin/env', '../x']) {
+    const { settings, error } = parseSettings(JSON.stringify({ checks: [{ name: 'a', run: [program] }] }))
+    expect(settings.checks).toEqual([])
+    expect(error).toBe('checks: a check must name a program on PATH, not a path')
+  }
+  expect(parseSettings('{"checks": [{"name": "a", "run": ["git", "status"]}]}').error).toBe(null)
 })

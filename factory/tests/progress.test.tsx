@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { matchGlob, nameOf, parseOwed, parseProgress } from '../core/progress'
 import { parseSettings } from '../core/settings'
-import { START, cmd, engine, paneText } from './kit'
+import { START, cmd, engine, paneText, settingsRuns } from './kit'
 
 const P = { done: '- [x]', open: '- [ ]', blocked: 'BLOCKED' }
 
@@ -104,7 +104,7 @@ test('progress shows while the settings wait for approval, and runs nothing', as
   const rows = await paneText($)
   expect(rows).toContain('SETTINGS NOT APPROVED')
   expect(rows.find(row => /^Plan A\s+50%$/.test(row))).toBeDefined()
-  expect(world.ran).toEqual([])
+  expect(settingsRuns(world)).toEqual([])
 })
 
 test('a missing progress folder shows nothing and no error', async ($, on) => {
@@ -161,5 +161,5 @@ test('a settings file that is a link to a file outside the repo is not used', as
 
   const rows = await paneText($)
   expect(rows).toContain('No settings file. Run /factory init.')
-  expect(world.ran).toEqual([])
+  expect(settingsRuns(world)).toEqual([])
 })

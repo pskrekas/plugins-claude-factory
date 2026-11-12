@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
+import { safePath } from '../core/checks'
 import { rowsOf } from '../core/layout'
 import type { Tone } from '../core/layout'
 import { emptyModel } from '../core/model'
@@ -90,11 +91,15 @@ export const register: Register = (on, options) => {
           .then(entries => entries.map(entry => entry.name + (entry.kind === 'dir' ? '/' : '')))
           .catch(() => []),
       writeFile: (path, text) => $.fs.write(path, text),
-      run: (argv, init) =>
-        $.process
-          .run(argv, init)
+      run: async (argv, init) => {
+        const path = await $.env.get('PATH').catch(() => undefined)
+        const env = { PATH: safePath(path, await root()) }
+
+        return $.process
+          .run(argv, { ...init, env })
           .then(done => ({ exitCode: done.exitCode, stdout: done.stdout, stderr: done.stderr }))
-          .catch(failureOf),
+          .catch(failureOf)
+      },
       storeGet: key => $.store.get(key).catch(() => undefined),
       storeSet: (key, value) => $.store.set(key, value),
       getModel: () => read($, panel),

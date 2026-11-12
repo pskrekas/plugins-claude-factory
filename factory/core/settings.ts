@@ -36,6 +36,7 @@ const WRONG = 'wrong type'
 const BAD_PATTERN = 'not a valid pattern'
 const CONTROL = 'control character in a command'
 const OUTSIDE = 'path must be inside the repo'
+const NOT_PATH = 'a check must name a program on PATH, not a path'
 
 // A key's parser: the value, or a string saying why it is refused.
 type Parsed<T> = { ok: T } | { no: string }
@@ -54,14 +55,44 @@ function argvProblem(v: unknown): string | null {
   return v.some(arg => CONTROL_CHAR.test(arg)) ? CONTROL : null
 }
 
-const MAX_PATTERN = 200
+const MAX_PATTERN = 100
 const MAX_MARK = 100
+const MAX_OPEN_REPEATS = 2
+
+const LITERAL = /[A-Za-z0-9_\-/#:@ ]/
+const ESCAPABLE = /[dws.\-/\\()[\]+*?{}|^$#:@]/
+const IN_CLASS = /[A-Za-z0-9_\-. /#:@]/
+const CLASS_ESCAPE = /[dws.\-\]\\/]/
+
+// Where the character class that opens at `start` closes, or -1 if it is not
+// one this subset takes.
+function classEnd(source: string, start: number): number {
+  let i = start + 1
+  if (source[i] === '^') i++
+  const first = i
+  for (; i < source.length; i++) {
+    const char = source[i] ?? ''
+    if (char === ']') return i > first ? i : -1
+    if (char === '\\') {
+      if (!CLASS_ESCAPE.test(source[i + 1] ?? '')) return -1
+      i++
+    } else if (!IN_CLASS.test(char)) {
+      return -1
+    }
+  }
+
+  return -1
+}
 
 // A pattern from a settings file runs before anyone approved that file, so it
-// must not be able to run for a very long time. It is refused when it is not a
-// valid pattern, is long, has a back-reference, or repeats a group: `(a+)+` and
-// its relatives are what make a pattern slow, and none of them is needed to
-// find a ticket id in a branch name.
+// must not be able to run for a very long time. Only a small subset of regular
+// expressions is taken, read here character by character: plain characters,
+// `.`, the escapes \d \w \s and escaped punctuation, simple character classes,
+// `^` first and `$` last, the repeats + * ? {n} {n,m} on one such piece, and one
+// capture group that is not repeated. No alternation, no look-around, no
+// back-reference, no lazy repeat, and at most two repeats with no upper limit.
+// That is enough to find a ticket id in a branch name, and it cannot be slow on
+// the short text it runs on.
 function isPattern(source: string): boolean {
   if (source.length > MAX_PATTERN) return false
   try {
@@ -69,23 +100,55 @@ function isPattern(source: string): boolean {
   } catch {
     return false
   }
-  let inClass = false
-  for (let i = 0; i < source.length; i++) {
-    const char = source[i]
-    if (char === '\\') {
-      const next = source[i + 1] ?? ''
-      if (!inClass && (/[1-9]/.test(next) || next === 'k')) return false
+  let depth = 0
+  let groups = 0
+  let openRepeats = 0
+  let canRepeat = false // the piece before this point may take a repeat
+  for (let i = 0; i < source.length; ) {
+    const char = source[i] ?? ''
+    if ((char === '^' && i === 0) || (char === '$' && i === source.length - 1)) {
       i++
-    } else if (inClass) {
-      if (char === ']') inClass = false
+      canRepeat = false
+    } else if (char === '\\') {
+      if (!ESCAPABLE.test(source[i + 1] ?? '')) return false
+      i += 2
+      canRepeat = true
     } else if (char === '[') {
-      inClass = true
-    } else if (char === ')' && /[*+?{]/.test(source[i + 1] ?? '')) {
+      const end = classEnd(source, i)
+      if (end < 0) return false
+      i = end + 1
+      canRepeat = true
+    } else if (char === '(') {
+      if (depth > 0 || groups > 0 || source[i + 1] === '?') return false
+      depth++
+      groups++
+      i++
+      canRepeat = false
+    } else if (char === ')') {
+      if (depth === 0) return false
+      depth--
+      i++
+      canRepeat = false // a group is never repeated
+    } else if (char === '+' || char === '*' || char === '?') {
+      if (!canRepeat) return false
+      if (char !== '?') openRepeats++
+      i++
+      canRepeat = false
+    } else if (char === '{') {
+      const repeat = /^\{\d{1,3}(,(\d{1,3})?)?\}/.exec(source.slice(i))
+      if (!canRepeat || repeat === null) return false
+      if (repeat[1] !== undefined && repeat[2] === undefined) openRepeats++
+      i += repeat[0].length
+      canRepeat = false
+    } else if (char === '.' || LITERAL.test(char)) {
+      i++
+      canRepeat = true
+    } else {
       return false
     }
   }
 
-  return true
+  return depth === 0 && openRepeats <= MAX_OPEN_REPEATS
 }
 
 // A path the plugin reads must stay in the repo: what it finds there is shown
@@ -144,7 +207,11 @@ function checks(v: unknown): Parsed<CheckSpec[]> {
     if (item.run !== undefined) {
       const problem = argvProblem(item.run)
       if (problem) return { no: problem }
-      spec.run = item.run as string[]
+      const run = item.run as string[]
+      // A check runs by itself each minute. It must be a program the machine
+      // has, never a file of the repo, whose content can change after approval.
+      if (/[/\\]/.test(run[0] ?? '')) return { no: NOT_PATH }
+      spec.run = run
     }
     if (item.want !== undefined) {
       if (typeof item.want !== 'string') return { no: WRONG }

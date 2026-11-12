@@ -71,6 +71,7 @@ export function engine(
     agents?: unknown[]
     // A path that is a symbolic link, and the real path it leads to.
     links?: Record<string, string>
+    path?: string
   },
 ) {
   const seen = {
@@ -81,6 +82,7 @@ export function engine(
     sounds: 0,
     writes: [] as string[],
     reads: [] as string[],
+    paths: [] as (string | undefined)[],
     isOpen: false,
     root: '/r',
     clock: mock.clock(on, { now: world.now ?? 0 }),
@@ -166,8 +168,10 @@ export function engine(
       value: [...names].map(([name, isDir]) => ({ name, kind: isDir ? 'dir' : 'file', size: 0, mtimeMs: 0 })) as never,
     }
   })
+  on('env.get', (_, e) => ({ value: e.name === 'PATH' ? (world.path ?? '/usr/bin:/bin') : undefined }))
   on('process.run', (_, e) => {
     seen.ran.push(e.argv.join(' '))
+    seen.paths.push(e.init?.env?.PATH)
     const answer = world.run?.(e.argv)
     if (answer === undefined) throw new Error('ENOENT: ' + e.argv[0])
 
@@ -190,4 +194,10 @@ export async function paneText($: Engine, columns = 40): Promise<string[]> {
   await ui.unmount()
 
   return rows
+}
+
+// The commands that came from a settings file: everything but the plugin's own
+// `git` and `gh` reads.
+export function settingsRuns(world: { ran: string[] }): string[] {
+  return world.ran.filter(line => !line.startsWith('git ') && !line.startsWith('gh '))
 }

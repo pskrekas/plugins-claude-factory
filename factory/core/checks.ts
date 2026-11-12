@@ -43,3 +43,17 @@ export function judgePort(name: string, port: number, result: RunResult): PortSt
 
   return { name, port, state: result.exitCode === 0 ? 'up' : 'down' }
 }
+
+const FALLBACK_PATH = '/usr/bin:/bin'
+
+// The PATH a command of the plugin runs with: the person's own, less every
+// entry that is relative (".", "bin", an empty one) or inside the repo. So a
+// program name is never found in the repo itself.
+export function safePath(path: string | undefined, root: string): string {
+  const base = root.replace(/\/+$/, '')
+  const kept = (path ?? '')
+    .split(':')
+    .filter(entry => entry.startsWith('/') && entry !== base && !entry.startsWith(base + '/'))
+
+  return kept.length > 0 ? kept.join(':') : FALLBACK_PATH
+}

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { START, cmd, engine, paneText } from './kit'
+import { START, cmd, engine, paneText, settingsRuns } from './kit'
 
 const CHECK = '{"checks":[{"name":"a","run":["x"]}]}'
 
@@ -13,7 +13,7 @@ test('a settings file with a check asks for approval and runs nothing', async ($
   const rows = await paneText($)
   expect(rows).toContain('SETTINGS NOT APPROVED')
   expect(rows).toContain('x')
-  expect(world.ran).toEqual([])
+  expect(settingsRuns(world)).toEqual([])
 })
 
 test('approve allows the commands the panel showed', async ($, on) => {

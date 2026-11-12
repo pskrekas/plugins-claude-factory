@@ -352,8 +352,17 @@ optional. Example with neutral values:
   with the mark, and blocked when it holds the blocked mark. The defaults are markdown
   checkboxes. `progress.files` and `owed` must be paths inside the repo, and a file
   that is a link to somewhere outside the repo is not read.
-- `ticketPattern` is a regular expression. One that can run for a very long time (a
-  repeated group, a back-reference, over 200 characters) is refused.
+- `ticketPattern` is a small subset of regular expressions: plain characters, `.`,
+  `\d` `\w` `\s`, simple character classes, `^` and `$`, the repeats `+ * ? {n,m}` on
+  one piece, and one capture group. No alternation, no look-around, no back-reference,
+  at most 100 characters. It runs before anyone approved the file, so it must not be
+  able to run for a long time.
+- A check's command must name a program on `PATH` (no `/` in its first word): a check
+  runs by itself each minute, and a file of the repo can change after the approval.
+  Every command of the plugin runs with a `PATH` that has no relative entry and no
+  entry inside the repo. An approved command that runs code from the repo (a script
+  through an interpreter, a test runner) runs what the repo holds at that time; the
+  approval covers the command line, not that code.
 - `owed`: a markdown file of checkboxes; open boxes are the count.
 - With no settings file: no tracker, no factory; the panel shows AGENTS, WORKTREES and
   the branch's pull request when the remote is a known PR host.

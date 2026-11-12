@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { judgeCheck, judgeDisk, judgePort, parseDfFreeGb } from '../core/checks'
-import { START, cmd, engine, paneText } from './kit'
+import { judgeCheck, judgeDisk, judgePort, parseDfFreeGb, safePath } from '../core/checks'
+import { START, cmd, engine, paneText, settingsRuns } from './kit'
 
 const ran = (exitCode: number, stdout: string) => ({ exitCode, stdout, stderr: '' })
 
@@ -65,6 +65,12 @@ test('disk and port judging', async () => {
   })
 })
 
+test('the PATH for a command has no relative entry and no entry inside the repo', async () => {
+  expect(safePath('/usr/bin:.:/r/bin::bin:/r:/opt/x/bin:/rx/bin', '/r')).toBe('/usr/bin:/opt/x/bin:/rx/bin')
+  expect(safePath('.:/r/node_modules/.bin', '/r')).toBe('/usr/bin:/bin')
+  expect(safePath(undefined, '/r')).toBe('/usr/bin:/bin')
+})
+
 const SETTINGS = JSON.stringify({
   checks: [
     { name: 'cloud account', run: ['cloud', 'whoami'], want: 'me@example.com' },
@@ -121,6 +127,18 @@ test('nothing runs before the settings are approved', async ($, on) => {
   await $.session.start(START)
   await $.command.run(cmd(''))
 
-  expect(world.ran).toEqual([])
+  expect(settingsRuns(world)).toEqual([])
   expect(await paneText($)).not.toContain('CHECKS')
+})
+
+test('every command runs with the safe PATH', async ($, on) => {
+  const world = engine(on, {
+    files: { '/r/.claude/factory.json': SETTINGS },
+    path: '/usr/bin:.:/r/node_modules/.bin:/opt/tools',
+    run: () => ({ exitCode: 0, stdout: '' }),
+  })
+  await approved($)
+
+  expect(world.paths.length).toBeGreaterThan(3)
+  expect(world.paths.every(path => path === '/usr/bin:/opt/tools')).toBe(true)
 })
