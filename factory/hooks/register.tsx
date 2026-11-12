@@ -210,6 +210,7 @@ export const register: Register = (on, options) => {
     // The agent types of the line. They are the plugin's alone: the model is
     // not offered them, and a spawn that the line did not make is refused.
     const { settings } = await loadSettings(ready)
+    hasAgentTypes = true
     for (const spec of agentSpecs(settings.factory)) {
       await $.agent.register(spec).catch(() => {
         hasAgentTypes = false

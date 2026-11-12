@@ -1,13 +1,15 @@
 // `/factory run`: what must be true before the line runs, then the run file
 // and the first call that advances the jobs.
+import { hasMark } from '../adapters/github-issues'
 import { endWork, isActive, isFinished } from '../core/job'
 import type { Spawn } from './agent-events'
 import { context } from './context'
+import type { Ctx } from './context'
 import { gateCommands } from './gate'
 import type { Io } from './io'
-import { lockInfo, readJobs, retireJob, setStop, stateDirOf, takeLock, writeJob } from './jobs'
+import { lockInfo, readJobs, releaseLock, retireJob, setStop, stateDirOf, takeLock, writeJob } from './jobs'
 import { advance, liveOf, tidy } from './line'
-import { MAX_QUEUE, readRun, writeRun } from './run'
+import { MAX_QUEUE, endRun, readRun, writeRun } from './run'
 import { clean } from '../core/rows'
 
 const ITEM_ID = /^[A-Za-z0-9#][A-Za-z0-9_.#-]{0,39}$/
@@ -67,8 +69,23 @@ export async function startRun(io: Io, spawn: Spawn, only: string | null, ready:
   // No gate, no factory (design 8.2): the fast checks must be there and approved.
   const gate = await gateCommands(io, ctx.root, ctx.base, 'fast')
   if (!gate.ok) return `No gate, no factory: ${gate.why}. ${gateHint(gate.why)}`
+  // Only a marked item runs, also when it is named: the mark is the person's own word (design 8.1).
+  if (only !== null && !(await hasMark(ctx.run, only, ctx.mark))) return `${clean(only)} does not carry the mark "${ctx.mark}". Only a marked item runs.`
   const lock = await takeLock(io, ctx.root, ctx.now)
   if (!lock.isHeld) return `Another session runs the line (${clean(lock.holder ?? 'unknown')}). Nothing was changed.`
+  try {
+    return await begin(io, spawn, only, ctx)
+  } catch (error) {
+    // Nothing is left half-started: no run file, no lock.
+    await endRun(io, ctx.root).catch(() => undefined)
+    await releaseLock(io, ctx.root).catch(() => undefined)
+
+    return `The line did not start (${clean(String(error instanceof Error ? error.message : error)).slice(0, 200)}). Nothing runs.`
+  }
+}
+
+async function begin(io: Io, spawn: Spawn, only: string | null, ctx: Ctx): Promise<string> {
+  if (ctx.tracker === null || ctx.mark === null) return ''
   await setStop(io, ctx.root, false)
 
   // The jobs of an earlier session go on. An agent of theirs that is gone is

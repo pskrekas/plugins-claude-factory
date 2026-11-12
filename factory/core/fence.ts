@@ -35,6 +35,8 @@ const REF = 'A branch or a tag is not named like a remote ref.'
 const FORBIDDEN = 'This command is forbidden in this repository.'
 const GIT_FOLDER = 'The git folder is not written to.'
 const NOT_PLAIN = 'The command is not plain enough to check. Write the program and its command with no quotes, backslash or variable.'
+const STAY = "An agent stays on its job's branch."
+const OUT_WRITE = 'This write is outside the job.'
 const TOO_DEEP = 'A shell inside a shell inside a shell is not run.'
 
 // A path as the tools see it, with `.` and `..` resolved. A relative path is
@@ -106,6 +108,9 @@ function writeVerdict(input: Record<string, unknown>, who: Who): Verdict {
 const PREFIXES = ['sudo', 'env', 'command', 'builtin', 'exec', 'nohup', 'time', 'nice', 'xargs']
 const SHELLS = ['sh', 'bash', 'zsh', 'dash', 'ksh']
 const GIT_SETTINGS = ['config', 'replace', 'update-ref', 'remote', 'worktree', 'symbolic-ref']
+const BRANCH_CHANGES = ['-f', '--force', '-m', '-M', '--move', '-d', '-D', '--delete', '-c', '-C', '--copy', '-u', '--set-upstream-to', '--unset-upstream', '--edit-description']
+// Where a shell command may write beside the job: scratch space and the null device.
+const SCRATCH = ['/tmp', '/private/tmp', '/dev']
 const GIT_SENDS = ['push', 'send-pack', 'http-push']
 // A word the shell would change before it runs: quotes, a backslash, a
 // variable, a pattern, a group of choices, a home folder.
@@ -160,6 +165,10 @@ function gitVerdict(words: string[], simple: string): Deny | null {
   if (isOdd(sub)) return deny(NOT_PLAIN, simple)
   if (sub !== undefined && GIT_SENDS.includes(sub)) return deny(PUSH, simple)
   if (sub !== undefined && GIT_SETTINGS.includes(sub)) return deny(SETTINGS, simple)
+  // The builder stays on its job's branch and moves no other one: from another
+  // branch, or with a branch moved, it could merge into the base.
+  if (sub === 'switch' || (sub === 'checkout' && !rest.includes('--'))) return deny(STAY, simple)
+  if (sub === 'branch' && rest.some(word => !word.startsWith('-') || BRANCH_CHANGES.includes(word))) return deny(STAY, simple)
   // A new branch or tag whose name could be read in the base's place.
   if ((sub === 'branch' || sub === 'tag') && isRemoteName(rest.find(word => !word.startsWith('-')))) return deny(REF, simple)
   if (sub === 'checkout' || sub === 'switch') {
@@ -219,7 +228,20 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
   // A write to a place that only the shell knows (a variable, a home folder) cannot be judged.
   const writes = simple.includes('>') || WRITERS.includes(program) || (program === 'sed' && words.some(word => word.startsWith('-i')))
 
-  return writes && raw.some(word => /[$~]/.test(word)) ? deny(NOT_PLAIN, simple) : null
+  if (!writes) return null
+  if (raw.some(word => /[$~]/.test(word))) return deny(NOT_PLAIN, simple)
+  // A path in a write is inside the job (the worktree, the one report file)
+  // or in scratch space. The text check cannot tell what is read from what is
+  // written, so every full path and every path with `..` is held to this.
+  for (const word of raw) {
+    const path = unquote(word).replace(/^\d*>>?/, '')
+    if (!path.startsWith('/') && !path.split('/').includes('..')) continue
+    const full = resolvePath(path, who.worktree)
+    const isInside = full !== null && (isIn(full, who.worktree) || full === who.outFile || SCRATCH.some(folder => isIn(full, folder)))
+    if (!isInside) return deny(OUT_WRITE, simple)
+  }
+
+  return null
 }
 
 function commandVerdict(command: string, who: Who, depth: number): Deny | null {

@@ -96,6 +96,21 @@ export async function listIssues(
   }
 }
 
+// True when the issue carries the mark as a label. Only a marked item runs.
+export async function hasMark(run: Run, id: string, mark: string): Promise<boolean> {
+  const n = digitsOf(id)
+  if (n === '' || !MARK.test(mark)) return false
+  const result = await run(['gh', 'issue', 'view', n, '--json', 'labels'])
+  if ('failed' in result || result.exitCode !== 0) return false
+  try {
+    const raw = JSON.parse(result.stdout) as { labels?: { name?: unknown }[] }
+
+    return Array.isArray(raw.labels) && raw.labels.some(label => label?.name === mark)
+  } catch {
+    return false
+  }
+}
+
 // The same runner, with every `gh` call told which repository it is for.
 export const inRepo =
   (run: Run, repo: string): Run =>

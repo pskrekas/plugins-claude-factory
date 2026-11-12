@@ -19,6 +19,8 @@ export type Ctx = {
   // The tracker and the pull request host are GitHub, or there is none here.
   tracker: Tracker | null
   mark: string | null
+  // The login of the person who runs the line, on the tracker's host; null when it is not known.
+  me: () => Promise<string | null>
 }
 
 export async function context(io: Io): Promise<Ctx> {
@@ -32,8 +34,20 @@ export async function context(io: Io): Promise<Ctx> {
   const tracker = settings.tracker
   const isGitHub = tracker?.kind === 'github' && prHostOf(remote, settings.prHost) === 'github' && repo !== null
 
+  let login: string | null | undefined
+  const me = async () => {
+    if (login === undefined) {
+      const asked = await plain(['gh', 'api', 'user', '--jq', '.login'])
+      const name = 'failed' in asked || asked.exitCode !== 0 ? '' : asked.stdout.trim()
+      login = /^[A-Za-z0-9-]{1,100}$/.test(name) ? name : null
+    }
+
+    return login
+  }
+
   return {
     root,
+    me,
     base: settings.baseBranch,
     now: await io.now(),
     f: settings.factory,

@@ -75,6 +75,7 @@ export type Job = {
   refused: string[] // the newest refused commands, to see the same one twice
   tries: number // how often the station that runs now failed
   plan: PlanRow | null // set for a job of a dry run
+  sha: string | null // the commit the fast gate judged and the reviewers read
   history: { at: number; from: Stage | null; to: Stage; reason: string }[]
 }
 
@@ -180,6 +181,7 @@ export function newJob(item: { id: string; title: string }, now: number): Job {
     refused: [],
     tries: 0,
     plan: null,
+    sha: null,
     history: [{ at: now, from: null, to: 'intake', reason: 'started' }],
   }
 }
@@ -449,6 +451,8 @@ export function parseJob(text: string, folder: string): Job | null {
     inFlight.push({ agentId: entry.agentId, role: entry.role as Role, focus: entry.focus, startedAt: entry.startedAt })
   }
   if (!refused.every(text => typeof text === 'string')) return null
+  const { sha = null } = raw
+  if (sha !== null && (typeof sha !== 'string' || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(sha))) return null
   const { plan = null } = raw
   let planRow: PlanRow | null = null
   if (plan !== null) {
@@ -502,6 +506,7 @@ export function parseJob(text: string, folder: string): Job | null {
     work: inFlight,
     results: answers,
     plan: planRow,
+    sha: sha as string | null,
     refused: (refused as string[]).slice(-MAX_REFUSED).map(text => cut(text, MAX_COMMAND)),
     tries,
     history,

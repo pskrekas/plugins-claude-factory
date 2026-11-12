@@ -52,7 +52,7 @@ const none = (itemId: string) => `No job for ${clean(itemId).slice(0, 40)}.`
 
 // The jobs that are still alive, and the one of an item among them.
 async function alive(io: Io, ctx: Ctx, itemId: string): Promise<{ jobs: Job[]; job: Job | null }> {
-  const jobs = (await readJobs(io, ctx.root)).jobs.filter(job => !isFinished(job))
+  const jobs = (await readJobs(io, ctx.root)).jobs.filter(job => !isFinished(job) && job.plan === null)
 
   return { jobs, job: ITEM_ID.test(itemId) ? findJob(jobs, itemId) : null }
 }

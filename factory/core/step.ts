@@ -109,8 +109,9 @@ function answered(job: Job, facts: Facts): Step | null {
       const answer = resultOf(job, 'approver')?.answer
       if (answer?.kind === 'ask') return ask(answer.question, 'approve')
       if (answer?.kind !== 'ready') return null
-      // Ready: the full checks decide, on the branch brought up to date with the base.
-      if (gate === null) return { do: 'gate', which: 'full' }
+      // Ready: the full checks decide, on the branch brought up to date with
+      // the base. They merge, push and mark ready, so a stopped line waits.
+      if (gate === null) return facts.isStopped ? WAIT : { do: 'gate', which: 'full' }
       if (gate.needsPerson) return needsYou(gate, 'approve')
 
       return gate.pass

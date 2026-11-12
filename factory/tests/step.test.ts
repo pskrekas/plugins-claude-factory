@@ -147,6 +147,9 @@ test('a stopped line starts nothing, and still reads what an agent answered', as
   expect(nextStep(at(['spec']), facts({ isStopped: true }))).toEqual({ do: 'wait' })
   expect(nextStep(at(['spec', 'build', 'gate']), facts({ isStopped: true }))).toEqual({ do: 'wait' })
   expect(nextStep(said(at(['spec']), 'spec', { kind: 'done' }), facts({ isStopped: true }))).toEqual({ do: 'move', to: 'build', reason: 'spec written' })
+  // The full checks merge, push and mark ready: not on a stopped line.
+  const ready = said(at(['spec', 'build', 'gate', 'review', 'approve']), 'approver', { kind: 'ready' })
+  expect(nextStep(ready, facts({ isStopped: true }))).toEqual({ do: 'wait' })
 })
 
 test('the same command refused twice stops the job', async () => {

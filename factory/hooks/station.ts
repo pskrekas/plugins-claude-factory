@@ -26,13 +26,20 @@ const quoted = (text: string): string[] => text.split('\n').map(line => (clean(l
 const oneLine = (text: string) => clean(text.replace(/\s+/g, ' ')).trim()
 
 // Writes `files/item.md`, once, at intake: the item's text is frozen there.
-export async function writeItem(io: Io, root: string, job: Job, item: TrackerItem): Promise<void> {
+// Only the comments of the item's author and of `person` (the one who runs
+// the line) are in it: on a public repository anyone can comment, and a
+// comment is text that an agent reads (design 8.1).
+export async function writeItem(io: Io, root: string, job: Job, item: TrackerItem, person: string | null): Promise<void> {
+  const trusted = [item.author, person].filter((name): name is string => typeof name === 'string' && name !== '')
+  const comments = item.comments.filter(comment => trusted.includes(comment.author))
+  const left = item.comments.length - comments.length
   const lines = [HEAD, '', `# Item ${oneLine(job.itemId)}`, `Author: ${oneLine(item.author).slice(0, 100)}`, '', '## Title', `> ${oneLine(item.title).slice(0, 300)}`, '', '## Text', ...quoted(item.text)]
-  item.comments.slice(0, MAX_COMMENTS).forEach((comment, i) => {
+  comments.slice(0, MAX_COMMENTS).forEach((comment, i) => {
     lines.push('', `## Comment ${i + 1}`, `Author: ${oneLine(comment.author).slice(0, 100)}`, ...quoted(comment.text))
   })
+  if (left > 0) lines.push('', `${left} comment${left === 1 ? ' by another person is' : 's by other people are'} not in this file.`)
   let text = lines.join('\n')
-  if (text.length > MAX_ITEM_CHARS || item.comments.length > MAX_COMMENTS) {
+  if (text.length > MAX_ITEM_CHARS || comments.length > MAX_COMMENTS) {
     // Cut at the end of a line, so the last line is still a quoted one.
     const kept = text.slice(0, MAX_ITEM_CHARS)
     text = `${kept.slice(0, Math.max(0, kept.lastIndexOf('\n')))}\n\n${CUT}`

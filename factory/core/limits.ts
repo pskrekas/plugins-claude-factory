@@ -60,6 +60,17 @@ export function limitOf(job: Job, jobs: Job[], f: FactorySettings, now: number):
   return today.ms > f.timeLimitMin.day * MINUTE ? 'time limit for the day' : null
 }
 
+// The day's limit that all jobs together have reached, or null: the cost of
+// the day when it is known, else its agent time. It counts every job that
+// spent today, also one that ended. No new job starts past it.
+export function dayLimitOf(jobs: Job[], f: FactorySettings, now: number): string | null {
+  const today = spentOn(jobs, now)
+  if (!today.isAny) return null
+  if (today.usd !== null) return today.usd > f.costLimitUsd.day ? 'cost limit for the day' : null
+
+  return today.ms > f.timeLimitMin.day * MINUTE ? 'time limit for the day' : null
+}
+
 // No new job starts on a nearly full disk. An unknown amount does not stop one.
 export function canStart(freeDiskGb: number | null, f: FactorySettings): boolean {
   return freeDiskGb === null || freeDiskGb >= f.minFreeDiskGb

@@ -124,6 +124,8 @@ export async function checkedSpawn(
   )
   if (got.deny !== undefined) return { no: clean(got.deny).slice(0, 200) }
   if (!seenSpawns.delete(a.description)) {
+    // Its report must not reach the session's model either.
+    if (got.agentId !== undefined) known.add(got.agentId)
     await setStop(io, await io.root(), true).catch(() => undefined)
     io.toast('Factory: an agent started outside the fence. The line is stopped.')
     io.sound()

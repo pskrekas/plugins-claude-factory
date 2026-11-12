@@ -12,7 +12,7 @@ const ALLOW = { decision: 'allow' }
 
 test('ordinary work of the builder is allowed', async () => {
   for (const ok of ['npm test', 'npm install && npm run lint', 'git status', 'git add -A && git commit -m "Add the page"', 'git diff HEAD~1', 'git log --oneline | head -5',
-    'git commit -m "push to main"', 'git checkout -b try', 'ls -la; cat package.json', 'python3 -m pytest -q', 'mkdir -p src/new && touch src/new/a.ts', 'grep -rn "gh " docs'])
+    'git commit -m "push to main"', 'git checkout -- src/a.ts', 'git checkout HEAD~1 -- src/a.ts', 'git branch', 'git branch --show-current', 'echo x > /tmp/scratch.txt', 'npm test > /dev/null', 'ls -la; cat package.json', 'python3 -m pytest -q', 'mkdir -p src/new && touch src/new/a.ts', 'grep -rn "gh " docs'])
     expect([ok, bash(ok)]).toEqual([ok, ALLOW])
 })
 
@@ -65,6 +65,19 @@ test('ways around the words are refused too', async () => {
   // Ordinary variables and folders are still fine.
   for (const ok of ['NODE_ENV=test npm test', 'CI=1 npm run build', 'cd src && npm test', 'cd .github && ls', 'bash -c "npm test"', 'bash scripts/build.sh',
     'rm -rf dist/*', 'cp src/*.ts out/', 'export NODE_ENV=test', 'ls .github/*.yml', 'printf "%s" x', 'echo "$PATH"', 'npm test -- --dir="$PWD"', 'echo done > out.txt'])
+    expect([ok, bash(ok)]).toEqual([ok, ALLOW])
+})
+
+test('the builder stays on its branch, and writes inside its job', async () => {
+  // Off the job's branch, or a branch moved: the way to a merge into the base.
+  for (const command of ['git checkout main', 'git checkout -b try', 'git switch main', 'git switch -c x', 'git branch -f main HEAD', 'git branch -D main', 'git branch -m main old', 'git branch other'])
+    expect([command, bash(command)]).toEqual([command, { decision: 'deny', reason: "An agent stays on its job's branch.", command }])
+  // A write to a plain path outside the job.
+  for (const command of ['echo x >> /Users/me/.zshrc', 'cp evil /usr/local/bin/git', 'rm -rf /s/worktrees/13-b', 'echo x > ../../jobs/13-b/files/item.md', 'tee /etc/hosts', 'mv a /s/jobs/12-a/job.json', 'touch /s/worktrees/12-a-other/x']) {
+    const verdict = bash(command)
+    expect([command, verdict?.decision === 'deny' ? verdict.reason : verdict?.decision]).toEqual([command, 'This write is outside the job.'])
+  }
+  for (const ok of [`cp a ${WT}/src/b.ts`, 'mv src/a.ts src/b.ts', `echo x > ${JOB}/out/build.md`, 'rm -rf ./dist', 'mkdir -p build/out'])
     expect([ok, bash(ok)]).toEqual([ok, ALLOW])
 })
 

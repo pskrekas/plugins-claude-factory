@@ -53,7 +53,7 @@ The status line shows the task id, the first progress percent, the checks and a 
 | `/factory where` | says where the factory keeps its state for this repository |
 | `/factory approve` | opens the pane and allows the commands it shows (see below). Only your own Enter at the prompt counts |
 | `/factory plan` | the dry run: Intake judges each item of the queue (ten at most). It builds nothing, opens no pull request and writes nothing to the tracker. The pane shows what Intake said |
-| `/factory run [id]` | runs the line: one pass over the queue as it is now (or over one item), and the jobs that are already there. It ends when every job is ready, waits for you, or is refused |
+| `/factory run [id]` | runs the line: one pass over the queue as it is now (or over one item that carries the mark), and the jobs that are already there. It ends when every job is ready, waits for you, or is refused, or when a limit of the day or a full disk holds it |
 | `/factory stop` | the line starts no new station. Agents that run finish theirs. It works from any session |
 | `/factory answer <id> [text]` | lets a job that waits for you go on. The text is given to the next agent; a question for the item's author needs text. For a job that one of its own limits stopped, it grants that limit once more (one round, or the job's cost or time limit again). A limit of the day is not lifted: raise it in the settings, or wait for the next day. For a ready job, text sends it back to Build |
 | `/factory reject <id> <reason>` | drops a job: a comment with the reason on the item, the pull request closed, the item closed as not planned, the worktree removed. It also drops an item that the tracker says is in progress and that has no job on this machine |
@@ -73,7 +73,9 @@ It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
 - **The builder agent has a shell with your rights.** No sandbox is around it. A fence (below) refuses what the line must never do, but for shell commands a fence is a check of text, and text can hide what it does. Run the line on a repository and on issues that you trust, or inside a container or a virtual machine. An issue is text that someone else wrote; the agents are told to read it as data, and that is a rule for a model, not a wall.
 - **It costs money or quota.** Each station is an agent. Set the limits (`factory.costLimitUsd`, `factory.timeLimitMin`, `factory.slots`, `factory.maxRounds`) before the first run, and try `/factory plan` first.
 - **The gate runs the branch's code** with your rights, before a reviewer has read it.
-- **What does not depend on the fence:** every agent reads a clean checkout and never your working folder; the gate runs in its own clean copy of one commit; only the plugin pushes, and only a job's own branch; nothing merges; your branch protection on GitHub still holds.
+- **What does not depend on the fence:** the gate runs in its own clean copy of one commit; what the plugin itself pushes is the commit the gate judged, to the job's own branch; the plugin never merges; your branch protection on GitHub still holds. **What does depend on it:** a builder that gets past the fence has your `git` and your `gh` login, and can read and write what you can.
+- **A pushed round starts your CI.** The plugin pushes a job's branch after the fast checks passed, before a reviewer has read it. A workflow that runs on a push runs the branch's code with the secrets that workflow has. A branch that changes a protected path (put `.github/` there) is never pushed.
+- **Who can speak to the agents.** Only an issue that carries the mark runs, and only you put the mark on. Of an issue's comments, only those of its author and yours reach an agent.
 
 ### Start
 
@@ -89,24 +91,26 @@ It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
 | --- | --- | --- |
 | Intake | one agent, the strongest model, no shell | accepts the item (with a risk: low, medium, high), asks its author one question, or refuses it |
 | Spec | one agent, no shell | `spec.md`: what to build and how it is checked |
-| Build | one agent with a shell, in the job's own worktree and branch `factory/<job>` | commits. The plugin pushes them and opens a draft pull request |
-| Gate | the plugin's code | runs the fast checks. A fail goes back to Build with the report |
+| Build | one agent with a shell, in the job's own worktree and branch `factory/<job>` | commits |
+| Gate | the plugin's code | runs the fast checks. A fail goes back to Build with the report. On a pass the plugin pushes the judged commit and opens a draft pull request |
 | Review | one agent for each routed reviewer (`code`; `ux` and `ui` for a screen change; `security`), no shell | each says OK or CHANGES. One CHANGES sends the job back to Build |
-| Approve | one agent, no shell | READY, or one question for you. On READY the plugin brings the base into the branch, runs the full checks, and marks the pull request ready |
+| Approve | one agent, no shell | READY, or one question for you. On READY the plugin brings the base into the branch, runs the full checks on that commit, pushes it, and marks the pull request ready. A commit that landed after the review is not marked ready: the job asks you |
 | You | you | merge, answer, or reject |
 
 Each way back to Build is a round. After `maxRounds` (3) with no pass the job stops and asks you. A risk above `maxRisk` (`low`) stops after Intake and asks you.
 
-Each agent reads the job's files and writes exactly one file. Its answer is one line with a fixed word (`DONE`, `OK`, `CHANGES`, `READY`, …); the plugin reads that word and nothing else of what the agent says. An answer the line cannot read starts the station once more, then asks you. An agent that does not answer within `factory.stationTimeoutMin` (30) makes its job ask; `/factory answer <id>` starts the station again.
+Each agent reads the job's files and writes exactly one file. Its answer is one line that starts with a fixed word (`DONE`, `OK`, `CHANGES`, `READY`, …); the plugin decides by that word. A question or a reason on that line is shown to you and posted on the item; nothing else an agent says is read. An answer the line cannot read starts the station once more, then asks you. An agent that does not answer within `factory.stationTimeoutMin` (30) makes its job ask; `/factory answer <id>` starts the station again. The plugin cannot stop an agent: one it gave up on may still work for a while, and its station does not start again until it has ended.
 
-Agents start only from the plugin's own running code, in the job's folder. The session's model is not told about them and does not see their reports: you can keep using the chat while the line runs. One gate runs at a time, and the other jobs wait while it runs. When you close the session the agents stop; `/factory run` in a new session goes on with every job from where it was.
+A step that cannot be done (a push that is refused, a label that cannot be set) is tried once more at the next call. After two tries the job waits for you, with the reason.
+
+Agents start only from the plugin's own running code, in the job's folder. The session's model is not told about them and does not see their reports: you can keep using the chat while the line runs. One gate runs at a time, and the other jobs wait while it runs. `/factory run` in a new session goes on with every job from where it was (what happens to a running agent when you close the session is not checked yet). If the line has something to do and nothing of its own is running to do it, the pane's timer says `the line waits`: `/factory run` goes on.
 
 ### The fence
 
 Every tool call of an agent of the line goes through the plugin first.
 
-- **Files.** An agent reads only inside its job: the job's worktree and the job's folder. It writes one file, its report. Only the builder also writes code, in its worktree. A path is judged by where it really is, so a link that leads out of the job is refused.
-- **Shell (the builder only).** Refused: `git push`, `gh` and `az repos` (the plugin talks to the host), changes to git settings and refs, any naming of the git folder, the commands in `factory.forbiddenCommands` (put your deploy and release commands there), and a few forms the fence cannot read (a variable or a pattern in a program name, a write to a place only the shell knows, a shell inside a shell inside a shell).
+- **Files (the file tools).** With its read and write tools an agent reads only inside its job (the job's worktree and the job's folder) and writes one file, its report. Only the builder also writes code, in its worktree. A path is judged by where it really is, so a link that leads out of the job is refused.
+- **Shell (the builder only).** Refused: `git push`, `gh` and `az repos` (the plugin talks to the host), changes to git settings and refs, leaving the job's branch or moving another one (`git checkout <branch>`, `git switch`, `git branch -f`), any naming of the git folder, a write to a full path outside the job (scratch space under `/tmp` is allowed), the commands in `factory.forbiddenCommands` (put your deploy and release commands there), and a few forms the fence cannot read (a variable or a pattern in a program name, a write to a place only the shell knows, a shell inside a shell inside a shell). The shell can read anywhere you can.
 - **Twice is enough.** The same command refused twice stops the job and asks you.
 - **Its limit.** For shell commands this is best effort. A script that the builder writes and runs is not read by the fence.
 
@@ -240,6 +244,8 @@ git branch --merged <base> --format=%(refname:short)
 git symbolic-ref --short refs/remotes/origin/HEAD        (/factory init)
 gh issue view <n> --json …
 gh issue list --label <mark> --state open --limit 100 --json …
+gh issue view <n> --json labels                          (/factory run <id>)
+gh api user --jq .login                                 (whose comments an agent may read)
 gh pr view --json …
 ```
 
@@ -249,6 +255,7 @@ The line can also make these calls, and no other. `<job>` is a job's id, `<state
 git fetch origin <base>
 git worktree add <state>/worktrees/<job> -b factory/<job> refs/remotes/origin/<base>
 git worktree add --detach <state>/gate/<job> <commit>
+git worktree add --detach <state>/worktrees/<job> <commit>   (/factory plan: a copy of the base, on no branch)
 git worktree remove --force <state>/worktrees/<job>      (or <state>/gate/<job>)
 git push origin <commit>:refs/heads/factory/<job>
 git … merge --no-edit <commit>                           (the job's worktree, see below)
