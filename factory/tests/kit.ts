@@ -95,6 +95,11 @@ export function engine(
     // The working tree the session is in, and the main checkout when it differs.
     root: '/r',
     repoRoot: null as string | null,
+    // What git says is the top of the working tree. By default git is honest:
+    // the nearest folder above the session's that holds a `.git`.
+    gitTop: null as string | null,
+    // True when git refuses the repository (a `.git` another user owns).
+    gitRefuses: false,
     cwds: [] as (string | undefined)[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
   }
@@ -197,6 +202,17 @@ export function engine(
     value: e.name === 'PATH' ? (world.path ?? '/usr/bin:/bin') : e.name === 'HOME' ? '/home/me' : undefined,
   }))
   on('process.run', (_, e) => {
+    if (e.argv.join(' ') === 'git rev-parse --show-toplevel') {
+      const from = e.init?.cwd ?? seen.root
+      const dirs = from.split('/').map((_, i, parts) => parts.slice(0, parts.length - i).join('/') || '/')
+      const honest = dirs.find(dir => seen.files[real(`${dir}/.git`)] !== undefined || isDir(real(`${dir}/.git`)))
+      const top = seen.gitTop ?? honest
+      if (seen.gitRefuses || top === undefined) {
+        return { value: { exitCode: 128, stdout: '', stderr: 'fatal: detected dubious ownership' } as never }
+      }
+
+      return { value: { exitCode: 0, stdout: top + '\n', stderr: '' } as never }
+    }
     seen.cwds.push(e.init?.cwd)
     seen.ran.push(e.argv.join(' '))
     seen.paths.push(e.init?.env?.PATH)

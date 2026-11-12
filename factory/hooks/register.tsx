@@ -9,7 +9,7 @@ import { emptyModel } from '../core/model'
 import { displayWidth } from '../core/rows'
 import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
-import { ancestorsOf } from '../core/top'
+import { ancestorsOf, confirmedTop } from '../core/top'
 import type { Io } from './io'
 import { init } from './init'
 import { whereText } from './jobs'
@@ -25,6 +25,7 @@ const panel = atom({ plugin: 'factory', key: 'panel' } as const, emptyModel(), {
 const MINIMUM = [2, 1, 322] as const
 const REFRESH_MS = 60_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
+const GIT_TOP_MS = 5_000
 const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
 
 // Theme keys, so the colours follow the person's theme.
@@ -79,17 +80,28 @@ export const register: Register = (on, options) => {
       const at = await $.session.root().catch(() => $.session.cwd())
       const known = tops.get(at)
       if (known !== undefined) return known
-      // The nearest folder, from the session's own upward, that holds a `.git`;
-      // the session's folder when none does. Git is not asked (core/top.ts).
+      // The nearest folder, from the session's own upward, that holds a `.git`,
+      // and only if git, asked from the session's folder, names the same one
+      // (core/top.ts says why both). Else the session's folder.
       const real = (await realOf(at)) ?? at
-      let found = real
+      let walkTop: string | null = null
       for (const dir of ancestorsOf(real)) {
         const hasGit = await $.fs.exists(`${dir}/.git`).catch(() => false)
         if (hasGit) {
-          found = dir
+          walkTop = dir
           break
         }
       }
+      let gitTop: string | null = null
+      if (walkTop !== null) {
+        const env = { PATH: safePath(await $.env.get('PATH').catch(() => undefined), real) }
+        const said = await $.process
+          .run(['git', 'rev-parse', '--show-toplevel'], { cwd: real, env, timeoutMs: GIT_TOP_MS })
+          .then(done => (done.exitCode === 0 ? done.stdout.trim() : ''))
+          .catch(() => '')
+        gitTop = said === '' ? null : await realOf(said)
+      }
+      const found = confirmedTop(real, walkTop, gitTop)
       tops.set(at, found)
 
       return found

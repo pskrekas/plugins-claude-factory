@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ancestorsOf } from '../core/top'
+import { ancestorsOf, confirmedTop } from '../core/top'
 import { START, cmd, engine, paneText } from './kit'
 
 test('a folder and the folders above it, nearest first', async () => {
@@ -9,6 +9,19 @@ test('a folder and the folders above it, nearest first', async () => {
   expect(ancestorsOf('/a/')).toEqual(['/a', '/'])
   expect(ancestorsOf('relative/x')).toEqual(['relative/x'])
   expect(ancestorsOf('/' + 'd/'.repeat(100)).length).toBe(40)
+})
+
+test('a top is used only when the walk and git agree on it', async () => {
+  expect(confirmedTop('/r/sub', '/r', '/r')).toBe('/r')
+  expect(confirmedTop('/r', '/r', '/r')).toBe('/r')
+  // Git names another folder: the folder's own git config is not believed.
+  expect(confirmedTop('/evil', '/evil', '/victim')).toBe('/evil')
+  expect(confirmedTop('/evil/sub', '/evil', '/victim')).toBe('/evil/sub')
+  // Git refuses the repository (a `.git` another user owns), or is missing.
+  expect(confirmedTop('/tmp/work', '/tmp', null)).toBe('/tmp/work')
+  // No `.git` above the session.
+  expect(confirmedTop('/notes', null, null)).toBe('/notes')
+  expect(confirmedTop('/notes', null, '/elsewhere')).toBe('/notes')
 })
 
 const CHECK = '{"checks":[{"name":"a","run":["x"]}], "owed": ".claude/owed.md"}'
@@ -23,6 +36,7 @@ test('a folder whose git config points at another repo does not read that repo',
     },
   })
   world.root = '/evil'
+  world.gitTop = '/victim'
   await $.session.start(START)
   await $.command.run(cmd(''))
 
@@ -41,6 +55,7 @@ test('a folder whose git config points at a folder above it does not read that f
     },
   })
   world.root = '/home/me/downloads/evil'
+  world.gitTop = '/home/me'
   await $.session.start(START)
   await $.command.run(cmd(''))
 
@@ -74,4 +89,23 @@ test('outside any repository the session folder is the top', async ($, on) => {
   await $.command.run(cmd(''))
 
   expect(await paneText($, 60)).toContain('OWED BY YOU 1')
+})
+
+test('a .git that another user put in a shared folder is not used', async ($, on) => {
+  const world = engine(on, {
+    files: {
+      '/tmp/.git/HEAD': 'x',
+      '/tmp/.claude/factory.json': CHECK,
+      '/tmp/.claude/owed.md': '- [ ] a',
+      '/tmp/work/notes.md': 'x',
+    },
+  })
+  world.root = '/tmp/work'
+  world.gitRefuses = true
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  const rows = await paneText($, 60)
+  expect(rows).toContain('No settings file. Run /factory init.')
+  expect(world.reads.some(path => path.startsWith('/tmp/.claude'))).toBe(false)
 })
