@@ -1,4 +1,5 @@
 {
+  "version": 1,
   "id": "10-multiple-walls",
   "itemId": "10",
   "title": "Multiple walls",
@@ -20,6 +21,25 @@
   "updatedAt": 1794490540000,
   "agentMs": 540000,
   "costUsd": 2.1,
+  "spend": [
+    {
+      "day": "2026-11-12",
+      "ms": 540000,
+      "usd": 2.1
+    }
+  ],
+  "stageMs": {
+    "intake": 60000,
+    "spec": 90000,
+    "build": 250000,
+    "review": 70000,
+    "approve": 70000
+  },
+  "granted": {
+    "rounds": 0,
+    "usd": 0,
+    "minutes": 0
+  },
   "history": [
     {
       "at": 1794490000000,

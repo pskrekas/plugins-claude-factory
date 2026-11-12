@@ -72,6 +72,13 @@ test('lists are checked', async () => {
   expect(err({ reviewers: { low: ['nobody'] } })).toBe('factory: unknown reviewer')
   expect(err({ forbiddenCommentWords: Array.from({ length: 51 }, () => 'x') })).toBe('factory: at most 50')
   expect(err({ forbiddenCommands: [['terraform', 'apply']], reviewers: { ui: ['ux'] } })).toBe(null)
+  // A risk always gets a reviewer; a surface may add none.
+  expect(err({ reviewers: { low: [] } })).toBe('factory: a risk needs a reviewer')
+  expect(err({ reviewers: { ui: [] } })).toBe(null)
+  // A limit a person could never reach is no limit.
+  expect(err({ costLimitUsd: { job: 1e300 } })).toBe('factory: wrong type')
+  expect(err({ costLimitUsd: { job: 1000, day: 10000 } })).toBe(null)
+  expect(err({ timeLimitMin: { job: 100000 } })).toBe('factory: wrong type')
 })
 
 test('a refused factory key leaves the other keys as they are', async () => {
@@ -79,4 +86,12 @@ test('a refused factory key leaves the other keys as they are', async () => {
   expect(error).toBe('factory: wrong type')
   expect(settings.baseBranch).toBe('dev')
   expect(settings.factory).toEqual(FACTORY_DEFAULTS)
+})
+
+test('the settings file itself is always a protected path', async () => {
+  const paths = (protectedPaths: string[]) =>
+    parseSettings(JSON.stringify({ factory: { protectedPaths } })).settings.factory.protectedPaths
+  expect(paths([])).toEqual(['.claude/factory.json'])
+  expect(paths(['tests/known.txt'])).toEqual(['.claude/factory.json', 'tests/known.txt'])
+  expect(paths(['.claude/factory.json', 'x'])).toEqual(['.claude/factory.json', 'x'])
 })

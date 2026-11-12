@@ -1,4 +1,5 @@
 {
+  "version": 1,
   "id": "12-add-dark-mode",
   "itemId": "12",
   "title": "Add dark mode",
@@ -27,6 +28,23 @@
   "updatedAt": 1794490840000,
   "agentMs": 840000,
   "costUsd": 3.4,
+  "spend": [
+    {
+      "day": "2026-11-12",
+      "ms": 840000,
+      "usd": 3.4
+    }
+  ],
+  "stageMs": {
+    "intake": 60000,
+    "spec": 120000,
+    "build": 660000
+  },
+  "granted": {
+    "rounds": 0,
+    "usd": 0,
+    "minutes": 0
+  },
   "history": [
     {
       "at": 1794490000000,

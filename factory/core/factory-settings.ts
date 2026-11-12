@@ -41,6 +41,10 @@ const TIERS: readonly string[] = ['strongest', 'strong', 'fast']
 const REVIEWERS: readonly string[] = ['code', 'ux', 'ui', 'security']
 const ROUTES = ['low', 'medium', 'high', 'ui', 'security'] as const
 const MAX_LIST = 50
+const SETTINGS_FILE = '.claude/factory.json'
+// A limit a person could never reach is no limit: these are the most a
+// settings file may ask for.
+const MOST = { costLimitUsd: { job: 1000, day: 10_000 }, timeLimitMin: { job: 1440, day: 10_080 } }
 
 const WRONG = 'wrong type'
 type Refused = { no: string }
@@ -58,13 +62,18 @@ function texts(v: unknown): string[] | Refused {
 }
 
 // `{ job, day }`, each above zero, over the defaults.
-function pair(v: unknown, defaults: { job: number; day: number }): { job: number; day: number } | Refused {
+function pair(
+  v: unknown,
+  defaults: { job: number; day: number },
+  most: { job: number; day: number },
+): { job: number; day: number } | Refused {
   if (!isObject(v)) return no(WRONG)
   const out = { ...defaults }
   for (const key of ['job', 'day'] as const) {
     if (v[key] === undefined) continue
-    if (!isAmount(v[key])) return no(WRONG)
-    out[key] = v[key]
+    const amount = v[key]
+    if (!isAmount(amount) || amount > most[key]) return no(WRONG)
+    out[key] = amount
   }
 
   return out
@@ -96,7 +105,7 @@ export function parseFactory(v: unknown): { ok: FactorySettings } | Refused {
   }
   for (const key of ['costLimitUsd', 'timeLimitMin'] as const) {
     if (v[key] === undefined) continue
-    const parsed = pair(v[key], FACTORY_DEFAULTS[key])
+    const parsed = pair(v[key], FACTORY_DEFAULTS[key], MOST[key])
     if ('no' in parsed) return parsed
     f[key] = parsed
   }
@@ -105,7 +114,9 @@ export function parseFactory(v: unknown): { ok: FactorySettings } | Refused {
     const paths = texts(v.protectedPaths)
     if ('no' in paths) return paths
     if (!paths.every(isInside)) return no('path must be inside the repo')
-    f.protectedPaths = paths
+    // The settings file is always protected: a job must not be able to change
+    // the rules it runs under.
+    f.protectedPaths = [SETTINGS_FILE, ...paths.filter(path => path !== SETTINGS_FILE)]
   }
   if (v.forbiddenCommentWords !== undefined) {
     const words = texts(v.forbiddenCommentWords)
@@ -142,6 +153,7 @@ export function parseFactory(v: unknown): { ok: FactorySettings } | Refused {
       const names = texts(v.reviewers[route])
       if ('no' in names) return names
       if (!names.every(name => REVIEWERS.includes(name))) return no('unknown reviewer')
+      if (names.length === 0 && RISKS.includes(route as Risk)) return no('a risk needs a reviewer')
       f.reviewers[route] = [...new Set(names)]
     }
   }

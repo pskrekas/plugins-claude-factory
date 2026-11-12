@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { listIssues, parseGhIssueList } from '../adapters/github-issues'
 import { FACTORY_DEFAULTS as F } from '../core/factory-settings'
-import { move, newJob } from '../core/job'
+import { addSpend, move, newJob } from '../core/job'
 import type { Job } from '../core/job'
 import { parseSettings } from '../core/settings'
 import { viewOf } from '../hooks/readers/factory'
@@ -77,7 +77,7 @@ test('the view: running jobs, then waiting ones, twenty at most', async () => {
 })
 
 test('the view: finished jobs show only in the totals, and nothing gives no view', async () => {
-  const done = job('d', { stage: 'done', agentMs: 60_000, costUsd: 1 })
+  const done = { ...addSpend(job('d'), 'build', 60_000, 1, NOON), stage: 'done' as const }
   const view = viewOf([done], F, null, null, NOON)
   expect(view?.jobs).toEqual([])
   expect(view?.today).toEqual({ done: 1, minutes: 1, costUsd: 1, firstRound: 1, finished: 1 })

@@ -4,6 +4,7 @@ import {
   IllegalMove,
   STAGES,
   TRANSITIONS,
+  addSpend,
   isActive,
   isFinished,
   isWaiting,
@@ -28,6 +29,7 @@ test('a new job', async () => {
     null,
     0,
   ])
+  expect([j.version, j.granted, j.spend, j.stageMs]).toEqual([1, { rounds: 0, usd: 0, minutes: 0 }, [], {}])
   expect(j.history).toEqual([{ at: 1000, from: null, to: 'intake', reason: 'started' }])
 })
 
@@ -65,6 +67,8 @@ test('illegal moves throw and change nothing', async () => {
 })
 
 test('a job that waits goes back only where it stopped', async () => {
+  expect(() => move(job(), 'needs-info', 'a question', 1)).toThrow(IllegalMove)
+  expect(() => move(job(), 'needs-info', 'a question', 1, { question: undefined })).toThrow(IllegalMove)
   const info = move(job(), 'needs-info', 'a question', 1, { question: 'Which font?' })
   expect([info.stoppedIn, info.question, isWaiting(info)]).toEqual(['intake', 'Which font?', true])
   expect(() => move(info, 'spec', 'x', 2)).toThrow(IllegalMove)
@@ -110,6 +114,18 @@ test('a job file is checked field by field', async () => {
     { sentBack: { by: 'nobody', why: 'x' } },
     { pr: { number: 'x', url: 'u' } },
     { stoppedIn: 'nowhere' },
+    // A stage a job can only wait in must say where it goes back to, and only
+    // to a stage the table allows; a job that does not wait must not say one.
+    { stage: 'needs-human', stoppedIn: 'ready', question: 'q' },
+    { stage: 'needs-human', stoppedIn: 'build', question: 'q' },
+    { stage: 'needs-info', stoppedIn: null, question: 'q' },
+    { stage: 'needs-info', stoppedIn: 'intake', question: null },
+    { stage: 'review', stoppedIn: 'review' },
+    { version: 2 },
+    { granted: { rounds: -1, usd: 0, minutes: 0 } },
+    { spend: [{ day: 'today', ms: 1, usd: 1 }] },
+    { stageMs: { nonsense: 5 } },
+    { pr: { number: 1.5, url: 'u' } },
   ]
   for (const change of bad) expect(parseJob(JSON.stringify({ ...job(), ...change }), folder)).toBe(null)
   expect(parseJob(JSON.stringify({ ...job(), id: '../etc' }), '../etc')).toBe(null)
@@ -126,4 +142,33 @@ test('long text in a job file is cut', async () => {
   const long = parseJob(text, 'proj-12-add-dark-mode')
   expect([long?.title.length, long?.question?.length, long?.sentBack?.why.length]).toEqual([200, 500, 300])
   expect([long?.history.length, long?.history[0]?.at, long?.history[0]?.reason.length]).toEqual([100, 200, 200])
+})
+
+test('text that a move sets is cut, and an unset field is left as it is', async () => {
+  const asked = move(job(), 'needs-info', 'r', 1, { question: 'q'.repeat(300_000) })
+  expect(asked.question?.length).toBe(500)
+  const atGate = walk(['spec', 'build', 'gate'])
+  const back = move(atGate, 'build', 'r', 2, { sentBack: { by: 'gate', why: 'w'.repeat(5000) }, risk: undefined })
+  expect(back.sentBack?.why.length).toBe(300)
+  expect(back.risk).toBe(null)
+  expect(parseJob(JSON.stringify(asked), asked.id)).toEqual(asked)
+  expect(parseJob(JSON.stringify(back), back.id)).toEqual(back)
+})
+
+test('spend is added per day and per station, and one unpriced piece makes the job unpriced', async () => {
+  const day1 = new Date(2026, 0, 15, 23, 50).getTime()
+  const day2 = new Date(2026, 0, 16, 0, 10).getTime()
+  let j = addSpend(job(), 'intake', 60_000, 0.5, day1)
+  j = addSpend(j, 'spec', 120_000, 1.25, day1)
+  j = addSpend(j, 'spec', 30_000, 0.25, day2)
+  expect([j.agentMs, j.costUsd, j.updatedAt]).toEqual([210_000, 2, day2])
+  expect(j.spend).toEqual([
+    { day: '2026-01-15', ms: 180_000, usd: 1.75 },
+    { day: '2026-01-16', ms: 30_000, usd: 0.25 },
+  ])
+  expect(j.stageMs).toEqual({ intake: 60_000, spec: 150_000 })
+  const unpriced = addSpend(j, 'build', 1000, null, day2)
+  expect([unpriced.costUsd, unpriced.spend[1]]).toEqual([null, { day: '2026-01-16', ms: 31_000, usd: null }])
+  expect(addSpend(unpriced, 'build', 1000, 3, day2).costUsd).toBe(null)
+  expect(parseJob(JSON.stringify(unpriced), unpriced.id)).toEqual(unpriced)
 })

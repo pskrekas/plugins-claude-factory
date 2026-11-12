@@ -1,4 +1,5 @@
 {
+  "version": 1,
   "id": "14-different-fonts",
   "itemId": "14",
   "title": "Different fonts",
@@ -15,6 +16,21 @@
   "updatedAt": 1794490090000,
   "agentMs": 90000,
   "costUsd": 0.2,
+  "spend": [
+    {
+      "day": "2026-11-12",
+      "ms": 90000,
+      "usd": 0.2
+    }
+  ],
+  "stageMs": {
+    "intake": 90000
+  },
+  "granted": {
+    "rounds": 0,
+    "usd": 0,
+    "minutes": 0
+  },
   "history": [
     {
       "at": 1794490000000,
