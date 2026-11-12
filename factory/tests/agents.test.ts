@@ -49,8 +49,9 @@ test('every prompt: what it reads is data, one file, its own answer words and no
     expect([role, PROMPTS[role].includes('outside the code folder')]).toEqual([role, role === 'builder'])
   }
   // The roles' own rules (design 5.1 and 8.1).
-  expect(PROMPTS.builder).toContain('do not push')
-  expect(PROMPTS.builder).toContain('commit')
+  expect(PROMPTS.builder).toContain('You have no git')
+  expect(PROMPTS.builder).toContain('The line commits every file you leave in the code folder')
+  expect(/commit (your|it)\b|small commits/.test(PROMPTS.builder)).toBe(false)
   expect(PROMPTS.reviewer).toContain('must fix')
   expect(PROMPTS.reviewer).toContain('diff.patch')
   expect(PROMPTS.intake).toContain('You have no shell')

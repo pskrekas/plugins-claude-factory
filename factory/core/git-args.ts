@@ -3,7 +3,8 @@
 // This is the whole list. The factory never forces a push, never pushes a
 // branch that is not a job's own, never merges a job into the base branch, and
 // never rewrites history: no function here can build such a call, and a test
-// checks every list this file can answer against those rules.
+// checks every list this file can answer against those rules. Its one commit
+// is a new commit of a job's work, under a fixed message.
 import { isJobId } from './job'
 import { isBranchName } from './settings'
 
@@ -24,6 +25,9 @@ export type GitCall =
   | { do: 'uncommitted'; gitDir: string; workTree: string }
   | { do: 'add-clean'; path: string; sha: string }
   | { do: 'head'; jobId: string }
+  | { do: 'add-all'; gitDir: string; workTree: string }
+  | { do: 'staged'; gitDir: string; workTree: string }
+  | { do: 'commit'; gitDir: string; workTree: string; message: string }
 
 // An absolute path with no `..` in it and no control character.
 const isPlainPath = (path: string) =>
@@ -32,6 +36,12 @@ const isPlainPath = (path: string) =>
 // A commit named by its full id: 40 hex characters, or 64 in a SHA-256 repo.
 // Never a name (`HEAD`, a branch), which can move between two calls.
 export const isCommitId = (text: string): boolean => /^([0-9a-f]{40}|[0-9a-f]{64})$/.test(text)
+
+// The message of the plugin's commit of a job's work: the item's id in plain
+// characters and the round. No word of an agent is in it.
+export const commitMessage = (itemId: string, round: number): string =>
+  `Factory: item ${(itemId.match(/[A-Za-z0-9]+/g) ?? []).join('-').slice(0, 40)}, round ${round}`
+const isMessage = (text: string) => /^Factory: item [A-Za-z0-9][A-Za-z0-9-]{0,39}, round [1-9][0-9]{0,3}$/.test(text)
 
 // The argument list of a call, or null when one of its values breaks a rule:
 // a job id that is not one, a base that is not a branch name, a path that is
@@ -58,6 +68,7 @@ export function gitArgs(call: GitCall): string[] | null {
     'core.hooksPath=/dev/null',
   ]
   if ('from' in call && !(isCommitId(call.from) && isCommitId(call.to))) return null
+  if ('message' in call && !isMessage(call.message)) return null
 
   switch (call.do) {
     case 'fetch':
@@ -100,6 +111,15 @@ export function gitArgs(call: GitCall): string[] | null {
     case 'uncommitted':
       // What the job's worktree holds that its branch does not.
       return [...inTree(call.gitDir, call.workTree), 'status', '--porcelain', '--no-renames', '--untracked-files=all', '-z']
+    case 'add-all':
+      // Every file the builder left in the job's folder (ignored files stay out).
+      return [...inTree(call.gitDir, call.workTree), 'add', '-A']
+    case 'staged':
+      // What the next commit holds, one entry per file, with the kind of each.
+      return [...inTree(call.gitDir, call.workTree), 'diff', '--cached', '--raw', '--no-renames', '--no-abbrev', '-z']
+    case 'commit':
+      // A new commit on the job's branch. No program runs for it: no hook, no signing.
+      return [...inTree(call.gitDir, call.workTree), 'commit', '--no-verify', '--no-gpg-sign', '-m', call.message]
     case 'head':
       // The tip of the job's own branch, by the ref's full name: the commit a
       // push of that branch sends. Not `HEAD`, which is wherever a folder is.

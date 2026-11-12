@@ -33,7 +33,7 @@ import { isStopped, lockInfo, readJob, readJobs, releaseLock, retireJob, stateDi
 import { readInside } from './readers/files'
 import { endRun, readRun, writeRun } from './run'
 import { collect, discardOut, spendOf, writeDiff, writeItem } from './station'
-import { addPlanTree, addWorktree, baseHeadOf, dropBranch, fetchBase, headOf, pushCommit, removeCleanCopy, removeWorktree, syncBase } from './worktrees'
+import { addPlanTree, addWorktree, baseHeadOf, commitAll, dropBranch, fetchBase, headOf, pushCommit, removeCleanCopy, removeWorktree, syncBase } from './worktrees'
 
 export type Advanced = { ran: boolean; started: number; moved: number; isDone: boolean; note: string | null }
 
@@ -396,6 +396,11 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
       let set = step.set ?? {}
       let judged: string | null = job.sha
       try {
+        if (job.stage === 'build' && step.to === 'gate') {
+          // The builder has no git: the plugin commits what it left, and the gate judges that commit.
+          const committed = await commitAll(io, root, job)
+          if (!committed.ok) throw new Error(`the work could not be committed (${committed.why ?? 'git failed'})`)
+        }
         if ((job.stage === 'gate' && step.to === 'review') || step.to === 'ready') {
           // What goes on is the commit the gate judged. A branch that moved is gated again.
           const sha = await headOf(io, root, job.id)

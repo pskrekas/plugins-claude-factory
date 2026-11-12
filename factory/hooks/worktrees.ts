@@ -1,7 +1,7 @@
 // A worktree and a branch per job. The worktree is in the state folder, not in
 // the repo. Every git call comes from core/git-args.ts.
 import { failureText } from '../core/comment'
-import { branchOf, gitArgs, isCommitId } from '../core/git-args'
+import { branchOf, commitMessage, gitArgs, isCommitId } from '../core/git-args'
 import type { GitCall } from '../core/git-args'
 import type { RunResult } from '../core/run'
 import type { Io } from './io'
@@ -227,6 +227,29 @@ export async function uncommittedFiles(io: Io, root: string, jobId: string): Pro
     .split('\0')
     .filter(entry => entry.length > 3)
     .map(entry => entry.slice(3))
+}
+
+// Commits what a job's worktree holds and its branch does not, under the
+// fixed message: the builder has no git, so the plugin makes the commit. A
+// folder with nothing new gets no commit. A git repository of its own inside
+// the folder is not committed: the gate's copy would not hold its files.
+export async function commitAll(io: Io, root: string, job: { id: string; itemId: string; round: number }): Promise<Done & { isNew?: boolean }> {
+  const tree = await worktreeGitDir(io, root, job.id)
+  if (tree === null) return { ok: false, why: NOT_GITS }
+  const left = await git(io, root, { do: 'uncommitted', ...tree })
+  if (left === null || !passed(left)) return { ok: false, why: done(left).why ?? 'git failed' }
+  if (!('failed' in left) && left.stdout === '') return { ok: true, isNew: false }
+  const added = done(await git(io, root, { do: 'add-all', ...tree }))
+  if (!added.ok) return added
+  const staged = await git(io, root, { do: 'staged', ...tree })
+  if (staged === null || 'failed' in staged || staged.exitCode !== 0 || staged.isCut === true) return { ok: false, why: done(staged).why ?? 'what the commit holds could not be read' }
+  // Entries are `:<old mode> <new mode> <old id> <new id> <letter>`, then the name.
+  const parts = staged.stdout.split('\0')
+  const inner = parts.findIndex(part => /^:[0-7]{6} 160000 /.test(part))
+  if (inner >= 0) return { ok: false, why: `the code folder holds a git repository of its own (${(parts[inner + 1] ?? '').slice(0, 100)}): the line does not commit one` }
+  const made = done(await git(io, root, { do: 'commit', ...tree, message: commitMessage(job.itemId, job.round) }))
+
+  return made.ok ? { ok: true, isNew: true } : made
 }
 
 // The text of what commit `to` changed since it left the line of `from`, for

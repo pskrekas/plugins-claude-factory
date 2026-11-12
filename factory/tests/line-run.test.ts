@@ -30,7 +30,7 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
   const io = fakeIo({ files: { '/r/.git/HEAD': 'x', '/r/.claude/factory.json': settings }, remote: 'git@github.com:a/b.git', now: NOW })
   io.store.set(storeKey('/r/.git'), ['[gate] npm run build', '[gate] npm test'])
   // What the fake git, gh and npm answer; a test changes it as it goes.
-  const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isMerged: false, fail: [] as string[], list: '[]', labels: ['factory'], comments: [] as { author: { login: string }; body: string }[], onRun: null as ((line: string) => void) | null }
+  const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isDirty: false, isMerged: false, fail: [] as string[], list: '[]', labels: ['factory'], comments: [] as { author: { login: string }; body: string }[], onRun: null as ((line: string) => void) | null }
   const link = (path: string) => {
     const id = path.slice(path.lastIndexOf('/') + 1)
     io.files[`${path}/.git`] = `gitdir: /r/.git/worktrees/${id}\n`
@@ -56,6 +56,9 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
     if (line.startsWith('git rev-parse --verify refs/heads/')) return { exitCode: 0, stdout: (state.heads.shift() ?? state.head) + '\n' }
     if (line.startsWith('git rev-parse --verify refs/remotes/')) return { exitCode: 0, stdout: BASE + '\n' }
     if (line.startsWith('git show')) return { exitCode: 0, stdout: settings }
+    // The job's folder holds work that is not committed until the plugin commits it.
+    if (line.includes(' status --porcelain')) return { exitCode: 0, stdout: state.isDirty ? ' M src/a.ts\0' : '' }
+    if (line.includes(' commit --no-verify')) state.isDirty = false
     if (line.startsWith('git diff --name-only')) return { exitCode: 0, stdout: state.changed }
     if (line.startsWith('git diff --no-renames')) return { exitCode: 0, stdout: 'diff --git a/src/a.ts b/src/a.ts\n+x' }
     if (line.startsWith('git worktree add') && argv.includes('-b')) link(argv[3] ?? '')
@@ -105,6 +108,7 @@ async function ends(w: World, role: Role, line: string, focus = '', file: string
 }
 const jobsOf = async (w: World) => (await readJobs(w.io, '/r')).jobs
 const jobOf = async (w: World, item: string) => (await jobsOf(w)).find(job => job.itemId === item)
+const IN_TREE = (id: string) => `git --git-dir=/r/.git/worktrees/${id} --work-tree=${DIR}/worktrees/${id} -c core.fsmonitor=false -c core.hooksPath=/dev/null`
 const lines = (w: World) => w.io.ran.filter(line => /^(git|gh|npm) /.test(line))
 const inOrder = (all: string[], wanted: string[]) => {
   let at = -1
@@ -136,8 +140,9 @@ test('one item goes from the queue to a ready pull request', async () => {
   expect([(await jobOf(w, '12'))?.stage, (await jobOf(w, '12'))?.reviewers]).toEqual(['spec', ['code']])
   await ends(w, 'spec', 'DONE')
   expect((await jobOf(w, '12'))?.stage).toBe('build')
+  w.state.isDirty = true
   await ends(w, 'builder', 'DONE')
-  // The plugin pushed, opened the draft, ran the fast gate, and started the reviewer.
+  // The plugin committed what the builder left, pushed, opened the draft, ran the fast gate, and started the reviewer.
   expect([(await jobOf(w, '12'))?.stage, (await jobOf(w, '12'))?.pr]).toEqual(['review', { number: 7, url: 'https://github.com/a/b/pull/7' }])
   expect(w.io.files[`${DIR}/jobs/${id}/files/round-1/diff.patch`]).toContain('+x')
   await ends(w, 'reviewer', 'OK', 'code')
@@ -157,6 +162,11 @@ test('one item goes from the queue to a ready pull request', async () => {
       `git worktree add ${DIR}/worktrees/${id} -b factory/${id} refs/remotes/origin/main`,
       'gh issue edit 12 --add-label factory:in-progress',
       'gh issue comment 12',
+      // The builder has no git: the plugin commits what it left, under a fixed message.
+      `${IN_TREE(id)} status --porcelain`,
+      `${IN_TREE(id)} add -A`,
+      `${IN_TREE(id)} diff --cached --raw`,
+      `${IN_TREE(id)} commit --no-verify --no-gpg-sign -m Factory: item 12, round 1`,
       // The fast gate judges the commit first; only then is it pushed and the draft opened.
       `git worktree add --detach ${DIR}/gate/${id} ${SHA1}`,
       'npm test',
@@ -164,7 +174,7 @@ test('one item goes from the queue to a ready pull request', async () => {
       `gh pr create --draft --head factory/${id} --base main --title 12: Item 12`,
       'gh issue comment 12',
       // The base is merged in, the full gate judges that commit, and that commit is pushed and marked ready.
-      `git --git-dir=/r/.git/worktrees/${id} --work-tree=${DIR}/worktrees/${id} -c core.fsmonitor=false -c core.hooksPath=/dev/null merge --no-edit ${BASE}`,
+      `${IN_TREE(id)} merge --no-edit ${BASE}`,
       `git worktree add --detach ${DIR}/gate/${id} ${SHA2}`,
       'npm run build',
       `git push origin ${SHA2}:refs/heads/factory/${id}`,
@@ -419,6 +429,23 @@ test('a push that is refused stops the job after two tries, with the reason', as
   await watch(w.io)
   expect(lines(w).filter(line => line.startsWith('git push')).length).toBe(2)
   expect(lines(w).some(line => line.startsWith('gh pr create'))).toBe(false)
+})
+
+test("work that cannot be committed stops the job in Build after two tries, and the gate does not run", async () => {
+  const w = lineWorld({ jobs: [at('12', ['spec', 'build'])] })
+  w.state.isDirty = true
+  w.state.fail = [`${IN_TREE('12-item-12')} commit`]
+  await begin(w)
+  await advance(w.io, w.spawn)
+  await ends(w, 'builder', 'DONE')
+  expect((await jobOf(w, '12'))?.stage).toBe('build')
+  await advance(w.io, w.spawn)
+  const job = await jobOf(w, '12')
+  expect([job?.stage, job?.question, job?.asker, job?.stoppedIn]).toEqual(['needs-human', 'The line could not go on: the work could not be committed (git: it broke)', 'station', 'build'])
+  expect(lines(w).filter(line => line.includes(' commit --no-verify')).length).toBe(2)
+  expect(lines(w).some(line => line.startsWith('git worktree add --detach') || line.startsWith('git push'))).toBe(false)
+  // No second builder was started for it.
+  expect(w.started.filter(one => one.role === 'builder').length).toBe(1)
 })
 
 test('a branch that changed a protected path is never pushed', async () => {
