@@ -502,6 +502,32 @@ comment; the plugin checks before it sends.
   so. `/factory plan` still works. The PR host's remote build state is shown on a
   ready job and in TASK; it does not move a job (C14).
 
+### 8.3 The container (added 2026-11-12, the owner's decision; see 11, step 2c)
+
+The fence around a shell is a check of text and does not hold (the reviews of phase
+2b). So no code that an agent wrote, and no command that an agent chose, runs on the
+person's machine.
+
+- **The builder has no shell on the person's machine.** Its agent type has no `Bash`.
+  It has one tool of the plugin; the plugin runs each command of it with `docker exec`
+  in the job's container (`docs/notes/r2c-check.md`).
+- **One container for each job**, made when the job starts and removed when it ends.
+  It sees one folder: the job's worktree, mounted at the same path. It does not see
+  the person's home, the repository's git folder, the state folder, or the Docker
+  socket. It runs as the person's user id, with no added rights.
+- **The gate runs in a container too**: its commands are code of the branch. It gets
+  its own container over the gate's clean copy.
+- **The builder does not use git.** The git folder is not in the container. The plugin
+  commits what the builder left in the worktree, with a fixed message, before the gate.
+- **The image, the network and the limits are settings of the base branch**
+  (`factory.container`: `image`, `network` `on` or `none`, `memory`, `cpus`), and the
+  person approves them like a gate command. The plugin fetches no image.
+- **No container, no factory.** `/factory run` refuses when `factory.container` is
+  not set. A person can set `"container": false`: then the builder has `Bash` on the
+  person's machine behind the text fence of 8.1, and must approve exactly that.
+- Network `on` is the default, so that installs work. The container holds the code of
+  the branch and no login, so what can leave through the network is that code.
+
 ## 9. Architecture
 
 ```
