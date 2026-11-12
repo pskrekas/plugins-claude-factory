@@ -102,9 +102,16 @@ export function gateReport(g: {
   // branch, so they are not checked; the report names them, because they are
   // not in the pull request either.
   uncommitted: string[]
+  // The branch changed no file: there is nothing to judge.
+  isEmpty?: boolean
 }): { pass: boolean; why: string | null; markdown: string } {
   const firstFailure = g.runs.map(whyOf).find(why => why !== null) ?? null
-  const blocked = g.protectedHits.length > 0 ? `protected path: ${nameOf(g.protectedHits[0] ?? '')}` : null
+  const blocked =
+    g.protectedHits.length > 0
+      ? `protected path: ${nameOf(g.protectedHits[0] ?? '')}`
+      : g.isEmpty === true
+        ? 'the branch has no change'
+        : null
   const why = blocked ?? firstFailure ?? (g.runs.length === 0 ? 'no command ran' : null)
   const pass = why === null
   const seconds = (ms: number) => `${Math.round(ms / 1000)} s`

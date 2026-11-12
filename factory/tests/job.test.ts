@@ -5,6 +5,9 @@ import {
   STAGES,
   TRANSITIONS,
   addSpend,
+  clearWork,
+  endWork,
+  failStation,
   grant,
   isActive,
   isFinished,
@@ -12,9 +15,12 @@ import {
   jobIdOf,
   move,
   newJob,
+  noteRefusal,
+  noteResult,
   parseJob,
   reject,
   resume,
+  startWork,
   stop,
 } from '../core/job'
 import type { Stage } from '../core/job'
@@ -255,4 +261,87 @@ test('grant adds and never goes below zero', async () => {
   const granted = grant(grant(job(), { rounds: 2, usd: 5 }, 1), { rounds: -5, minutes: 30 }, 2)
   expect(granted.granted).toEqual({ rounds: 0, usd: 5, minutes: 30 })
   expect([granted.updatedAt, granted.stage]).toEqual([2, 'intake'])
+})
+
+const WORK = { agentId: 'a1', role: 'builder' as const, focus: '', startedAt: 5 }
+
+test('the stations a job has in flight', async () => {
+  const one = startWork(walk(['spec', 'build']), WORK, 6)
+  expect([one.work, one.updatedAt]).toEqual([[WORK], 6])
+  const two = startWork(one, { ...WORK, agentId: 'a2', role: 'reviewer', focus: 'code' }, 7)
+  expect(endWork(two, 'a1', 8).work.map(work => work.agentId)).toEqual(['a2'])
+  expect(endWork(two, 'unknown', 8).work.length).toBe(2)
+  expect(clearWork(two, 9).work).toEqual([])
+  // A job has at most eight; the ninth is not added.
+  const full = Array.from({ length: 9 }, (_, i) => i).reduce((j, i) => startWork(j, { ...WORK, agentId: `a${i}` }, 10), job())
+  expect(full.work.length).toBe(8)
+})
+
+test('a station that failed is counted, and every move starts clean', async () => {
+  const failed = failStation(startWork(walk(['spec']), WORK, 1), 2)
+  expect([failed.tries, failed.work.length]).toEqual([1, 1])
+  expect(move(failed, 'build', 'ok', 3)).toEqual(expect.objectContaining({ tries: 0, work: [] }))
+  expect(stop(failed, { question: 'q', asker: 'station' }, 4)).toEqual(expect.objectContaining({ tries: 0, work: [], asker: 'station' }))
+})
+
+test('a refused command is counted, and the same one twice is seen', async () => {
+  const once = noteRefusal(job(), 'git push origin main', 1)
+  expect([once.isRepeat, once.job.refusals, once.job.refused]).toEqual([false, 1, ['git push origin main']])
+  const twice = noteRefusal(once.job, 'git push origin main', 2)
+  expect([twice.isRepeat, twice.job.refusals, twice.job.refused]).toEqual([true, 2, ['git push origin main']])
+  expect(noteRefusal(once.job, 'git  push\torigin main\u001b[2J', 2).isRepeat).toBe(false)
+  // The newest ten are kept, each cut to 200 characters.
+  const many = Array.from({ length: 14 }, (_, i) => `c${i} ${'x'.repeat(300)}`).reduce((j, c) => noteRefusal(j, c, 3).job, job())
+  expect([many.refusals, many.refused.length, many.refused[0]?.startsWith('c4 '), many.refused[9]?.length]).toEqual([14, 10, true, 200])
+})
+
+test('a job file without work, refused and tries reads with the defaults; a bad one is not a job', async () => {
+  const { work, refused, tries, ...old } = job()
+  expect([work, refused, tries]).toEqual([[], [], 0])
+  const read = parseJob(JSON.stringify(old), old.id)
+  expect([read?.work, read?.refused, read?.tries]).toEqual([[], [], 0])
+  const id = job().id
+  const withWork = startWork(noteRefusal(job(), 'x', 1).job, WORK, 2)
+  expect(parseJob(JSON.stringify(withWork), id)).toEqual(withWork)
+  expect(parseJob(JSON.stringify({ ...job(), work: [{ ...WORK, role: 'boss' }] }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), work: [{ ...WORK, agentId: '' }] }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), work: [{ ...WORK, focus: '../x' }] }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), work: Array.from({ length: 9 }, () => WORK) }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), refused: [5] }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), tries: -1 }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), asker: 'fence' }), id)?.asker).toBe('fence')
+})
+
+test('the answers of a station are kept on the job until it moves', async () => {
+  const ok = { role: 'reviewer' as const, focus: 'code', answer: { kind: 'ok' as const }, why: null }
+  const bad = { role: 'reviewer' as const, focus: 'ui', answer: null, why: 'wrote no file' }
+  const two = noteResult(noteResult(walk(['spec', 'build', 'gate', 'review']), ok, 5), bad, 6)
+  expect(two.results).toEqual([ok, bad])
+  expect(parseJob(JSON.stringify(two), two.id)).toEqual(two)
+  // A second answer of the same reviewer replaces the first.
+  expect(noteResult(two, { ...bad, answer: { kind: 'changes' }, why: null }, 7).results.map(r => r.answer?.kind ?? null)).toEqual(['ok', 'changes'])
+  expect(move(two, 'approve', 'ok', 8).results).toEqual([])
+  expect(clearWork(startWork(two, WORK, 8), 9)).toEqual(expect.objectContaining({ work: [], results: [] }))
+  const { results, ...old } = job()
+  expect([results, parseJob(JSON.stringify(old), old.id)?.results]).toEqual([[], []])
+  const id = job().id
+  expect(parseJob(JSON.stringify({ ...job(), results: [{ ...ok, answer: { kind: 'maybe' } }] }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), results: [{ ...ok, role: 'boss' }] }), id)).toBe(null)
+  expect(parseJob(JSON.stringify({ ...job(), results: Array.from({ length: 9 }, () => ok) }), id)).toBe(null)
+  const accept = { role: 'intake' as const, focus: '', answer: { kind: 'accept' as const, risk: 'low' as const, surfaces: ['ui'] }, why: null }
+  expect(parseJob(JSON.stringify(noteResult(job(), accept, 3)), id)?.results).toEqual([accept])
+})
+
+test('a plan job carries what Intake said of its item', async () => {
+  expect(job().plan).toBe(null)
+  const { plan, ...old } = job()
+  expect([plan, parseJob(JSON.stringify(old), old.id)?.plan]).toEqual([null, null])
+  const row = { verdict: 'accept' as const, risk: 'low' as const, note: '' }
+  expect(parseJob(JSON.stringify({ ...job(), plan: row }), job().id)?.plan).toEqual(row)
+  expect(parseJob(JSON.stringify({ ...job(), plan: { ...row, note: 'n'.repeat(900) } }), job().id)?.plan?.note.length).toBe(300)
+  for (const bad of [{ ...row, verdict: 'maybe' }, { ...row, risk: 'tiny' }, { verdict: 'accept' }, 'accept']) {
+    expect(parseJob(JSON.stringify({ ...job(), plan: bad }), job().id)).toBe(null)
+  }
+  // A move keeps it.
+  expect(move({ ...job(), plan: row }, 'rejected', 'plan only', 5).plan).toEqual(row)
 })

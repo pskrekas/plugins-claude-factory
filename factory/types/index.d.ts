@@ -73,6 +73,11 @@ export type JobView = {
   prNumber: number | null
   minutes: number
   costUsd: number | null
+  // The agents at work on the job now: what they are (`builder`, `reviewers`),
+  // how many, and for how long. Null between stations.
+  work: { text: string; count: number; minutes: number } | null
+  // How often the station that runs now failed.
+  tries: number
 }
 
 export type FactoryView = {
@@ -100,6 +105,13 @@ export type FactoryView = {
   // Items the tracker says are in progress that have no job here; at most 10.
   // They count in `waiting` and at the last station.
   claimed: string[]
+  // The rows of the last dry run (`/factory plan`): what Intake said of each item; at most 10.
+  plan: {
+    itemId: string
+    verdict: 'running' | 'accept' | 'needs-info' | 'reject' | 'failed'
+    risk: 'low' | 'medium' | 'high' | null
+    note: string
+  }[]
 }
 
 // none = the repo has no settings file

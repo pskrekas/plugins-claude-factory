@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
+import { agentSpecs, typeOf } from '../core/agents'
 import { briefOf } from '../core/brief'
 import { safePath } from '../core/checks'
 import { rowsOf } from '../core/layout'
@@ -9,24 +10,33 @@ import { emptyModel } from '../core/model'
 import { displayWidth } from '../core/rows'
 import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
+import { ROLES } from '../core/factory-settings'
 import { ancestorsOf, confirmedTop } from '../core/top'
+import { checkedSpawn, isOwnReport, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
 import type { Io } from './io'
 import { answerJob, rejectJob, stopLine } from './commands'
 import { init } from './init'
+import type { Spawn } from './agent-events'
 import { whereText } from './jobs'
+import { advance, watch } from './line'
+import { startPlan, startRun } from './start'
+import { loadSettings } from './readers/settings'
 import { approve, refresh, refreshAgents } from './refresh'
 import { PANE, TITLE } from './state'
 
 // Change the tag when PanelModel's fields change: it declines what an earlier
 // version stored, which outlives a reload.
 const panel = atom({ plugin: 'factory', key: 'panel' } as const, emptyModel(), {
-  shape: 'panel-3',
+  shape: 'panel-5',
 })
 
 const MINIMUM = [2, 1, 322] as const
 const REFRESH_MS = 60_000
+// The timer that keeps the line's lock alive and sees an agent that is gone. It starts no agent.
+const WATCH_MS = 15_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
 const GIT_TOP_MS = 5_000
+const AGENT_TYPES = ROLES.map(typeOf)
 const ONLY_A_PERSON_CAN = 'Only a person can do this. Type the command at the prompt.'
 const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
 
@@ -56,6 +66,8 @@ export const register: Register = (on, options) => {
   // after every reload. See hooks/io.ts for why it exists.
   let io: Io | null = null
   let brief: string | null = null
+  // False when an agent type could not be registered: then the line does not run.
+  let hasAgentTypes = true
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -195,9 +207,20 @@ export const register: Register = (on, options) => {
     }
     const ready = io
 
+    // The agent types of the line. They are the plugin's alone: the model is
+    // not offered them, and a spawn that the line did not make is refused.
+    const { settings } = await loadSettings(ready)
+    hasAgentTypes = true
+    for (const spec of agentSpecs(settings.factory)) {
+      await $.agent.register(spec).catch(() => {
+        hasAgentTypes = false
+        $.ui.log(`factory: the agent type ${spec.name} could not be registered`)
+      })
+    }
+
     await $.command.register({
       name: 'factory',
-      description: 'Open the Factory work panel (close | init | approve | where | stop | answer | reject)',
+      description: 'Open the Factory work panel (close | init | approve | where | plan | run | stop | answer | reject)',
     })
     // One quick read now, so the status line and the session brief have the
     // branch and the progress before the first prompt. It runs no `gh` and no
@@ -210,6 +233,9 @@ export const register: Register = (on, options) => {
     if (options.openOnStart === true) {
       void $.ui.open({ id: PANE, title: TITLE }).then(() => refresh(ready))
     }
+    $.clock.every(WATCH_MS, () => {
+      void watch(ready).catch(() => undefined)
+    })
     // Slow reads run once a minute, and only while the pane is on screen.
     $.clock.every(REFRESH_MS, () => {
       void ready
@@ -233,19 +259,57 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // An agent that starts or ends shows at once: this reads the agent list only.
+  on('agent.offer', async ($, e, next) => (AGENT_TYPES.includes(e.agent) ? { isOffered: false } : next(e)))
+
+  // An agent of the line starts in its job's worktree, and only when the line
+  // itself started it. Any agent that starts or ends shows in the pane at once.
   on('agent.spawn', async ($, e, next) => {
-    const spawned = await next(e)
+    const ours = io === null ? (AGENT_TYPES.includes(e.subagentType) ? { deny: NOT_READY } : null) : await onSpawn(io, e)
+    if (ours !== null && 'deny' in ours) return { deny: ours.deny }
+    if (ours === null) {
+      const other = await next(e)
+      if (io !== null) void refreshAgents(io).catch(() => undefined)
+
+      return other
+    }
+    // From here until the agent's id is known, the fence refuses an agent it does not know.
+    const spawned = await next({ ...e, cwd: ours.cwd }).finally(spawnSettled)
+    if (spawned.agentId !== undefined) rememberAgent(spawned.agentId, ours)
     if (io !== null) void refreshAgents(io).catch(() => undefined)
 
     return spawned
   })
 
+  // The fence. It answers only for an agent of the line and only for the tools
+  // of its role; every other call goes on unchanged.
+  on('tool.check', async ($, e, next) => {
+    const verdict = io === null ? null : await onToolCheck(io, e)
+
+    return verdict === null ? next(e) : verdict
+  })
+
+  // The end of a turn. For an agent of the line it is a fact for the inbox.
+  // Then the jobs are advanced here, in this hook: an agent is fenced only
+  // when a hook that is still running starts it (docs/notes/r2b-check.md).
+  // The end of one of the session's own turns advances the line too, so a
+  // station that was left for a hook is picked up.
   on('turn.complete', async ($, e, next) => {
+    const ready = io
+    if (ready !== null) await onTurn(ready, e).catch(() => false)
     const done = await next(e)
-    if (io !== null && e.agentId !== undefined) void refreshAgents(io).catch(() => undefined)
+    if (ready !== null) {
+      await advance(ready, a => checkedSpawn(ready, input => $.agent.spawn(input), a)).catch(() => undefined)
+      if (e.agentId !== undefined) void refreshAgents(ready).catch(() => undefined)
+    }
 
     return done
+  })
+
+  // The report of an agent of the line is not a prompt for the session's model.
+  on('prompt.submit', async ($, e, next) => {
+    if (io !== null && (await isOwnReport(io, e).catch(() => false))) return { drop: 'factory: an agent of the line finished' }
+
+    return next(e)
   })
 
   on('command.run', { command: 'factory' }, async ($, e) => {
@@ -275,19 +339,25 @@ export const register: Register = (on, options) => {
 
     // The commands that change the line or a job: the person's own act, like approve.
     const [word = '', id = ''] = arg.split(/\s+/)
-    if (word === 'stop' || word === 'answer' || word === 'reject') {
+    if (word === 'stop' || word === 'answer' || word === 'reject' || word === 'run' || word === 'plan') {
       if (e.origin?.kind !== 'composer') return { text: ONLY_A_PERSON_CAN }
+      const ready = io
+      // This hook's own way to start an agent: an agent is fenced only when a
+      // hook that is still running starts it.
+      const spawn: Spawn = a => checkedSpawn(ready, input => $.agent.spawn(input), a)
       const rest = id === '' ? '' : arg.slice(arg.indexOf(id) + id.length).trim()
+      if (word === 'run') return { text: await startRun(ready, spawn, id === '' ? null : id, { hasAgentTypes }) }
+      if (word === 'plan') return { text: await startPlan(ready, spawn, { hasAgentTypes }) }
       if (word === 'stop') return { text: await stopLine(io) }
       if (word === 'answer') {
-        return { text: id === '' ? 'Say which job: /factory answer <id> [text]' : await answerJob(io, id, rest) }
+        return { text: id === '' ? 'Say which job: /factory answer <id> [text]' : await answerJob(io, id, rest, spawn) }
       }
 
       return { text: id === '' ? 'A reason is needed: /factory reject <id> <reason>' : await rejectJob(io, id, rest) }
     }
 
     return {
-      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
+      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory plan, /factory run [id], /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
     }
   })
 

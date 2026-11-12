@@ -549,6 +549,13 @@ Each phase gets its own plan and ends in something a person can use.
 2. **Factory on GitHub.** The job files and state machine, the lock, the agents, the
    gate, the loops, the limits, the FACTORY section with the line, `/factory plan`,
    `run`, `stop`, `answer`, `reject`, the score.
+   - **2c. The builder out of reach** (the owner's decision, 2026-11-12, after the
+     reviews of phase 2b). The fence around the builder's shell is a check of text,
+     and a text check does not hold against a shell. The builder must run where it
+     cannot reach the person's files and logins: a container or a virtual machine.
+     This comes before phase 3. To check first: whether a mod can make an agent's
+     shell calls run inside a container, or whether the whole session must run in
+     one and `/factory run` must check that it does.
 3. **Azure DevOps.** Boards as a tracker, Repos as a PR host.
 4. **Jira, Asana, the `mcp` tracker kind.**
 

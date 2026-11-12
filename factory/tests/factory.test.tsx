@@ -112,6 +112,35 @@ test('the view: who runs the line, the stop flag, and claimed items with no job'
   expect(viewOf([], F, null, null, NOON, { ...line, claimed: [] })).toBe(null)
 })
 
+test('the view: the agents at work on a job, how long, and a second try', async () => {
+  const one = job('12', { itemId: '12', stage: 'build', tries: 1, work: [{ agentId: 'a1', role: 'builder', focus: '', startedAt: NOON - 4 * 60_000 }] })
+  const two = job('13', {
+    itemId: '13',
+    stage: 'review',
+    work: [
+      { agentId: 'a2', role: 'reviewer', focus: 'code', startedAt: NOON - 60_000 },
+      { agentId: 'a3', role: 'reviewer', focus: 'ui', startedAt: NOON - 3 * 60_000 },
+    ],
+  })
+  const view = viewOf([one, two, job('14', { itemId: '14', stage: 'spec' })], F, null, null, NOON)
+  const byItem = (id: string) => view?.jobs.find(row => row.itemId === id)
+  expect([byItem('12')?.work, byItem('12')?.tries]).toEqual([{ text: 'builder', count: 1, minutes: 4 }, 1])
+  expect(byItem('13')?.work).toEqual({ text: 'reviewers', count: 2, minutes: 3 })
+  expect([byItem('14')?.work, byItem('14')?.tries]).toEqual([null, 0])
+})
+
+test('the view: a plan job is a row of the plan, never a job of the line', async () => {
+  const done = { verdict: 'accept' as const, risk: 'low' as const, note: '' }
+  const planned = addSpend(job('4', { itemId: '4', stage: 'rejected', plan: done }), 'intake', 120_000, null, NOON)
+  const running = job('5', { itemId: '5', stage: 'intake', plan: { verdict: 'running', risk: null, note: '' } })
+  const view = viewOf([planned, running, job('12', { itemId: '12', stage: 'build' })], F, null, null, NOON)
+  expect(view?.plan).toEqual([{ itemId: '4', ...done }, { itemId: '5', verdict: 'running', risk: null, note: '' }])
+  expect([view?.jobs.map(one => one.itemId), view?.running, view?.waiting, view?.counts]).toEqual([['12'], 1, 0, [0, 0, 0, 1, 0, 0, 0, 0]])
+  // What the plan's agents spent is in the day's total.
+  expect(view?.today.minutes).toBe(2)
+  expect(viewOf([planned], F, null, null, NOON)?.plan.length).toBe(1)
+})
+
 const CLAIMED = JSON.stringify([
   { number: 4, title: 'Fonts', state: 'OPEN', labels: [{ name: 'factory' }] },
   { number: 31, title: 'Lost', state: 'OPEN', labels: [{ name: 'factory' }, { name: 'factory:in-progress' }] },

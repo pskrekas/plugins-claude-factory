@@ -16,6 +16,7 @@ import type { Reader } from '../refresh'
 const MAX_JOBS = 20
 const MAX_WAITING = 10
 const MAX_CLAIMED = 10
+const MAX_PLAN = 10
 const GH_TIMEOUT_MS = 15_000
 
 // What is known of the line besides its jobs. `claimed` are the ids the
@@ -23,7 +24,20 @@ const GH_TIMEOUT_MS = 15_000
 export type LineInfo = Pick<FactoryView, 'lock' | 'holder' | 'isStopped' | 'claimed'>
 const NOBODY: LineInfo = { lock: 'free', holder: null, isStopped: false, claimed: [] }
 
-const viewOfJob = (job: Job, f: FactorySettings): JobView => ({
+// The agents at work on a job, in a few words.
+function workOf(job: Job, now: number): JobView['work'] {
+  const [first] = job.work
+  if (first === undefined) return null
+  const since = Math.min(...job.work.map(work => work.startedAt))
+
+  return {
+    text: job.work.length === 1 ? first.role : `${first.role}s`,
+    count: job.work.length,
+    minutes: Math.max(0, Math.round((now - since) / 60_000)),
+  }
+}
+
+const viewOfJob = (job: Job, f: FactorySettings, now: number): JobView => ({
   itemId: job.itemId,
   title: job.title,
   stage: job.stage,
@@ -35,6 +49,8 @@ const viewOfJob = (job: Job, f: FactorySettings): JobView => ({
   prNumber: job.pr?.number ?? null,
   minutes: Math.round(job.agentMs / 60_000),
   costUsd: job.costUsd,
+  work: workOf(job, now),
+  tries: job.tries,
 })
 
 // What the pane needs of the jobs: the running ones, then the waiting ones
@@ -48,10 +64,19 @@ export function viewOf(
   now: number,
   line: LineInfo = NOBODY,
 ): FactoryView | null {
+  // A plan job is a row of the plan, never a job of the line. What it spent
+  // is in the day's total with every other job.
+  const everyJob = jobs
+  const plan = [...jobs]
+    .filter(job => job.plan !== null)
+    .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+    .slice(0, MAX_PLAN)
+    .map(job => ({ itemId: job.itemId, verdict: job.plan?.verdict ?? 'failed', risk: job.plan?.risk ?? null, note: job.plan?.note ?? '' }))
+  jobs = jobs.filter(job => job.plan === null)
   // An item that has a job here is that job, whatever the tracker says.
   const here = new Set(jobs.map(job => job.itemId))
   const claimed = line.claimed.filter(id => !here.has(id)).slice(0, MAX_CLAIMED)
-  if (jobs.length === 0 && queue === null && note === null && claimed.length === 0) return null
+  if (everyJob.length === 0 && queue === null && note === null && claimed.length === 0) return null
   const newest = [...jobs].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
   const running = newest.filter(isActive)
   const waiting = newest.filter(isWaiting)
@@ -61,7 +86,7 @@ export function viewOf(
   const showRunning = Math.min(running.length, MAX_JOBS - showWaiting)
 
   return {
-    jobs: [...running.slice(0, showRunning), ...waiting.slice(0, showWaiting)].map(job => viewOfJob(job, f)),
+    jobs: [...running.slice(0, showRunning), ...waiting.slice(0, showWaiting)].map(job => viewOfJob(job, f, now)),
     // The numbers are of all jobs, so the line is right also when some are not shown.
     // A claimed item with no job waits for the person, at the last station.
     counts: countsFor(jobs, queue).map((count, at, all) => (at === all.length - 1 ? count + claimed.length : count)),
@@ -71,12 +96,13 @@ export function viewOf(
     moreWaiting: waiting.length - showWaiting,
     queue,
     slots: f.slots,
-    today: todayOf(jobs, now),
+    today: todayOf(everyJob, now),
     note,
     lock: line.lock,
     holder: line.lock === 'theirs' ? line.holder : null,
     isStopped: line.isStopped,
     claimed,
+    plan,
   }
 }
 

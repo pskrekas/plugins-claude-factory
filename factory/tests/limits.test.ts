@@ -4,6 +4,7 @@ import { FACTORY_DEFAULTS as F } from '../core/factory-settings'
 import { addSpend, newJob } from '../core/job'
 import type { Job, Stage } from '../core/job'
 import { canStart, freeSlots, isSameDay, limitOf, roundsLeft, todayOf } from '../core/limits'
+import { dayLimitOf } from '../core/limits'
 import { routeOf } from '../core/route'
 
 const NOON = new Date(2026, 0, 15, 12).getTime()
@@ -101,4 +102,18 @@ test("today's totals and the score", async () => {
   expect(todayOf(jobs, NOON)).toEqual({ done: 3, minutes: 23, costUsd: 6.7, firstRound: 2, finished: 4 })
   expect(todayOf([spent('1', 5, null, NOON, 'done')], NOON).costUsd).toBe(null)
   expect(todayOf([], NOON)).toEqual({ done: 0, minutes: 0, costUsd: null, firstRound: 0, finished: 0 })
+})
+
+test("the day's limit is of all jobs together, also the ones that ended today", async () => {
+  const noon = new Date(2026, 0, 15, 12).getTime()
+  const priced = (id: string, usd: number) => addSpend(newJob({ id, title: 'x' }, noon), 'intake', 60_000, usd, noon)
+  expect(dayLimitOf([priced('1', 30), priced('2', 25)], F, noon)).toBe('cost limit for the day')
+  expect(dayLimitOf([priced('1', 30), priced('2', 15)], F, noon)).toBe(null)
+  // One job far over its own limit is over the day's too.
+  expect(dayLimitOf([priced('1', 60)], F, noon)).toBe('cost limit for the day')
+  // With no price, the time of the day decides.
+  const timed = (id: string, minutes: number) => addSpend(newJob({ id, title: 'x' }, noon), 'intake', minutes * 60_000, null, noon)
+  expect(dayLimitOf([timed('1', 200), timed('2', 50)], F, noon)).toBe('time limit for the day')
+  expect(dayLimitOf([timed('1', 100)], F, noon)).toBe(null)
+  expect(dayLimitOf([], F, noon)).toBe(null)
 })

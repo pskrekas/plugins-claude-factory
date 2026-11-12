@@ -13,13 +13,15 @@ export type GitCall =
   | { do: 'fetch'; base: string }
   | { do: 'add'; path: string; jobId: string; base: string }
   | { do: 'remove'; path: string }
-  | { do: 'push'; jobId: string }
-  | { do: 'merge-base'; base: string }
-  | { do: 'abort-merge' }
+  | { do: 'push-commit'; jobId: string; sha: string }
+  | { do: 'merge-base'; gitDir: string; workTree: string; baseSha: string }
+  | { do: 'abort-merge'; gitDir: string; workTree: string }
+  | { do: 'diff-text'; from: string; to: string }
+  | { do: 'drop-branch'; jobId: string }
   | { do: 'changed'; from: string; to: string }
   | { do: 'base-head'; base: string }
   | { do: 'show-settings'; sha: string }
-  | { do: 'uncommitted' }
+  | { do: 'uncommitted'; gitDir: string; workTree: string }
   | { do: 'add-clean'; path: string; sha: string }
   | { do: 'head'; jobId: string }
 
@@ -40,6 +42,21 @@ export function gitArgs(call: GitCall): string[] | null {
   if ('jobId' in call && !isJobId(call.jobId)) return null
   if ('path' in call && !isPlainPath(call.path)) return null
   if ('sha' in call && !isCommitId(call.sha)) return null
+  if ('baseSha' in call && !isCommitId(call.baseSha)) return null
+  if ('gitDir' in call && !(isPlainPath(call.gitDir) && isPlainPath(call.workTree))) return null
+  // A call on a job's worktree runs in the repo and names the worktree. Git
+  // then reads its settings from the repo's own git folder, never through the
+  // `.git` file of a folder that an agent can write to; and it starts no
+  // program that a setting names.
+  const inTree = (gitDir: string, workTree: string) => [
+    'git',
+    `--git-dir=${gitDir}`,
+    `--work-tree=${workTree}`,
+    '-c',
+    'core.fsmonitor=false',
+    '-c',
+    'core.hooksPath=/dev/null',
+  ]
   if ('from' in call && !(isCommitId(call.from) && isCommitId(call.to))) return null
 
   switch (call.do) {
@@ -52,14 +69,21 @@ export function gitArgs(call: GitCall): string[] | null {
     case 'remove':
       // The worktree's own flag: the folder of a job that ended goes with what it holds.
       return ['git', 'worktree', 'remove', '--force', call.path]
-    case 'push':
-      // Source and target are both spelled: this can only push the job's branch to itself.
-      return ['git', 'push', '-u', 'origin', `${branchOf(call.jobId)}:${branchOf(call.jobId)}`]
+    case 'push-commit':
+      // One commit, by its id, to the job's own branch, by the ref's full
+      // name: what is pushed is what was read, and it can go nowhere else.
+      return ['git', 'push', 'origin', `${call.sha}:refs/heads/${branchOf(call.jobId)}`]
     case 'merge-base':
-      // Run in the job's worktree: it brings the base into the job's branch.
-      return ['git', 'merge', '--no-edit', `refs/remotes/origin/${call.base}`]
+      // Brings the base's commit into the job's branch, in the job's worktree.
+      return [...inTree(call.gitDir, call.workTree), 'merge', '--no-edit', call.baseSha]
     case 'abort-merge':
-      return ['git', 'merge', '--abort']
+      return [...inTree(call.gitDir, call.workTree), 'merge', '--abort']
+    case 'drop-branch':
+      // The local branch of a job that ended. Only ever a job's own branch.
+      return ['git', 'branch', '-D', branchOf(call.jobId)]
+    case 'diff-text':
+      // No program of the repo's settings is started to show a file.
+      return ['git', 'diff', '--no-renames', '--no-ext-diff', '--no-textconv', `${call.from}...${call.to}`]
     case 'changed':
       // No rename detection: a moved file is listed under both its names, so
       // a protected path that was moved away is still seen.
@@ -74,8 +98,8 @@ export function gitArgs(call: GitCall): string[] | null {
       // A second working tree at one commit, on no branch: what the gate runs in.
       return ['git', 'worktree', 'add', '--detach', call.path, call.sha]
     case 'uncommitted':
-      // Run in the job's worktree: what it holds that its branch does not.
-      return ['git', 'status', '--porcelain', '--no-renames', '--untracked-files=all', '-z']
+      // What the job's worktree holds that its branch does not.
+      return [...inTree(call.gitDir, call.workTree), 'status', '--porcelain', '--no-renames', '--untracked-files=all', '-z']
     case 'head':
       // The tip of the job's own branch, by the ref's full name: the commit a
       // push of that branch sends. Not `HEAD`, which is wherever a folder is.

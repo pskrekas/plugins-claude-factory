@@ -6,6 +6,8 @@ import { CONTROL_CHAR, isInside, isObject, isText } from './rules'
 export type Risk = 'low' | 'medium' | 'high'
 export type Role = 'intake' | 'spec' | 'builder' | 'reviewer' | 'approver'
 export type Tier = 'strongest' | 'strong' | 'fast'
+// US dollars per million tokens of one model.
+export type Price = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
 export type FactorySettings = {
   slots: number
@@ -18,6 +20,10 @@ export type FactorySettings = {
   forbiddenCommands: string[][]
   forbiddenCommentWords: string[]
   models: Record<Role, Tier>
+  // The price table for the cost estimate, by model id. Empty: cost unknown.
+  prices: Record<string, Price>
+  // How long one agent may work at a station before the station counts as failed.
+  stationTimeoutMin: number
   reviewers: { low: string[]; medium: string[]; high: string[]; ui: string[]; security: string[] }
 }
 
@@ -31,16 +37,21 @@ export const FACTORY_DEFAULTS: FactorySettings = {
   protectedPaths: ['.claude/factory.json'],
   forbiddenCommands: [],
   forbiddenCommentWords: [],
+  prices: {},
+  stationTimeoutMin: 30,
   models: { intake: 'strongest', spec: 'strong', builder: 'strong', reviewer: 'strong', approver: 'strong' },
   reviewers: { low: ['code'], medium: ['code'], high: ['code'], ui: ['ux', 'ui'], security: ['security'] },
 }
 
 export const RISKS: readonly Risk[] = ['low', 'medium', 'high']
-const ROLES: readonly Role[] = ['intake', 'spec', 'builder', 'reviewer', 'approver']
+export const ROLES: readonly Role[] = ['intake', 'spec', 'builder', 'reviewer', 'approver']
 const TIERS: readonly string[] = ['strongest', 'strong', 'fast']
 const REVIEWERS: readonly string[] = ['code', 'ux', 'ui', 'security']
 const ROUTES = ['low', 'medium', 'high', 'ui', 'security'] as const
 const MAX_LIST = 50
+const MAX_PRICES = 20
+const MOST_PRICE = 1000
+const PRICE_PARTS = ['input', 'output', 'cacheRead', 'cacheWrite'] as const
 const SETTINGS_FILE = '.claude/factory.json'
 // A limit a person could never reach is no limit: these are the most a
 // settings file may ask for.
@@ -135,6 +146,28 @@ export function parseFactory(v: unknown): { ok: FactorySettings } | Refused {
       commands.push(words)
     }
     f.forbiddenCommands = commands
+  }
+
+  if (v.stationTimeoutMin !== undefined) {
+    if (!isWhole(v.stationTimeoutMin, 5, 240)) return no(WRONG)
+    f.stationTimeoutMin = v.stationTimeoutMin
+  }
+  if (v.prices !== undefined) {
+    if (!isObject(v.prices)) return no(WRONG)
+    const models = Object.keys(v.prices)
+    if (models.length > MAX_PRICES) return no(`at most ${MAX_PRICES} prices`)
+    const prices: Record<string, Price> = {}
+    for (const model of models) {
+      const given = v.prices[model]
+      if (!/^[\x21-\x7e]{1,80}$/.test(model) || !isObject(given)) return no(WRONG)
+      const parts = PRICE_PARTS.map(part => given[part])
+      if (!parts.every(part => typeof part === 'number' && Number.isFinite(part) && part >= 0 && part <= MOST_PRICE)) {
+        return no(WRONG)
+      }
+      const [input = 0, output = 0, cacheRead = 0, cacheWrite = 0] = parts as number[]
+      prices[model] = { input, output, cacheRead, cacheWrite }
+    }
+    f.prices = prices
   }
 
   if (v.models !== undefined) {

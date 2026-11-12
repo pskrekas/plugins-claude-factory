@@ -167,8 +167,13 @@ function stationCells(job: JobView, isShort: boolean): { text: string; tone: Ton
 export function jobRows(job: JobView, columns: number): Row[] {
   const id = clean(job.itemId)
   const sender = job.sentBack ? ` · ${job.sentBack.by} sent it back: ${job.sentBack.why}` : ''
+  // What runs now comes first: it is what a person looks for.
+  const now =
+    job.work === null
+      ? ''
+      : `${job.work.count === 1 ? `${job.work.text} runs` : `${job.work.count} ${job.work.text} run`} · ${job.work.minutes} m · `
   const meta =
-    `${job.round > 1 ? '↺ ' : ''}round ${job.round} of ${job.maxRounds}${sender}` +
+    `${now}${job.tries > 0 ? 'second try · ' : ''}${job.round > 1 ? '↺ ' : ''}round ${job.round} of ${job.maxRounds}${sender}` +
     ` · ${job.minutes} m · ${money(job.costUsd)}`
   const second = plain(meta, '', 'dim', 'plain', columns)
 
@@ -243,6 +248,16 @@ function headRight(view: FactoryView): string {
   return who === '' ? 'stopped' : `${who} · stopped`
 }
 
+// One row of a dry run: what Intake said of an item.
+function planText(row: FactoryView['plan'][number]): string {
+  const id = clean(row.itemId)
+  if (row.verdict === 'accept') return `${id}  accept · risk ${row.risk ?? 'unknown'}${row.note === '' ? '' : ` · ${row.note}`}`
+  if (row.verdict === 'needs-info') return `${id}  asks: ${row.note}`
+  if (row.verdict === 'reject') return `${id}  reject: ${row.note}`
+
+  return row.verdict === 'running' ? `${id}  Intake runs` : `${id}  failed: ${row.note}`
+}
+
 export function factoryRows(view: FactoryView, columns: number): Row[] {
   const { jobs, today } = view
   const isEmpty =
@@ -250,6 +265,7 @@ export function factoryRows(view: FactoryView, columns: number): Row[] {
     view.waiting === 0 &&
     (view.queue ?? 0) === 0 &&
     today.finished === 0 &&
+    view.plan.length === 0 &&
     view.note === null
   if (isEmpty) return []
 
@@ -269,6 +285,14 @@ export function factoryRows(view: FactoryView, columns: number): Row[] {
     rows.push(...waiting.map(job => waitingRow(job, columns)))
     if (view.moreWaiting > 0) rows.push(plain(`+ ${view.moreWaiting} more wait`, '', 'dim', 'plain', columns))
     rows.push(...view.claimed.map(id => claimedRow(clean(id), columns)))
+  }
+  if (view.plan.length > 0) {
+    rows.push(plain('PLAN', '', 'head', 'plain', columns))
+    rows.push(...view.plan.map(row => plain(planText(row), '', row.verdict === 'accept' && row.note === '' ? 'good' : 'plain', 'plain', columns)))
+    if (view.plan.every(row => row.verdict !== 'running')) {
+      const go = view.plan.filter(row => row.verdict === 'accept' && row.note === '').length
+      rows.push(plain(`${plural(go, 'item')} would run now. /factory run starts the line.`, '', 'dim', 'plain', columns))
+    }
   }
   if (view.queue !== null) {
     rows.push(plain(`QUEUE  ${plural(view.queue, 'item')} with the mark`, '', 'dim', 'plain', columns))

@@ -1,15 +1,16 @@
 // The person's commands on the line and on a job: stop, answer, reject.
 // Each takes the lock first, so two sessions never change one job.
 import { closePr, readPrByNumber } from '../adapters/github-pr'
-import { githubIssues, inRepo, listIssues } from '../adapters/github-issues'
-import type { Run, Tracker } from '../adapters/tracker'
+import { listIssues } from '../adapters/github-issues'
 import { failureText } from '../core/comment'
 import type { FactorySettings } from '../core/factory-settings'
 import { grant, isFinished, move, reject, resume } from '../core/job'
 import type { Job } from '../core/job'
 import { limitOf } from '../core/limits'
 import { clean } from '../core/rows'
-import { prHostOf, repoOf } from '../core/task'
+import type { Spawn } from './agent-events'
+import { context } from './context'
+import type { Ctx } from './context'
 import type { Io } from './io'
 import {
   addFeedback,
@@ -22,44 +23,14 @@ import {
   takeLock,
   writeJob,
 } from './jobs'
+import { advance } from './line'
 import { loadSettings } from './readers/settings'
-import { removeWorktree, worktreePath } from './worktrees'
+import { readRun } from './run'
+import { dropBranch, headOf, removeCleanCopy, removeWorktree, worktreePath } from './worktrees'
 
-const GH_TIMEOUT_MS = 30_000
 const MAX_TEXT = 20_000
 const ITEM_ID = /^[A-Za-z0-9#][A-Za-z0-9_.#-]{0,39}$/
 const NO_TRACKER = ' No tracker is set: nothing was written to one.'
-
-type Ctx = {
-  root: string
-  now: number
-  f: FactorySettings
-  run: Run
-  // The tracker and the pull request host are GitHub, or there is none here.
-  tracker: Tracker | null
-  mark: string | null
-}
-
-async function context(io: Io): Promise<Ctx> {
-  const { settings, root } = await loadSettings(io)
-  const remote = await io.remote()
-  // Every gh call names the repository of `origin`. A remote that names none
-  // gives no tracker: nothing is written to a project gh would pick itself.
-  const repo = repoOf(remote)
-  const plain: Run = (argv, stdin) => io.run(argv, { cwd: root, timeoutMs: GH_TIMEOUT_MS, stdin })
-  const run = repo === null ? plain : inRepo(plain, repo)
-  const tracker = settings.tracker
-  const isGitHub = tracker?.kind === 'github' && prHostOf(remote, settings.prHost) === 'github' && repo !== null
-
-  return {
-    root,
-    now: await io.now(),
-    f: settings.factory,
-    run,
-    tracker: isGitHub && tracker ? githubIssues(run, tracker.mark, settings.factory.forbiddenCommentWords) : null,
-    mark: isGitHub && tracker ? tracker.mark : null,
-  }
-}
 
 // Runs `work` with the lock held. The lock is given back after, unless this
 // session held it before (then it is the session that runs the line).
@@ -81,7 +52,7 @@ const none = (itemId: string) => `No job for ${clean(itemId).slice(0, 40)}.`
 
 // The jobs that are still alive, and the one of an item among them.
 async function alive(io: Io, ctx: Ctx, itemId: string): Promise<{ jobs: Job[]; job: Job | null }> {
-  const jobs = (await readJobs(io, ctx.root)).jobs.filter(job => !isFinished(job))
+  const jobs = (await readJobs(io, ctx.root)).jobs.filter(job => !isFinished(job) && job.plan === null)
 
   return { jobs, job: ITEM_ID.test(itemId) ? findJob(jobs, itemId) : null }
 }
@@ -107,10 +78,13 @@ function granted(job: Job, f: FactorySettings, now: number): Job {
   return job
 }
 
-export async function answerJob(io: Io, itemId: string, text: string): Promise<string> {
+// `spawn` is the calling hook's own: when this session runs the line, the
+// job's station starts at once. With no run the answer says how to go on.
+export async function answerJob(io: Io, itemId: string, text: string, spawn?: Spawn): Promise<string> {
   const ctx = await context(io)
+  let isChanged = false
 
-  return locked(io, ctx, async () => {
+  const answered = await locked(io, ctx, async () => {
     const { jobs, job } = await alive(io, ctx, itemId)
     if (job === null) return none(itemId)
     const said = text.trim().slice(0, MAX_TEXT)
@@ -139,12 +113,19 @@ export async function answerJob(io: Io, itemId: string, text: string): Promise<s
       steps.now = 'write the job'
       await writeJob(io, ctx.root, next)
       const done = isAsking ? `${itemId} goes on in ${next.stage}.` : `${itemId} goes back to Build, round ${next.round}.`
+      isChanged = true
 
       return done + (ctx.tracker === null ? NO_TRACKER : '')
     } catch (error) {
       return `${itemId} was not changed: ${steps.now} failed (${why(error)}). Run the command again.`
     }
   })
+  if (!isChanged) return answered
+  const run = await readRun(io, ctx.root)
+  if (spawn === undefined || run === null || run.session !== (await io.sessionId())) return `${answered} Run /factory run to go on.`
+  await advance(io, spawn).catch(() => undefined)
+
+  return answered
 }
 
 type Step = [string, () => Promise<void>]
@@ -223,6 +204,24 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
           if (job.branch === null || path === null || (await io.stat(path)) === null) return
           const removed = await removeWorktree(io, ctx.root, job.id)
           if (!removed.ok) throw new Error(removed.why ?? 'git failed')
+        },
+      ],
+      [
+        "remove the gate's copy",
+        async () => {
+          const copy = await worktreePath(io, ctx.root, job.id)
+          if (copy === null || (await io.stat(copy.replace('/worktrees/', '/gate/'))) === null) return
+          const removed = await removeCleanCopy(io, ctx.root, job.id)
+          if (!removed.ok) throw new Error(removed.why ?? 'git failed')
+        },
+      ],
+      [
+        // So that the item can run again: a new job makes the branch anew.
+        'remove the branch',
+        async () => {
+          if (job.branch === null || (await headOf(io, ctx.root, job.id)) === null) return
+          const dropped = await dropBranch(io, ctx.root, job.id)
+          if (!dropped.ok) throw new Error(dropped.why ?? 'git failed')
         },
       ],
       ['retire the job', async () => retireJob(io, ctx.root, job.id, ctx.now)],
