@@ -152,7 +152,10 @@ export function engine(
   }))
   on('session.cwd', () => ({ value: seen.root }))
   const real = (path: string) => world.links?.[path] ?? path
+  // Folders that `mkdir` made: a folder exists before a file is in it.
+  const made = new Set<string>()
   const isDir = (path: string) =>
+    made.has(path.replace(/\/$/, '')) ||
     Object.keys(seen.files).some(file => file.startsWith(path.replace(/\/$/, '') + '/'))
   on('fs.stat', (_, e) => {
     // Without `resolve`, a link is described as the link itself.
@@ -221,7 +224,11 @@ export function engine(
     // The file commands of the store are acted out on the file map, and not counted as runs.
     const plain = e.argv.filter(arg => arg !== '-p' && arg !== '-f')
     const ok = (isOk: boolean) => ({ value: { exitCode: isOk ? 0 : 1, stdout: '', stderr: '' } as never })
-    if (plain[0] === 'mkdir' && plain[1] !== undefined) return ok(true)
+    if (plain[0] === 'mkdir' && plain[1] !== undefined) {
+      made.add(plain[1])
+
+      return ok(true)
+    }
     if (plain[0] === 'mv' && plain[1] !== undefined && plain[2] !== undefined) {
       const [from, to] = [plain[1], plain[2]]
       const moved = Object.keys(seen.files).filter(file => file === from || file.startsWith(from + '/'))
@@ -231,6 +238,12 @@ export function engine(
       }
 
       return ok(moved.length > 0)
+    }
+    if (plain[0] === 'rm' && plain[1] === '-r' && plain[2] !== undefined) {
+      const gone = plain[2]
+      for (const file of Object.keys(seen.files).filter(name => name.startsWith(gone + '/'))) delete seen.files[file]
+
+      return ok(true)
     }
     seen.cwds.push(e.init?.cwd)
     seen.stdins.push(e.init?.stdin)
