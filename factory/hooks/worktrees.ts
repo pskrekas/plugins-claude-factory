@@ -92,12 +92,17 @@ export async function worktreeGitDir(
   const common = await consentKeyOf(io, root)
   const [there, home] = await Promise.all([io.stat(gitDir), io.stat(`${common}/worktrees`)])
   if (!common.endsWith('/.git') || there === null || home === null || there.kind !== 'dir') return null
-  if (there.realPath.slice(0, there.realPath.lastIndexOf('/')) !== home.realPath) return null
-  const back = await pointer(io, `${gitDir}/gitdir`)
+  // From here on only the real folder is used, and it must be one name under
+  // the repo's `worktrees/`. The text of the `.git` file is never handed to
+  // git: it could be a path through a link that is turned elsewhere later.
+  const real = there.realPath
+  const name = real.slice(home.realPath.length + 1)
+  if (real !== `${home.realPath}/${name}` || name === '' || name.includes('/')) return null
+  const back = await pointer(io, `${real}/gitdir`)
   const [named, own] = await Promise.all([back === null || back === '' ? null : io.stat(back), io.stat(dot)])
   if (named === null || own === null || named.realPath !== own.realPath) return null
 
-  return { gitDir, workTree }
+  return { gitDir: real, workTree }
 }
 
 // Sends one commit to the job's own branch on the remote. Run in the repo.

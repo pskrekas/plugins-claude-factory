@@ -179,6 +179,14 @@ test('no git call runs in the job\'s folder', async () => {
 
 test('a worktree whose link was changed is not used', async () => {
   expect(await worktreeGitDir(fakeIo({ files: LINKED }), '/r', ID)).toEqual({ gitDir: GIT_DIR, workTree: WT })
+  // What is handed to git is the real folder inside the repo's git folder,
+  // never the text of the `.git` file: a path through a link that an agent
+  // can turn elsewhere after the check is not used.
+  const viaLink = fakeIo({
+    files: { ...LINKED, [`${WT}/.git`]: `gitdir: ${WT}/elsewhere\n`, [`${WT}/elsewhere/gitdir`]: `${WT}/.git\n` },
+    reals: { [`${WT}/elsewhere`]: GIT_DIR },
+  })
+  expect(await worktreeGitDir(viaLink, '/r', ID)).toEqual({ gitDir: GIT_DIR, workTree: WT })
   const cases: Parameters<typeof fakeIo>[0][] = [
     // `.git` names another git folder.
     { files: { ...LINKED, [`${WT}/.git`]: 'gitdir: /elsewhere/.git/worktrees/x\n', '/elsewhere/.git/worktrees/x/gitdir': `${WT}/.git\n` } },
@@ -190,6 +198,8 @@ test('a worktree whose link was changed is not used', async () => {
     { files: { ...LINKED, [`${GIT_DIR}/gitdir`]: '/another/place/.git\n' } },
     // No worktree at all.
     { files: { '/r/.git/HEAD': 'x' } },
+    // The folder it names is deeper than one name under worktrees/.
+    { files: { ...LINKED, [`${WT}/.git`]: `gitdir: ${GIT_DIR}/sub\n`, [`${GIT_DIR}/sub/gitdir`]: `${WT}/.git\n` } },
   ]
   for (const world of cases) {
     const io = fakeIo(world)
