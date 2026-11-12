@@ -36,6 +36,7 @@ const WRONG = 'wrong type'
 const BAD_PATTERN = 'not a valid pattern'
 const CONTROL = 'control character in a command'
 const OUTSIDE = 'path must be inside the repo'
+const NOT_BRANCH = 'not a branch name'
 const NOT_PATH = 'a check must name a program on PATH, not a path'
 
 // A key's parser: the value, or a string saying why it is refused.
@@ -57,7 +58,7 @@ function argvProblem(v: unknown): string | null {
 
 const MAX_PATTERN = 100
 const MAX_MARK = 100
-const MAX_OPEN_REPEATS = 2
+const MAX_REPEATS = 3
 
 const LITERAL = /[A-Za-z0-9_\-/#:@ ]/
 const ESCAPABLE = /[dws.\-/\\()[\]+*?{}|^$#:@]/
@@ -90,7 +91,8 @@ function classEnd(source: string, start: number): number {
 // `.`, the escapes \d \w \s and escaped punctuation, simple character classes,
 // `^` first and `$` last, the repeats + * ? {n} {n,m} on one such piece, and one
 // capture group that is not repeated. No alternation, no look-around, no
-// back-reference, no lazy repeat, and at most two repeats with no upper limit.
+// back-reference, no lazy repeat, and at most three repeats in all (`?` and
+// {n,m} count too: a run of optional pieces is as slow as a nested repeat).
 // That is enough to find a ticket id in a branch name, and it cannot be slow on
 // the short text it runs on.
 function isPattern(source: string): boolean {
@@ -102,7 +104,7 @@ function isPattern(source: string): boolean {
   }
   let depth = 0
   let groups = 0
-  let openRepeats = 0
+  let repeats = 0
   let canRepeat = false // the piece before this point may take a repeat
   for (let i = 0; i < source.length; ) {
     const char = source[i] ?? ''
@@ -131,13 +133,13 @@ function isPattern(source: string): boolean {
       canRepeat = false // a group is never repeated
     } else if (char === '+' || char === '*' || char === '?') {
       if (!canRepeat) return false
-      if (char !== '?') openRepeats++
+      repeats++
       i++
       canRepeat = false
     } else if (char === '{') {
       const repeat = /^\{\d{1,3}(,(\d{1,3})?)?\}/.exec(source.slice(i))
       if (!canRepeat || repeat === null) return false
-      if (repeat[1] !== undefined && repeat[2] === undefined) openRepeats++
+      repeats++
       i += repeat[0].length
       canRepeat = false
     } else if (char === '.' || LITERAL.test(char)) {
@@ -148,7 +150,7 @@ function isPattern(source: string): boolean {
     }
   }
 
-  return depth === 0 && openRepeats <= MAX_OPEN_REPEATS
+  return depth === 0 && repeats <= MAX_REPEATS
 }
 
 // A path the plugin reads must stay in the repo: what it finds there is shown
@@ -256,7 +258,13 @@ function gate(v: unknown): Parsed<Settings['gate']> {
   return { ok: { fast: lists[0] ?? [], full: lists[1] ?? [] } }
 }
 
-const text = (v: unknown): Parsed<string> => (isText(v) ? { ok: v } : { no: WRONG })
+// The base branch is handed to `git` as an argument. It must look like a
+// branch name, so it can never be read as an option.
+function branchName(v: unknown): Parsed<string> {
+  if (!isText(v)) return { no: WRONG }
+
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(v) ? { ok: v } : { no: NOT_BRANCH }
+}
 const prHost = (v: unknown): Parsed<Settings['prHost']> =>
   isText(v) && PR_HOSTS.includes(v) ? { ok: v as Settings['prHost'] } : { no: WRONG }
 
@@ -282,7 +290,7 @@ export function parseSettings(source: string | null): { settings: Settings; erro
   take('ticketPattern', ticketPattern)
   take('tracker', tracker)
   take('prHost', prHost)
-  take('baseBranch', text)
+  take('baseBranch', branchName)
   take('progress', progress)
   take('checks', checks)
   take('ports', ports)

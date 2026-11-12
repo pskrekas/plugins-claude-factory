@@ -103,7 +103,7 @@ export function rowsOf(model: PanelModel, columns: number, now: number): Row[] {
     for (const check of model.checks) {
       if (check.state === 'ok') add(check.name, 'ok', 'plain', 'good')
       else if (check.state === 'wrong') add(check.name, check.got ?? 'wrong', 'plain', 'bad')
-      else if (check.state === 'error') add(check.name, 'error', 'plain', 'bad')
+      else if (check.state === 'error') add(check.name, check.got ?? 'error', 'plain', 'bad')
       else add(check.name, '?', 'plain', 'dim')
     }
   }

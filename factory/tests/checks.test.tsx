@@ -117,7 +117,7 @@ test('a check whose command cannot start shows error and the rest still draws', 
   await approved($)
 
   const rows = await paneText($)
-  expect(rows.find(row => /^cloud account\s+error$/.test(row))).toBeDefined()
+  expect(rows.find(row => /^cloud account\s+failed$/.test(row))).toBeDefined()
   expect(rows.find(row => /^disk\s+ok$/.test(row))).toBeDefined()
   expect(rows.find(row => /^database :5432\s+\?$/.test(row))).toBeDefined()
 })
@@ -141,4 +141,19 @@ test('every command runs with the safe PATH', async ($, on) => {
 
   expect(world.paths.length).toBeGreaterThan(3)
   expect(world.paths.every(path => path === '/usr/bin:/opt/tools')).toBe(true)
+})
+
+test('a check whose argument names a file of the repo is not run', async ($, on) => {
+  const world = engine(on, {
+    files: {
+      '/r/.claude/factory.json': '{"checks": [{"name": "script", "run": ["node", "scripts/x.js"]}]}',
+      '/r/scripts/x.js': 'anything',
+    },
+    run: () => ({ exitCode: 0, stdout: '' }),
+  })
+  await approved($)
+
+  const rows = await paneText($, 60)
+  expect(rows.find(row => /^script\s+names a repo file$/.test(row))).toBeDefined()
+  expect(world.ran).not.toContain('node scripts/x.js')
 })

@@ -25,7 +25,8 @@ export type Io = {
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<void>
   getModel: () => Promise<PanelModel>
-  setModel: (model: PanelModel) => Promise<void>
+  // Applies `change` to the stored model in one step and answers the result.
+  updateModel: (change: (model: PanelModel) => PanelModel) => Promise<PanelModel>
   status: (text: string | undefined) => void
   toast: (text: string) => void
   sound: () => void

@@ -83,6 +83,7 @@ export function engine(
     writes: [] as string[],
     reads: [] as string[],
     paths: [] as (string | undefined)[],
+    agents: (world.agents ?? []) as unknown[],
     isOpen: false,
     root: '/r',
     clock: mock.clock(on, { now: world.now ?? 0 }),
@@ -119,7 +120,9 @@ export function engine(
 
     return { value: undefined }
   })
-  on('agent.list', () => ({ value: (world.agents ?? []) as never }))
+  on('agent.list', () => ({ value: seen.agents as never }))
+  on('agent.spawn', () => ({ model: 'm', agentId: 'a1' }) as never)
+  on('turn.complete', () => ({}) as never)
   on('session.repo', () => ({ value: { root: seen.root, remote: world.remote ?? null } as never }))
   on('session.cwd', () => ({ value: seen.root }))
   const real = (path: string) => world.links?.[path] ?? path

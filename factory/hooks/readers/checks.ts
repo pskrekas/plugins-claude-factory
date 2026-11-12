@@ -9,8 +9,24 @@ import type { Reader } from '../refresh'
 const CHECK_TIMEOUT_MS = 10_000
 const PORT_TIMEOUT_MS = 3_000
 
+// True when an argument of the command names something in the repo. A check
+// runs by itself each minute; one that hands a repo file to a program (a
+// script to an interpreter) would run whatever that file holds at the time,
+// which nobody approved. The command line was approved, not the file.
+async function namesRepoFile(io: Io, root: string, argv: string[]): Promise<boolean> {
+  const found = await Promise.all(
+    argv.slice(1).map(arg => (arg.startsWith('-') ? null : io.stat(`${root}/${arg}`))),
+  )
+
+  return found.some(entry => entry !== null)
+}
+
 async function runCheck(io: Io, root: string, spec: CheckSpec): Promise<CheckState> {
   if (spec.run) {
+    if (await namesRepoFile(io, root, spec.run)) {
+      return { name: spec.name, state: 'error', got: 'names a repo file' }
+    }
+
     return judgeCheck(spec, await io.run(spec.run, { cwd: root, timeoutMs: CHECK_TIMEOUT_MS }))
   }
   const df = await io.run(['df', '-Pk', root], { timeoutMs: CHECK_TIMEOUT_MS })

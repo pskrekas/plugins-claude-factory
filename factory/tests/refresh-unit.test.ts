@@ -20,8 +20,10 @@ function fakeIo(): Io & { model: PanelModel } {
     storeGet: async () => undefined,
     storeSet: async () => undefined,
     getModel: async () => io.model,
-    setModel: async (model: PanelModel) => {
-      io.model = model
+    updateModel: async (change: (model: PanelModel) => PanelModel) => {
+      io.model = change(io.model)
+
+      return io.model
     },
     status: () => undefined,
     toast: () => undefined,

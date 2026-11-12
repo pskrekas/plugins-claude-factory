@@ -2,12 +2,14 @@
 import { storeKey, approvedOf } from '../core/consent'
 import { statusText } from '../core/layout'
 import type { Consent, PanelModel } from '../core/model'
+import { agentRows } from '../core/work'
 import type { Settings } from '../core/settings'
 import type { Io } from './io'
 import { checksReader } from './readers/checks'
 import { progressReader } from './readers/progress'
 import { loadSettings } from './readers/settings'
 import { taskReader } from './readers/task'
+import { workReader } from './readers/work'
 import type { Loaded } from './readers/settings'
 
 export type Ctx = { root: string; settings: Settings; consent: Consent; now: number }
@@ -19,7 +21,7 @@ export type Reader = {
   read: (io: Io, ctx: Ctx, prev: PanelModel) => Promise<Partial<PanelModel>>
 }
 
-export const readers: Reader[] = [taskReader, progressReader, checksReader]
+export const readers: Reader[] = [taskReader, progressReader, checksReader, workReader]
 
 export async function refresh(io: Io, given?: Loaded): Promise<PanelModel> {
   const loaded = given ?? (await loadSettings(io))
@@ -28,28 +30,35 @@ export async function refresh(io: Io, given?: Loaded): Promise<PanelModel> {
   const ctx: Ctx = { root: loaded.root, settings: loaded.settings, consent: loaded.consent, now }
   const results = await Promise.allSettled(readers.map(reader => reader.read(io, ctx, prev)))
 
-  const isApproved = loaded.consent === 'approved'
-  const model: PanelModel = {
-    ...prev,
+  const notes: string[] = []
+  const patch: Partial<PanelModel> = {
     root: loaded.root,
     consent: loaded.consent,
     pendingCommands: loaded.consent === 'needed' ? loaded.commands : [],
     settingsError: loaded.error,
-    // What an unapproved settings file asked for is not kept on screen.
-    checks: isApproved ? prev.checks : [],
-    ports: isApproved ? prev.ports : [],
-    notes: [],
+    notes,
     readAt: now,
   }
+  // What an unapproved settings file asked for is not kept on screen.
+  if (loaded.consent !== 'approved') Object.assign(patch, { checks: [], ports: [] })
   results.forEach((result, i) => {
-    if (result.status === 'fulfilled') Object.assign(model, result.value)
-    else model.notes.push(`${readers[i]?.name ?? 'reader'}: failed`)
+    if (result.status === 'fulfilled') Object.assign(patch, result.value)
+    else notes.push(`${readers[i]?.name ?? 'reader'}: failed`)
   })
 
-  await io.setModel(model)
+  // The patch is applied to the model as it is now, not as it was read above:
+  // an agent that started meanwhile is not lost.
+  const model = await io.updateModel(current => ({ ...current, ...patch }))
   io.status(statusText(model))
 
   return model
+}
+
+// The agents alone: a cheap read, done when an agent starts or ends.
+export async function refreshAgents(io: Io): Promise<void> {
+  if (!(await io.isPaneOpen())) return
+  const [agents, now] = await Promise.all([io.agents(), io.now()])
+  await io.updateModel(model => ({ ...model, agents: agentRows(agents, model.agents, now) }))
 }
 
 const count = (lines: string[]) => `${lines.length} command${lines.length === 1 ? '' : 's'}`

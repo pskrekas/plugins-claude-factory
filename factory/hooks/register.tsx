@@ -7,7 +7,7 @@ import type { Tone } from '../core/layout'
 import { emptyModel } from '../core/model'
 import { failureOf } from '../core/run'
 import type { Io } from './io'
-import { approve, refresh } from './refresh'
+import { approve, refresh, refreshAgents } from './refresh'
 import { PANE, TITLE } from './state'
 
 // Change the tag when PanelModel's fields change: it declines what an earlier
@@ -103,8 +103,15 @@ export const register: Register = (on, options) => {
       storeGet: key => $.store.get(key).catch(() => undefined),
       storeSet: (key, value) => $.store.set(key, value),
       getModel: () => read($, panel),
-      setModel: async model => {
-        await update($, panel, () => model)
+      updateModel: async change => {
+        let result = emptyModel()
+        await update($, panel, model => {
+          result = change(model)
+
+          return result
+        })
+
+        return result
       },
       status: text => $.ui.status(text),
       toast: text => $.ui.toast(text),
@@ -136,6 +143,21 @@ export const register: Register = (on, options) => {
     })
 
     return started
+  })
+
+  // An agent that starts or ends shows at once: this reads the agent list only.
+  on('agent.spawn', async ($, e, next) => {
+    const spawned = await next(e)
+    if (io !== null) void refreshAgents(io).catch(() => undefined)
+
+    return spawned
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const done = await next(e)
+    if (io !== null && e.agentId !== undefined) void refreshAgents(io).catch(() => undefined)
+
+    return done
   })
 
   on('command.run', { command: 'factory' }, async ($, e) => {

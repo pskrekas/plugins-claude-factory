@@ -51,7 +51,11 @@ test('a ticket pattern that is not valid, or that can run for a very long time, 
   expect(parseSettings(JSON.stringify({ ticketPattern: 'a'.repeat(101) }))).toEqual(refused)
   // Only a small subset is accepted: no alternation, no look-around, no lazy
   // repeat, and at most two repeats with no upper limit.
-  for (const pattern of ['a|b', '(?=a)b', '(?:a)b', 'a+?', '((a))', 'a**', '\\d*\\d*\\d*x', 'a{2,}b+c*', '\\p{L}+', '[[a]]']) {
+  // Every repeat counts, also `?` and {n,m}: at most three in a pattern.
+  for (const pattern of ['a?a?a?a?aaaa', 'a{1,5}b{1,5}c{1,5}d{1,5}', 'a+b*c?d{2}']) {
+    expect(parseSettings(JSON.stringify({ ticketPattern: pattern }))).toEqual(refused)
+  }
+  for (const pattern of ['a|b', '(?=a)b', '(?:a)b', 'a+?', '((a))', 'a**', '\\d*\\d*\\d*\\d*x', '\\p{L}+', '[[a]]']) {
     expect(parseSettings(JSON.stringify({ ticketPattern: pattern }))).toEqual(refused)
   }
   for (const pattern of ['PROJ-\\d+', '^([A-Z]+-\\d+)', 'issue-(\\d{1,6})$', 'feat/[a-z0-9_.]+-\\d+', 'a.c']) {
@@ -137,4 +141,14 @@ test('a check must name a program on PATH, never a path', async () => {
     expect(error).toBe('checks: a check must name a program on PATH, not a path')
   }
   expect(parseSettings('{"checks": [{"name": "a", "run": ["git", "status"]}]}').error).toBe(null)
+})
+
+test('a base branch that could be read as an option is refused', async () => {
+  for (const baseBranch of ['-D', '--exec=x', 'a b', 'x'.repeat(101), 'a\\b']) {
+    expect(parseSettings(JSON.stringify({ baseBranch }))).toEqual({
+      settings: DEFAULTS,
+      error: 'baseBranch: not a branch name',
+    })
+  }
+  expect(parseSettings('{"baseBranch": "release/1.2_x"}').settings.baseBranch).toBe('release/1.2_x')
 })
