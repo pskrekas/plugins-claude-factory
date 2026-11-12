@@ -17,8 +17,9 @@ test('a GitHub repo with npm scripts', async () => {
   expect(error).toBe(null)
   expect(settings.tracker).toEqual({ kind: 'github', mark: 'factory', project: null })
   expect(settings.gate).toEqual({
-    fast: [['npm', 'run', 'lint'], ['npm', 'test']],
-    full: [['npm', 'run', 'lint'], ['npm', 'test'], ['npm', 'run', 'build']],
+    // The gate runs in a clean copy of the commit, so the install comes first.
+    fast: [['npm', 'install'], ['npm', 'run', 'lint'], ['npm', 'test']],
+    full: [['npm', 'install'], ['npm', 'run', 'lint'], ['npm', 'test'], ['npm', 'run', 'build']],
   })
   expect(settings.checks).toEqual([{ name: 'disk', minFreeGb: 10 }])
   expect(settings.progress?.files).toBe('docs/plans/*/progress.md')
@@ -67,7 +68,7 @@ test('/factory init writes a first settings file, which then waits for approval'
   const { settings, error } = parseSettings(world.files['/r/.claude/factory.json'] ?? null)
   expect(error).toBe(null)
   expect(settings.baseBranch).toBe('develop')
-  expect(settings.gate.fast).toEqual([['npm', 'test']])
+  expect(settings.gate.fast).toEqual([['npm', 'install'], ['npm', 'test']])
   expect(world.ran).not.toContain('npm test')
 })
 

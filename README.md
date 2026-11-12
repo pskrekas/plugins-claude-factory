@@ -4,7 +4,7 @@
 
 The panel answers four questions without a prompt: what is my task, how far is each build, what waits for me, and is my environment correct. It knows no project: a repo tells it what to show through one settings file, `.claude/factory.json`.
 
-This is an early version. It has the panel only. The factory line (a marked tracker item goes through Intake, Spec, Build, Gate, Review and Approve, and comes out as a ready pull request that a person merges) is the next phase. The design is in [`docs/superpowers/specs`](docs/superpowers/specs).
+This is an early version. It has the panel, and the parts of the factory line that code and a person do: jobs, the gate, the writes to GitHub, and the commands to stop the line, answer a job and reject a job. The agents that do the work at each station (a marked tracker item goes through Intake, Spec, Build, Gate, Review and Approve, and comes out as a ready pull request that a person merges) are the next phase. The design is in [`docs/superpowers/specs`](docs/superpowers/specs).
 
 ## Install
 
@@ -50,6 +50,11 @@ The status line shows the task id, the first progress percent, the checks and a 
 | `/factory init` | looks at the repo and writes a first `.claude/factory.json`; it never overwrites one |
 | `/factory where` | says where the factory keeps its state for this repository |
 | `/factory approve` | opens the pane and allows the commands it shows (see below). Only your own Enter at the prompt counts |
+| `/factory stop` | the line starts no new station. Agents that run finish theirs |
+| `/factory answer <id> [text]` | lets a job that waits for you go on. The text is given to the next agent. For a job that a limit stopped, it grants that limit once more (one round, or the job's cost or time limit again). For a ready job, text sends it back to Build |
+| `/factory reject <id> <reason>` | drops a job: a comment with the reason on the item, the pull request closed, the item closed as not planned, the worktree removed |
+
+`stop`, `answer` and `reject` change things, so only your own Enter at the prompt counts for them too. Two sessions never change one job: a command first takes the lock, and says so when another session holds it.
 
 While the pane is on screen it reads again once a minute.
 
@@ -59,7 +64,7 @@ It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
 
 ## The factory line (not running yet)
 
-The next version runs the line: a tracker item with a mark goes through Intake, Spec, Build, Gate, Review and Approve, and comes out as a ready pull request that a person merges. This version already knows what a job is and draws it.
+The next version runs the line: a tracker item with a mark goes through Intake, Spec, Build, Gate, Review and Approve, and comes out as a ready pull request that a person merges. This version knows what a job is, draws it, and has the hands of the line: the code that writes to GitHub, makes worktrees and runs the gate. No agent runs yet, so nothing starts a job by itself.
 
 The **FACTORY** section of the pane shows:
 
@@ -73,8 +78,10 @@ The **FACTORY** section of the pane shows:
 
 - the stations, with the number of jobs at each one, and the two loops back to Build (lit while a job is on them);
 - one row per running job: a cell for each station (`done`, `now`, `fail`, `changes`), then its round, who sent it back, its time and its cost;
-- **NEEDS YOU**: the jobs that wait for a person (a question, or a pull request to merge);
+- **NEEDS YOU**: the jobs that wait for a person (a question, or a pull request to merge), and the items the tracker says are in progress that have no job on this machine (a lost state folder, or another machine runs them);
 - the size of the queue (open GitHub issues that carry the mark) and the totals of the day.
+
+The first row says who runs the line: `2 of 2 slots busy` (this session), `another session runs the line`, or `no session runs the line`; and `stopped` after `/factory stop`.
 
 A job is a file, `job.json`, in a folder of its own. The plugin keeps these under your home folder, never in the repo: `~/.local/state/claude-factory/<repo>/jobs/` (or under `$XDG_STATE_HOME`). `/factory where` prints the folder for the repo you are in. The folder is named after the path of the repository, so a repo that you move to another place starts with no jobs. A `.factory/` folder that a repo brings along is never read, so a repo cannot show you jobs of its own.
 
@@ -85,6 +92,29 @@ mkdir -p "<the folder /factory where printed>/jobs"
 cp -R docs/examples/factory-jobs/* "<the folder /factory where printed>/jobs/"
 ```
 
+### The gate
+
+The gate is the set of commands a job's branch must pass. Code runs it, no agent. `gate.fast` runs on every round; `gate.full` runs once, before a job becomes ready.
+
+- **The commands come from the base branch.** They are read from `.claude/factory.json` as it is on `origin/<baseBranch>`, never from the job's branch, so a job cannot change the checks it is judged by.
+- **You approve them.** The pane lists them as `[gate] npm test`, and `/factory approve` allows them. An approval as a gate command does not make the command a check of the panel, and the other way round.
+- **It runs in a clean copy.** The gate reads the last commit of the job's branch `factory/<job>`, and runs the commands in a fresh working tree at that commit (`gate/<job>` in the state folder), which it removes after. A file that is not committed, a file git ignores, or a file git was told to overlook is not there. The copy holds no installed packages, so **the first command of each list must install them** (`["npm", "install"]`). `/factory init` writes it so for an npm repo.
+- **Files that are not committed stop it.** If the job's worktree holds changed or new files that are not committed, the gate runs nothing and says how many: they would not be in the pull request.
+- **Protected paths stop it.** A branch that changes, moves or deletes a protected path (`factory.protectedPaths`; the settings file is always one) runs no command and waits for you.
+- **A command has ten minutes.** One that runs longer is a failure. The first command that fails ends the run.
+- **The report** is a file of the job, `round-<n>/checks.md` (or `merge-checks.md` for the full gate): a short summary, the end of each command's output, and the test files and test or build settings the branch changed, for the reviewers and for you.
+
+### What it writes on GitHub
+
+Only for a repo whose settings say `"tracker": { "kind": "github" }` and whose remote is GitHub.
+
+- **Labels.** It makes two labels, `<mark>:in-progress` and `<mark>:needs-human`, and sets or removes them on an item. The mark itself (`factory` by default) is yours: only you put it on an item.
+- **Comments.** On the item and on the pull request. The text goes to `gh` on standard input, never as an argument. A comment that holds one of `factory.forbiddenCommentWords` is not sent.
+- **Pull requests.** It opens a draft pull request from the job's branch `factory/<job>`, marks it ready, comments on it, or closes it. **It never merges one.** A rejected item is closed as not planned.
+- **Branches.** It pushes only a job's own branch to itself. It never forces a push, never pushes to the base branch, and never rewrites history.
+
+A job's worktree is in the state folder (`worktrees/<job>`), not in the repo.
+
 ## Settings
 
 One file per repo, `.claude/factory.json`. Every key is optional. With no file the panel shows the branch, its pull request, the agents and the worktrees.
@@ -94,6 +124,10 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
   "ticketPattern": "PROJ-\\d+",
   "tracker": { "kind": "github" },
   "baseBranch": "main",
+  "gate": {
+    "fast": [["npm", "install"], ["npm", "run", "lint"], ["npm", "test"]],
+    "full": [["npm", "install"], ["npm", "test"], ["npm", "run", "build"]]
+  },
   "progress": { "files": "docs/plans/*/progress.md" },
   "checks": [
     { "name": "cloud account", "run": ["cloud", "config", "get", "account"], "want": "me@example.com" },
@@ -110,6 +144,7 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 | `tracker` | `{ "kind": "github" }` reads the item with `gh`. Other trackers come in later versions. |
 | `prHost` | `auto` (the default) reads the git remote; `github` forces it. Azure DevOps Repos comes later. |
 | `baseBranch` | the branch worktrees are compared with, `main` by default. |
+| `gate` | `fast` and `full`: lists of commands, each a list of words. See "The gate". The factory will not run with an empty `fast`. |
 | `progress` | `files`: a path with `*` in a segment. A file's percent is its done lines over its done and open lines. `done`, `open` and `blocked` are plain text marks (`- [x]`, `- [ ]`, `BLOCKED` by default). A later line with `UNBLOCKED` or `RESUMED` clears a block. |
 | `checks` | `run` with `want`: ok when the output equals `want`. `run` alone: ok on exit 0. `minFreeGb`: ok when the disk has that much free. At most 20. |
 | `ports` | a name and a port on this machine. At most 20. |
@@ -120,7 +155,7 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 
 The panel reads. It changes nothing but its own state and, when you ask, `.claude/factory.json`.
 
-- **It runs** `git` and `gh` (to read the branch, the worktrees, the issue, the pull request), `df` for a disk check and `nc` for the ports a settings file names, and, only after your approval, the commands (`run`) a settings file names.
+- **It runs** `git` and `gh` (the full list is below), `df` for a disk check and `nc` for the ports a settings file names, `mkdir`, `mv` and `rm` on its own state folder, and, only after your approval, the commands a settings file names (the checks, and the gate's commands).
 - **It stores no password and no token.** `gh` uses your own login.
 - **It runs no command from a settings file until you approve it.** A settings file arrives with a clone, so the panel first shows `SETTINGS NOT APPROVED`, the number of commands and every command in full. `/factory approve` allows exactly the lines the pane showed while it was on screen, for that repo; a file the pane has not shown yet is shown first, and a second `/factory approve` allows it. Only your own Enter at the prompt can approve. The approved lines are kept outside the repo, for the repo and all its worktrees; a line that changes asks again.
 - **What an approval covers.** It covers the command line you read, not the code that command runs. A check must name a program on your `PATH` (never a file of the repo), runs with a `PATH` that leaves the repo out, and is not run when one of its arguments names a file of the repo. These are guards against the plain cases, not a boundary: a command that runs repo code by its nature (an inline script, a build tool) runs what the repo holds at that time. Approve a check as you would approve the same command in a shell.
@@ -129,6 +164,52 @@ The panel reads. It changes nothing but its own state and, when you ask, `.claud
 - **It reads only files inside the repo.** A progress file, the owed file or the settings file that is a link to somewhere else is not read. `/factory init` does not write through a link.
 - **What the model is told.** The session brief holds facts the plugin worked out (a ticket id, a branch, a percent, a count). It leaves out text other people wrote: an issue's title, a progress file's name, the reason in a blocked line. The answer of `/factory approve` holds a count, never the command lines.
 - Text from files, the tracker and commands is shown with control characters removed.
+
+### Every `git` and `gh` call
+
+The panel only reads:
+
+```
+git rev-parse --show-toplevel
+git rev-parse --abbrev-ref HEAD
+git worktree list --porcelain
+git branch --merged <base> --format=%(refname:short)
+git symbolic-ref --short refs/remotes/origin/HEAD        (/factory init)
+gh issue view <n> --json …
+gh issue list --label <mark> --state open --limit 100 --json …
+gh pr view --json …
+```
+
+The line can also make these calls, and no other. `<job>` is a job's id, `<state>` the state folder, `<commit>` a full commit id.
+
+```
+git fetch origin <base>
+git worktree add <state>/worktrees/<job> -b factory/<job> origin/<base>
+git worktree add --detach <state>/gate/<job> <commit>
+git worktree remove --force <state>/worktrees/<job>      (or <state>/gate/<job>)
+git push -u origin factory/<job>:factory/<job>
+git merge --no-edit origin/<base>                        (in the job's worktree)
+git merge --abort
+git show origin/<base>:.claude/factory.json
+git rev-parse --verify refs/heads/factory/<job>^{commit}
+git diff --name-only --no-renames -z origin/<base>...<commit>
+git status --porcelain --no-renames --untracked-files=all -z
+
+gh label create <mark>:in-progress --force --description …
+gh label create <mark>:needs-human --force --description …
+gh issue comment <n> --body-file -
+gh issue edit <n> --add-label … --remove-label …
+gh issue close <n> --reason "not planned"
+gh pr create --draft --head factory/<job> --base <base> --title … --body-file -
+gh pr view <n> --json …
+gh pr ready <n>
+gh pr comment <n> --body-file -
+gh pr close <n>
+```
+
+In this version only `/factory answer` and `/factory reject` make calls of the second list (the label, comment and close calls, and the removal of a worktree). The others wait for the line.
+
+`git` runs the repository's own git settings and hooks, as it does when you type the command.
 
 `claude plugin validate factory` prints exactly what it hooks and calls.
 
@@ -139,6 +220,14 @@ The panel reads. It changes nothing but its own state and, when you ask, `.claud
 **`gh could not start` or `gh is not logged in`.** Install the GitHub CLI, then run `gh auth login`.
 
 **`SETTINGS NOT APPROVED`.** Read the commands in the pane, then run `/factory approve`. If the pane had not shown them yet, or the file changed since, the pane shows them now; read them and run the command again.
+
+**`Another session runs the line (…). Nothing was changed.`** Another Claude Code session in this repository holds the lock; the text names its folder. Run the command there, or close that session and wait five minutes.
+
+**`No job for <id>.`** There is no job of that item on this machine, and the tracker does not say it is in progress.
+
+**The gate says `files not committed`.** The job's worktree holds files that are not in a commit. Commit them or remove them.
+
+**The gate fails at once with `not found`.** The gate runs in a clean copy with no installed packages. Put the install command first in `gate.fast` and `gate.full`.
 
 **A check shows `names a repo file`.** A check cannot hand a file of the repo to a program.
 
@@ -157,7 +246,7 @@ All behaviour is in `factory/core/` as pure functions with tests. `factory/hooks
 
 ## Next
 
-The factory line: jobs, stations, loops and limits, on GitHub Issues first, then Azure DevOps, Jira and Asana.
+The agents of the line and the loop that moves a job from station to station (`/factory plan`, `/factory run`), on GitHub Issues first, then Azure DevOps, Jira and Asana.
 
 ## License
 
