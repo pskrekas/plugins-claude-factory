@@ -34,6 +34,7 @@ const TRACKERS: readonly string[] = ['github', 'azure-boards', 'jira', 'asana', 
 const PR_HOSTS: readonly string[] = ['auto', 'github', 'azure-repos']
 const WRONG = 'wrong type'
 const BAD_PATTERN = 'not a valid pattern'
+const CONTROL = 'control character in a command'
 
 // A key's parser: the value, or a string saying why it is refused.
 type Parsed<T> = { ok: T } | { no: string }
@@ -41,8 +42,16 @@ type Parsed<T> = { ok: T } | { no: string }
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 const isText = (v: unknown): v is string => typeof v === 'string' && v !== ''
-const isArgv = (v: unknown): v is string[] => Array.isArray(v) && v.length > 0 && v.every(isText)
-const isArgvList = (v: unknown): v is string[][] => Array.isArray(v) && v.every(isArgv)
+
+const CONTROL_CHAR = /[\u0000-\u001f\u007f-\u009f]/
+
+// Why `v` is refused as a command (an argv), or null when it is one.
+function argvProblem(v: unknown): string | null {
+  if (!Array.isArray(v) || v.length === 0 || !v.every(isText)) return WRONG
+  // A command is shown to the person for approval: one that can move the
+  // cursor or clear the screen is not accepted at all.
+  return v.some(arg => CONTROL_CHAR.test(arg)) ? CONTROL : null
+}
 
 function isPattern(source: string): boolean {
   try {
@@ -91,8 +100,9 @@ function checks(v: unknown): Parsed<CheckSpec[]> {
     if (!isObject(item) || !isText(item.name)) return { no: WRONG }
     const spec: CheckSpec = { name: item.name }
     if (item.run !== undefined) {
-      if (!isArgv(item.run)) return { no: WRONG }
-      spec.run = item.run
+      const problem = argvProblem(item.run)
+      if (problem) return { no: problem }
+      spec.run = item.run as string[]
     }
     if (item.want !== undefined) {
       if (typeof item.want !== 'string') return { no: WRONG }
@@ -124,11 +134,17 @@ function ports(v: unknown): Parsed<Settings['ports']> {
 
 function gate(v: unknown): Parsed<Settings['gate']> {
   if (!isObject(v)) return { no: WRONG }
-  const fast = v.fast ?? []
-  const full = v.full ?? []
-  if (!isArgvList(fast) || !isArgvList(full)) return { no: WRONG }
+  const lists: string[][][] = []
+  for (const list of [v.fast ?? [], v.full ?? []]) {
+    if (!Array.isArray(list)) return { no: WRONG }
+    for (const argv of list) {
+      const problem = argvProblem(argv)
+      if (problem) return { no: problem }
+    }
+    lists.push(list as string[][])
+  }
 
-  return { ok: { fast, full } }
+  return { ok: { fast: lists[0] ?? [], full: lists[1] ?? [] } }
 }
 
 const text = (v: unknown): Parsed<string> => (isText(v) ? { ok: v } : { no: WRONG })
@@ -169,11 +185,20 @@ export function parseSettings(source: string | null): { settings: Settings; erro
 
 const PLAIN_ARG = /^[A-Za-z0-9_./:=@%+,-]+$/
 
+// An argument as a JSON string in printable ASCII only: every other character
+// (a right-to-left mark, a zero-width space, an accent) is a visible \uXXXX.
+function quoted(arg: string): string {
+  return JSON.stringify(arg).replace(
+    /[^\x20-\x7e]/g,
+    char => '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0'),
+  )
+}
+
 // One command as one line a person can read and approve. An argument that is
-// not plain (a space, a quote, a control character) is shown as a JSON string,
-// so two different commands never give the same line and nothing is hidden.
+// not plain is shown quoted, so two different commands never give the same
+// line, the line is printable ASCII, and nothing in it is hidden.
 export function lineOf(argv: string[]): string {
-  return argv.map(arg => (PLAIN_ARG.test(arg) ? arg : JSON.stringify(arg))).join(' ')
+  return argv.map(arg => (PLAIN_ARG.test(arg) ? arg : quoted(arg))).join(' ')
 }
 
 // Every command the settings file can make the plugin run, one line each.
@@ -183,15 +208,4 @@ export function commandsOf(settings: Settings): string[] {
   for (const argv of [...settings.gate.fast, ...settings.gate.full]) lines.add(lineOf(argv))
 
   return [...lines].sort()
-}
-
-// FNV-1a, 32 bits, as 8 hex digits: a stable name for a list of commands.
-export function hashOf(lines: string[]): string {
-  let hash = 0x811c9dc5
-  for (const char of lines.join('\n')) {
-    hash ^= char.codePointAt(0) ?? 0
-    hash = Math.imul(hash, 0x01000193) >>> 0
-  }
-
-  return hash.toString(16).padStart(8, '0')
 }

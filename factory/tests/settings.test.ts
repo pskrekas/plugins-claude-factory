@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DEFAULTS, commandsOf, hashOf, parseSettings } from '../core/settings'
+import { DEFAULTS, commandsOf, parseSettings } from '../core/settings'
 
 test('no file gives the defaults', async () => {
   expect(parseSettings(null)).toEqual({ settings: DEFAULTS, error: null })
@@ -70,7 +70,7 @@ test('a check must have a name and a command of strings', async () => {
   expect(error).toBe('checks: wrong type')
 })
 
-test('commands are listed once, sorted, and hashed stably', async () => {
+test('commands are listed once and sorted', async () => {
   const text = JSON.stringify({
     checks: [
       { name: 'a', run: ['x', 'y'] },
@@ -80,20 +80,35 @@ test('commands are listed once, sorted, and hashed stably', async () => {
   })
   const { settings } = parseSettings(text)
   expect(commandsOf(settings)).toEqual(['npm run build', 'npm test', 'x y'])
-  expect(hashOf(commandsOf(settings))).toBe(hashOf(['npm run build', 'npm test', 'x y']))
-  expect(hashOf(['a'])).not.toBe(hashOf(['b']))
-  expect(hashOf(['a'])).toMatch(/^[0-9a-f]{8}$/)
 })
 
-test('an argument with a space or a control character is shown quoted', async () => {
-  const one = parseSettings('{"checks": [{"name": "a", "run": ["sh", "-c", "echo hi\\u001b[2J"]}]}')
-  expect(commandsOf(one.settings)).toEqual(['sh -c "echo hi\\u001b[2J"'])
+test('a control character in a command is refused', async () => {
+  const { settings, error } = parseSettings(
+    '{"checks": [{"name": "a", "run": ["sh", "-c", "echo hi\\u001b[2J"]}]}',
+  )
+  expect(settings.checks).toEqual([])
+  expect(error).toBe('checks: control character in a command')
+  expect(parseSettings('{"gate": {"fast": [["a", "b\\nc"]]}}').error).toBe(
+    'gate: control character in a command',
+  )
 })
 
-test('two commands that differ only in how they are split never look or hash the same', async () => {
+test('two commands that differ only in how they are split never look the same', async () => {
   const a = parseSettings('{"checks": [{"name": "a", "run": ["rm", "x y"]}]}').settings
   const b = parseSettings('{"checks": [{"name": "a", "run": ["rm", "x", "y"]}]}').settings
   expect(commandsOf(a)).toEqual(['rm "x y"'])
   expect(commandsOf(b)).toEqual(['rm x y'])
-  expect(hashOf(commandsOf(a))).not.toBe(hashOf(commandsOf(b)))
+})
+
+test('an argument that only looks quoted is quoted again', async () => {
+  const a = parseSettings('{"checks": [{"name": "a", "run": ["rm", "\\"x y\\""]}]}').settings
+  expect(commandsOf(a)).toEqual(['rm "\\"x y\\""'])
+})
+
+test('an argument outside printable ASCII is shown with visible escapes', async () => {
+  const a = parseSettings(
+    '{"checks": [{"name": "a", "run": ["echo", "ab\\u202ecd\\u200b", "\\u00e9"]}]}',
+  ).settings
+  expect(commandsOf(a)).toEqual(['echo "ab\\u202ecd\\u200b" "\\u00e9"'])
+  expect(/^[\x20-\x7e]*$/.test(commandsOf(a).join(''))).toBe(true)
 })

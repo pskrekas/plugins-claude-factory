@@ -9,8 +9,10 @@ export type Row = { left: string; right: string; tone: Tone; rightTone: Tone }
 const MAX_AGENTS = 6
 
 // Text from a settings file, a tracker or a command's output can hold terminal
-// control sequences. No C0 or C1 control character reaches a row.
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
+// control sequences and characters that reorder or hide text. No control
+// character (Cc), format character (Cf: bidi marks, zero-width) or line or
+// paragraph separator (Zl, Zp) reaches a row.
+const CONTROL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
 
 export function clean(text: string): string {
   return text.replace(CONTROL, '')

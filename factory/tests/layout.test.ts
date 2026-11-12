@@ -115,3 +115,11 @@ test('control characters never reach a row', async () => {
   expect(text).toContain('PROJ-12 a[31mbc')
   expect(text).toContain('2Jgot')
 })
+
+test('bidi, zero-width and line-separator characters never reach a row', async () => {
+  const model = { ...FULL, task: { ...FULL.task!, title: 'ab‮cd​ e﻿⁦f' } }
+  const text = rowsOf(model, 80, 0)
+    .map(r => r.left)
+    .join('|')
+  expect(text).toContain('PROJ-12 abcdef')
+})

@@ -1,13 +1,10 @@
 import { expect, test } from 'claude-code/testing'
 
-import { PANE, cmd } from './kit'
+import { PANE, START, cmd, engine } from './kit'
 
 test('the pane mounts on every surface and says there is no settings file', async ($, on) => {
-  on('command.register', () => ({ value: { command: 'factory' } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('clock.now', () => ({ value: 0 }))
-  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  engine(on, { files: {} })
+  await $.session.start(START)
 
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
@@ -19,18 +16,30 @@ test('the pane mounts on every surface and says there is no settings file', asyn
 })
 
 test('/factory opens the pane and /factory close closes it', async ($, on) => {
-  const seen: string[] = []
-  on('command.register', () => ({ value: { command: 'factory' } }))
-  on('ui.open', (_, e) => {
-    seen.push(e.id)
-    return { value: { isPlaced: true } }
-  })
-  on('ui.close', (_, e) => {
-    seen.push('close:' + e.id)
-    return { value: undefined }
-  })
+  const world = engine(on, { files: {} })
+  await $.session.start(START)
 
   expect((await $.command.run(cmd(''))).text).toBe('Factory pane opened.')
+  expect(world.isOpen).toBe(true)
   expect((await $.command.run(cmd('close'))).text).toBe('Factory pane closed.')
-  expect(seen).toEqual(['factory', 'close:factory'])
+  expect(world.isOpen).toBe(false)
+})
+
+test('a command before the session started says so and does not throw', async ($, on) => {
+  engine(on, { files: {} })
+
+  expect((await $.command.run(cmd(''))).text).toBe('Factory is not ready. Start a new session.')
+})
+
+test('the pane is read again each minute, only while it is open', async ($, on) => {
+  const world = engine(on, { files: {} })
+  await $.session.start(START)
+
+  await world.clock.advance(60_000)
+  expect(world.status.length).toBe(0)
+
+  await $.command.run(cmd(''))
+  const after = world.status.length
+  await world.clock.advance(60_000)
+  expect(world.status.length).toBe(after + 1)
 })

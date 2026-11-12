@@ -1,10 +1,10 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import { FULL, PANE, stored } from './kit'
 
 test('a pane 24 columns wide draws the model with no row past its width', async ($, on) => {
   on('state.get', () => stored(FULL))
-  on('clock.now', () => ({ value: 5000 }))
+  mock.clock(on, { now: 5000 })
 
   const ui = await $.ui.mount({
     ...PANE,

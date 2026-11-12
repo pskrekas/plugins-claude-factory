@@ -1,9 +1,12 @@
-import { atom, read } from 'claude-code'
+import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import { rowsOf } from '../core/layout'
 import type { Tone } from '../core/layout'
 import { emptyModel } from '../core/model'
+import { failureOf } from '../core/run'
+import type { Io } from './io'
+import { approve, refresh } from './refresh'
 import { PANE, TITLE } from './state'
 
 // Change the tag when PanelModel's fields change: it declines what an earlier
@@ -13,6 +16,8 @@ const panel = atom({ plugin: 'factory', key: 'panel' } as const, emptyModel(), {
 })
 
 const MINIMUM = [2, 1, 322] as const
+const REFRESH_MS = 60_000
+const NOT_READY = 'Factory is not ready. Start a new session.'
 
 // Theme keys, so the colours follow the person's theme.
 const COLOR: Record<Tone, string | undefined> = {
@@ -36,6 +41,10 @@ function isSupported(version: string): boolean {
 }
 
 export const register: Register = (on, options) => {
+  // Built in `session.start`, which runs before the first prompt and again
+  // after every reload. See hooks/io.ts for why it exists.
+  let io: Io | null = null
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     const version = await $.session
@@ -47,27 +56,89 @@ export const register: Register = (on, options) => {
 
       return started
     }
+
+    const root = () =>
+      $.session
+        .repo()
+        .then(repo => repo?.root ?? $.session.cwd())
+        .catch(() => $.session.cwd())
+    io = {
+      now: () => $.clock.now(),
+      root,
+      remote: () =>
+        $.session
+          .repo()
+          .then(repo => repo?.remote ?? null)
+          .catch(() => null),
+      readFile: path =>
+        $.fs
+          .read(path)
+          .then(text => (typeof text === 'string' ? text : null))
+          .catch(() => null),
+      listDir: path =>
+        $.fs
+          .list(path)
+          .then(entries => entries.map(entry => entry.name + (entry.kind === 'dir' ? '/' : '')))
+          .catch(() => []),
+      writeFile: (path, text) => $.fs.write(path, text),
+      run: (argv, init) =>
+        $.process
+          .run(argv, init)
+          .then(done => ({ exitCode: done.exitCode, stdout: done.stdout, stderr: done.stderr }))
+          .catch(failureOf),
+      storeGet: key => $.store.get(key).catch(() => undefined),
+      storeSet: (key, value) => $.store.set(key, value),
+      getModel: () => read($, panel),
+      setModel: async model => {
+        await update($, panel, () => model)
+      },
+      status: text => $.ui.status(text),
+      toast: text => $.ui.toast(text),
+      sound: () => {
+        if (options.sound !== false) void $.audio.play({ asset: 'fx/alert.wav' }).catch(() => undefined)
+      },
+      agents: () => $.agent.list().catch(() => []),
+      isPaneOpen: () =>
+        $.ui
+          .panes()
+          .then(panes => panes.some(pane => pane.id === PANE))
+          .catch(() => false),
+    }
+    const ready = io
+
     await $.command.register({
       name: 'factory',
       description: 'Open the Factory work panel (close | init | approve)',
     })
-    if (options.openOnStart === true) void $.ui.open({ id: PANE, title: TITLE })
+    if (options.openOnStart === true) {
+      void $.ui.open({ id: PANE, title: TITLE }).then(() => refresh(ready))
+    }
+    // Slow reads run once a minute, and only while the pane is open.
+    $.clock.every(REFRESH_MS, () => {
+      void ready
+        .isPaneOpen()
+        .then(isOpen => (isOpen ? refresh(ready) : undefined))
+        .catch(() => undefined)
+    })
 
     return started
   })
 
   on('command.run', { command: 'factory' }, async ($, e) => {
     const arg = e.args.trim()
-    if (arg === '') {
-      await $.ui.open({ id: PANE, title: TITLE })
-
-      return { text: 'Factory pane opened.' }
-    }
     if (arg === 'close') {
       await $.ui.close({ id: PANE })
 
       return { text: 'Factory pane closed.' }
     }
+    if (io === null) return { text: NOT_READY }
+    if (arg === '') {
+      await $.ui.open({ id: PANE, title: TITLE })
+      await refresh(io)
+
+      return { text: 'Factory pane opened.' }
+    }
+    if (arg === 'approve') return { text: await approve(io) }
 
     return { text: `Unknown: /factory ${arg}` }
   })
