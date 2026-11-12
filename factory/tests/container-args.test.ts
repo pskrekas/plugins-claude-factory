@@ -9,6 +9,7 @@ const NAME = 'factory-job-12-add-dark-mode.r-1'
 const GATE = 'factory-gate-12-add-dark-mode.r-1'
 const line = (call: Parameters<typeof dockerArgs>[0]) => dockerArgs(call)?.join(' ') ?? null
 const make = { do: 'make' as const, name: NAME, spec: SPEC, folder: WT, user: '501:20', label: 'r-1', hasGitFile: true }
+const once = { ...make, do: 'once' as const, command: 'npm test' }
 
 test('every docker call of the factory, word for word', async () => {
   expect([containerName('job', ID, 'r-1'), containerName('gate', ID, 'r-1')]).toEqual([NAME, GATE])
@@ -18,14 +19,19 @@ test('every docker call of the factory, word for word', async () => {
   expect(containerName('job', '../x', 'r-1')).toBe(null)
   expect(containerName('job', ID, 'a b')).toBe(null)
   expect(line({ do: 'image', image: 'node:22' })).toBe('docker image inspect --format {{.Id}} node:22')
-  expect(line(make)).toBe(
-    `docker run -d --name ${NAME} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -v ${WT}/.git:${WT}/.git:ro -w ${WT} node:22 sleep infinity`,
+  // One command of a builder: a container of its own, gone when the command ends (`--rm`).
+  // The image's own start program is not used: the shell is.
+  expect(line(once)).toBe(
+    `docker run --rm --name ${NAME} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -v ${WT}/.git:${WT}/.git:ro -w ${WT} --entrypoint sh node:22 -c npm test`,
   )
-  // With no network, and with no git file to protect (the gate's copy is the plugin's own).
+  // The gate's container stays for the gate's commands (`-d`), and does nothing by itself.
+  expect(line({ ...make, name: GATE })).toBe(
+    `docker run -d --name ${GATE} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -v ${WT}/.git:${WT}/.git:ro -w ${WT} --entrypoint sleep node:22 infinity`,
+  )
+  // With no network, and with no git file in the folder.
   expect(line({ ...make, spec: { ...SPEC, network: 'none' }, hasGitFile: false })).toBe(
-    `docker run -d --name ${NAME} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network none --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -w ${WT} node:22 sleep infinity`,
+    `docker run -d --name ${NAME} --label factory.state=r-1 --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network none --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -w ${WT} --entrypoint sleep node:22 infinity`,
   )
-  expect(line({ do: 'running', name: NAME })).toBe(`docker inspect --format {{.State.Running}} ${NAME}`)
   expect(line({ do: 'remove', name: NAME })).toBe(`docker rm -f ${NAME}`)
   expect(line({ do: 'list', label: 'r-1' })).toBe('docker ps -a --filter label=factory.state=r-1 --format {{.Names}}')
   expect(dockerArgs({ do: 'argv', name: NAME, cwd: WT, argv: ['npm', 'test', '--', '--changed'] })).toEqual(['docker', 'exec', '-w', WT, NAME, 'npm', 'test', '--', '--changed'])
@@ -33,9 +39,12 @@ test('every docker call of the factory, word for word', async () => {
 
 test('a command of the builder is one argument of the shell inside the container', async () => {
   const command = '--help; echo "$(cat /etc/passwd)"\n`id` && docker run --privileged x'
-  expect(dockerArgs({ do: 'shell', name: NAME, cwd: WT, command })).toEqual(['docker', 'exec', '-w', WT, NAME, 'sh', '-c', command])
-  expect(dockerArgs({ do: 'shell', name: NAME, cwd: WT, command: '' })).toBe(null)
-  expect(dockerArgs({ do: 'shell', name: NAME, cwd: WT, command: 'x'.repeat(100_001) })).toBe(null)
+  const list = dockerArgs({ ...once, command }) ?? []
+  // It is the last argument, whole, after the shell's own `-c`: docker reads no word of it.
+  expect(list.slice(-5)).toEqual(['--entrypoint', 'sh', 'node:22', '-c', command])
+  expect(list.filter(word => word === command).length).toBe(1)
+  expect(dockerArgs({ ...once, command: '' })).toBe(null)
+  expect(dockerArgs({ ...once, command: 'x'.repeat(100_001) })).toBe(null)
 })
 
 test('a value that breaks a rule gives no call at all', async () => {
@@ -63,11 +72,14 @@ test('a value that breaks a rule gives no call at all', async () => {
   for (const call of bad) expect([JSON.stringify(call).slice(0, 90), dockerArgs(call)]).toEqual([JSON.stringify(call).slice(0, 90), null])
   expect(dockerArgs({ do: 'image', image: '-x' })).toBe(null)
   expect(dockerArgs({ do: 'remove', name: 'postgres' })).toBe(null)
-  expect(dockerArgs({ do: 'running', name: 'factory-' })).toBe(null)
-  expect(dockerArgs({ do: 'running', name: 'factory-job-.r-1' })).toBe(null)
+  expect(dockerArgs({ do: 'remove', name: 'factory-' })).toBe(null)
+  expect(dockerArgs({ do: 'remove', name: 'factory-job-.r-1' })).toBe(null)
+  expect(dockerArgs({ ...once, name: 'x' })).toBe(null)
+  expect(dockerArgs({ ...once, name: 'factory-job-12-add-dark-mode.other' })).toBe(null)
+  expect(dockerArgs({ ...once, folder: '/a:b' })).toBe(null)
+  expect(dockerArgs({ ...once, spec: { ...SPEC, image: '--privileged' } })).toBe(null)
   expect(dockerArgs({ do: 'argv', name: NAME, cwd: WT, argv: [] })).toBe(null)
   expect(dockerArgs({ do: 'argv', name: NAME, cwd: 'x', argv: ['ls'] })).toBe(null)
-  expect(dockerArgs({ do: 'shell', name: 'x', cwd: WT, command: 'ls' })).toBe(null)
   expect(dockerArgs({ do: 'list', label: '--all' })).toBe(null)
 })
 
@@ -76,8 +88,7 @@ test('a container sees one folder and gets no added right', async () => {
     dockerArgs({ do: 'image', image: 'node:22' }),
     dockerArgs(make),
     dockerArgs({ ...make, name: GATE, hasGitFile: false }),
-    dockerArgs({ do: 'running', name: NAME }),
-    dockerArgs({ do: 'shell', name: NAME, cwd: WT, command: 'npm test' }),
+    dockerArgs({ ...once, command: '--privileged -v /:/host docker.sock' }),
     dockerArgs({ do: 'argv', name: NAME, cwd: WT, argv: ['npm', 'test'] }),
     dockerArgs({ do: 'remove', name: NAME }),
     dockerArgs({ do: 'list', label: 'r-1' }),
@@ -85,8 +96,8 @@ test('a container sees one folder and gets no added right', async () => {
   const banned = ['--privileged', '--pid', '--ipc', '--cap-add', '--device', '--volumes-from', '--mount', '--network=host', '--userns', '--add-host', '-p', '--publish', '--env-file']
   for (const list of every) {
     expect(list[0]).toBe('docker')
-    // The plugin's own words only: what an agent wrote comes after `sh -c`.
-    const own = list.includes('sh') ? list.slice(0, list.indexOf('sh')) : list
+    // The plugin's own words only: what an agent wrote is the last argument of a builder's run.
+    const own = list.includes('--rm') ? list.slice(0, -1) : list
     for (const word of own) {
       expect(banned.some(flag => word === flag || word.startsWith(flag + '='))).toBe(false)
       expect(word.includes('docker.sock')).toBe(false)
@@ -99,5 +110,7 @@ test('a container sees one folder and gets no added right', async () => {
     const mounts = list.filter((_, i) => list[i - 1] === '-v')
     expect(mounts.every(mount => mount === `${WT}:${WT}` || mount === `${WT}/.git:${WT}/.git:ro`)).toBe(true)
     expect(mounts.length).toBeGreaterThan(0)
+    // A container that stays is the gate's; a builder's is gone with its one command.
+    expect(list.includes('--rm') !== list.includes('-d')).toBe(true)
   }
 })

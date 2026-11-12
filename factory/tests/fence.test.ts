@@ -187,7 +187,7 @@ test("the container builder's shell tool: any command but a forbidden one; it ha
     expect([command, sh(command)]).toEqual([command, { decision: 'allow' }])
   }
   // What the repository forbids is still refused, also behind another command or inside a shell.
-  for (const command of ['npm publish', 'cd pkg && npm publish --tag next', 'npm test; terraform apply', 'sh -c "npm publish"', 'env X=1 npm publish']) {
+  for (const command of ['npm publish', 'cd pkg && npm publish --tag next', 'npm test; terraform apply', 'sh -c "npm publish"', 'env X=1 npm publish', "npm pub''lish", 'n\\pm publish', '"npm" "publish"', "/usr/bin/np'm' publish"]) {
     expect([command, sh(command)?.decision, (sh(command) as { reason?: string }).reason]).toEqual([command, 'deny', 'This command is forbidden in this repository.'])
   }
   expect(sh('npm publish')).toEqual({ decision: 'deny', reason: 'This command is forbidden in this repository.', command: 'npm publish' })

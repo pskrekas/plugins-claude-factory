@@ -11,7 +11,7 @@ import { displayWidth } from '../core/rows'
 import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
 import { ancestorsOf, confirmedTop } from '../core/top'
-import { checkedSpawn, isOwnReport, onShell, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
+import { checkedSpawn, isOwnReport, onFileCall, onShell, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
 import type { Io } from './io'
 import { answerJob, rejectJob, stopLine } from './commands'
 import { init } from './init'
@@ -313,6 +313,16 @@ export const register: Register = (on, options) => {
     const call = e as { agentId?: string; command?: unknown; timeout_ms?: unknown }
 
     return onShell(io, { agentId: call.agentId, command: call.command, timeout_ms: call.timeout_ms })
+  })
+
+  // A file tool of an agent whose job builds in a container never runs while
+  // a command of that job runs in its container (design 8.3). Every other
+  // call goes on unchanged; the shell tool has its own hook above.
+  on('tool.call', async ($, e, next) => {
+    const ready = io
+    if (ready === null || e.tool === SHELL_TOOL) return next(e)
+
+    return onFileCall(ready, { agentId: (e as { agentId?: string }).agentId, tool: e.tool }, () => next(e))
   })
 
   // The end of a turn. For an agent of the line it is a fact for the inbox.

@@ -59,6 +59,7 @@ test('every prompt: what it reads is data, one file, its own answer words and no
   // The builder's shell is the plugin's tool, in a container; only the host builder is told of Bash.
   expect(PROMPTS.builder).toContain('`mcp__factory__sh`')
   expect(PROMPTS.builder).toContain('in a container')
+  expect(PROMPTS.builder).toContain('Each call is a new container')
   expect(PROMPTS.builder.includes('Bash')).toBe(false)
   expect(HOST_BUILDER).toContain('Bash')
   expect(HOST_BUILDER).toContain('Do not use git')

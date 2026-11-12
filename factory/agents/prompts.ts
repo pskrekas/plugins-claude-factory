@@ -68,7 +68,7 @@ Rules for your work:
 - Write the tests the spec names first, see them fail, then write the code. Run the repo's own checks before you end.
 ${
   isBoxed
-    ? '- Your shell is the tool `mcp__factory__sh`. It runs one command in a container that holds the code folder and nothing else of this machine. Each call starts in the code folder, and keeps no folder and no variable of the call before it. A command has 2 minutes; give `timeout_ms` for a longer one (10 minutes at most).\n- You have no git.'
+    ? '- Your shell is the tool `mcp__factory__sh`. It runs one command in a container that holds the code folder and nothing else of this machine. Each call is a new container: it starts in the code folder, and only the files of the code folder stay from the call before it (no folder you changed to, no variable, no running program, no file outside the code folder). Do not call it at the same time as a file tool. A command has 2 minutes; give `timeout_ms` for a longer one (10 minutes at most).\n- You have no git.'
     : '- Your shell is the tool Bash. It runs on the machine of the person who runs the line: stay in the code folder.\n- Do not use git.'
 } The line commits every file you leave in the code folder when you end, and the line does the push. Leave no file there that is not part of the change, and make no git repository there.
 - You open no pull request and you merge nothing.

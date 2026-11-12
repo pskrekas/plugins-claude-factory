@@ -5,6 +5,12 @@
 // a plain process does not have; and no word of an agent is an option of
 // `docker`: a builder's command is one argument of `sh -c` inside the
 // container. A test checks every list this file can answer against those rules.
+//
+// A builder's command gets a container of its own, which is gone when the
+// command ends (`once`): no program of a builder stays alive between two
+// commands, so nothing can change the job's folder while the plugin, git or
+// an agent's file tool reads it on the person's machine. The gate's container
+// (`make`) stays for the gate's commands, and holds the gate's own copy.
 import { isImage } from './factory-settings'
 import type { ContainerSpec } from './factory-settings'
 import { isJobId } from './job'
@@ -23,8 +29,7 @@ export const containerName = (kind: 'job' | 'gate', jobId: string, label: string
 export type DockerCall =
   | { do: 'image'; image: string }
   | { do: 'make'; name: string; spec: ContainerSpec; folder: string; user: string; label: string; hasGitFile: boolean }
-  | { do: 'running'; name: string }
-  | { do: 'shell'; name: string; cwd: string; command: string }
+  | { do: 'once'; name: string; spec: ContainerSpec; folder: string; user: string; label: string; hasGitFile: boolean; command: string }
   | { do: 'argv'; name: string; cwd: string; argv: string[] }
   | { do: 'remove'; name: string }
   | { do: 'list'; label: string }
@@ -56,12 +61,16 @@ export function dockerArgs(call: DockerCall): string[] | null {
   switch (call.do) {
     case 'image':
       return isImage(call.image) ? ['docker', 'image', 'inspect', '--format', '{{.Id}}', call.image] : null
-    case 'make': {
+    case 'make':
+    case 'once': {
       if (!isSpec(call.spec) || !isFolder(call.folder) || !/^\d{1,10}:\d{1,10}$/.test(call.user)) return null
+      if (call.do === 'once' && (call.command === '' || call.command.length > MAX_COMMAND)) return null
       const { folder, spec } = call
 
       return [
-        'docker', 'run', '-d',
+        'docker', 'run',
+        // A builder's container is gone when its one command ends; the gate's stays for the gate's commands.
+        call.do === 'once' ? '--rm' : '-d',
         '--name', call.name,
         '--label', `factory.state=${call.label}`,
         '--init',
@@ -77,19 +86,15 @@ export function dockerArgs(call: DockerCall): string[] | null {
         '-e', 'HOME=/tmp',
         // The one folder it sees, at its own path.
         '-v', `${folder}:${folder}`,
-        // A worktree's `.git` is a file that names the repository's git folder
+        // The folder's `.git` is a file that names the repository's git folder
         // (which is not in the container). It cannot be changed from inside.
         ...(call.hasGitFile ? ['-v', `${folder}/.git:${folder}/.git:ro`] : []),
         '-w', folder,
-        spec.image,
-        'sleep', 'infinity',
+        // The image's own start program is not used. The command is one
+        // argument, the last: only the shell inside the container reads it.
+        ...(call.do === 'once' ? ['--entrypoint', 'sh', spec.image, '-c', call.command] : ['--entrypoint', 'sleep', spec.image, 'infinity']),
       ]
     }
-    case 'running':
-      return ['docker', 'inspect', '--format', '{{.State.Running}}', call.name]
-    case 'shell':
-      // The command is one argument: only the shell inside the container reads it.
-      return call.command === '' || call.command.length > MAX_COMMAND ? null : ['docker', 'exec', '-w', call.cwd, call.name, 'sh', '-c', call.command]
     case 'argv':
       return call.argv.length === 0 ? null : ['docker', 'exec', '-w', call.cwd, call.name, ...call.argv]
     case 'remove':

@@ -9,7 +9,7 @@ import type { Who } from '../core/fence'
 import { isJobId } from '../core/job'
 import type { Usage } from '../core/price'
 import { clean } from '../core/rows'
-import { ensureContainer, runShell } from './container'
+import { runOnce } from './container'
 import { baseContainer } from './gate'
 import { dropFact } from './inbox'
 import type { Io } from './io'
@@ -48,6 +48,18 @@ let box: { at: number; answer: { ok: true; container: ContainerSpec | false | nu
 // Where each job's builder runs its commands. It is set when a job is made and never changes.
 const shells = new Map<string, Shell>()
 const NOT_A_BUILDER = 'This tool is for the builder of the factory line.'
+// One side at a time (design 8.3). While a command of a job runs in its
+// container, a program in it could change a path of the job's folder between
+// the fence's look at it and the file tool's use of it. So for a job that
+// builds in a container, a file tool of this machine and a command never run
+// at the same time; and since each command has a container of its own, no
+// program of a builder runs at any other time.
+const FILE_TOOLS = ['Read', 'Write', 'Edit', 'Glob', 'Grep']
+const shellRuns = new Set<string>() // the jobs with a command in a container now
+const fileCalls = new Map<string, number>() // per job: its file calls that run now
+const SHELL_RUNS = 'A command of this job runs in its container. Wait for it to end, then call again.'
+const FILE_RUNS = 'A file call of this job runs. Wait for it to end, then call again.'
+const TWO_SHELLS = 'Another command of this job runs. Wait for it to end, then call again.'
 const NOT_RUN = 'The command was not run'
 const SHELL_MS = { usual: 120_000, most: 600_000, least: 1_000 }
 
@@ -232,6 +244,8 @@ export async function onToolCheck(
   const [tree, folder] = dir === null ? [null, null] : await Promise.all([io.stat(`${dir}/worktrees/${agent.jobId}`), io.stat(`${dir}/jobs/${agent.jobId}`)])
   const shell = await shellOf(io, root, agent.jobId)
   if (tree === null || folder === null || shell === null) return { decision: 'deny', reason: 'The job of this agent has no folder.' }
+  // Told early; `onFileCall` is the one that holds the rule.
+  if (FILE_TOOLS.includes(e.tool) && shellRuns.has(agent.jobId)) return { decision: 'deny', reason: SHELL_RUNS }
   const who: Who = {
     role: agent.role,
     shell,
@@ -271,12 +285,40 @@ export async function onShell(
   const where = await boxOf(io)
   if (!where.ok) return { deny: `${NOT_RUN}: ${where.why}.` }
   if (where.container === null || where.container === false) return { deny: `${NOT_RUN}: the settings name no container.` }
-  const made = await ensureContainer(io, root, job.id, 'job', where.container)
-  if (!made.ok) return { deny: `${NOT_RUN}: ${made.why.replace(/\.$/, '')}.` }
   const asked = typeof e.timeout_ms === 'number' && Number.isFinite(e.timeout_ms) && e.timeout_ms > 0 ? e.timeout_ms : SHELL_MS.usual
-  const ran = await runShell(io, made.name, made.folder, command, Math.round(Math.min(SHELL_MS.most, Math.max(SHELL_MS.least, asked))))
+  // One side at a time. Nothing is awaited between this look and the mark.
+  if (shellRuns.has(job.id)) return { deny: TWO_SHELLS }
+  if ((fileCalls.get(job.id) ?? 0) > 0) return { deny: FILE_RUNS }
+  shellRuns.add(job.id)
+  try {
+    const ran = await runOnce(io, root, job.id, where.container, command, Math.round(Math.min(SHELL_MS.most, Math.max(SHELL_MS.least, asked))))
 
-  return { result: ran.text }
+    return ran.ok ? { result: ran.text } : { deny: `${NOT_RUN}: ${ran.why.replace(/\.$/, '')}.` }
+  } finally {
+    shellRuns.delete(job.id)
+  }
+}
+
+// A file tool call of an agent of the line, as the engine is about to run it
+// (`next`). For a job that builds in a container it does not run while a
+// command of the job runs, and no command starts while it runs. Any other
+// call goes on unchanged.
+export async function onFileCall<T>(io: Io, e: { agentId?: string; tool: string }, next: () => Promise<T>): Promise<T | { deny: string }> {
+  if (e.agentId === undefined || !FILE_TOOLS.includes(e.tool)) return next()
+  const root = await io.root()
+  const agent = await agentOf(io, root, e.agentId)
+  if (agent === null || (await shellOf(io, root, agent.jobId)) !== 'container') return next()
+  const { jobId } = agent
+  // Nothing is awaited between this look and the count.
+  if (shellRuns.has(jobId)) return { deny: SHELL_RUNS }
+  fileCalls.set(jobId, (fileCalls.get(jobId) ?? 0) + 1)
+  try {
+    return await next()
+  } finally {
+    const left = (fileCalls.get(jobId) ?? 1) - 1
+    if (left > 0) fileCalls.set(jobId, left)
+    else fileCalls.delete(jobId)
+  }
 }
 
 // The end of an agent's turn: a fact for the code that advances the jobs.

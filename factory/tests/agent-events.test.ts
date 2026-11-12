@@ -4,7 +4,7 @@ import { storeKey } from '../core/consent'
 import { move, newJob, startWork } from '../core/job'
 import type { Job } from '../core/job'
 import { stateFolderOf } from '../core/state-path'
-import { agentOf, checkedSpawn, isOwnReport, onShell, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from '../hooks/agent-events'
+import { agentOf, checkedSpawn, isOwnReport, onFileCall, onShell, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from '../hooks/agent-events'
 import { drainFacts } from '../hooks/inbox'
 import { fakeIo } from './kit'
 
@@ -178,7 +178,7 @@ const LABEL = stateFolderOf('/r/.git')
 const BOX_LINE = '[container] node:22 · network on · memory 4g · cpus 2'
 const BASE = 'f'.repeat(40)
 // `settings` is the file of the base branch; the person approved the container line.
-function shellWorld(jobs: Job[], settings = BOXED, isRunning = true, approved = [BOX_LINE]) {
+function shellWorld(jobs: Job[], settings = BOXED, approved = [BOX_LINE]) {
   const io = world(jobs, { '/r/.claude/factory.json': BOXED })
   io.store.set(storeKey('/r/.git'), approved)
   io.answer = argv => {
@@ -187,8 +187,7 @@ function shellWorld(jobs: Job[], settings = BOXED, isRunning = true, approved = 
     if (line === `git show ${BASE}:.claude/factory.json`) return { exitCode: 0, stdout: settings }
     if (line === 'id -u') return { exitCode: 0, stdout: '501\n' }
     if (line === 'id -g') return { exitCode: 0, stdout: '20\n' }
-    if (line.startsWith('docker inspect')) return isRunning ? { exitCode: 0, stdout: 'true\n' } : { exitCode: 1, stdout: '', stderr: 'No such object' }
-    if (line.startsWith('docker exec')) return { exitCode: 0, stdout: 'hello\n' }
+    if (line.startsWith('docker run')) return { exitCode: 0, stdout: 'hello\n' }
 
     return line.startsWith('docker ') ? { exitCode: 0, stdout: '' } : undefined
   }
@@ -200,17 +199,17 @@ const NOT_YOURS = { deny: 'This tool is for the builder of the factory line.' }
 
 test("the builder's command runs in its job's container, as one argument, in the job's folder", async () => {
   const job = build('41', 'container')
-  const io = shellWorld([job], BOXED, false)
+  const io = shellWorld([job])
   rememberAgent('sh41', { jobId: job.id, role: 'builder', focus: '' })
   const name = `factory-job-${job.id}.${LABEL}`
   const command = 'cd src && npm test -- --watch=false; echo "$HOME" `id` $(ls) > /etc/x'
 
   expect(await onShell(io, { agentId: 'sh41', command })).toEqual({ result: 'exit 0\nhello\n' })
-  // The container is made over the job's folder, then the command is one argument of the shell inside it.
-  expect(dockerOf(io).map(line => line.split(' ').slice(0, 2).join(' '))).toEqual(['docker inspect', 'docker rm', 'docker run', 'docker exec'])
-  expect(dockerOf(io).at(-1)).toBe(`docker exec -w ${wt(job)} ${name} sh -c ${command}`)
-  expect(dockerOf(io)[2]).toContain(`-v ${wt(job)}:${wt(job)} `)
-  expect(dockerOf(io)[2]).toContain(' node:22 sleep infinity')
+  // A container of its own over the job's folder, with the command as the one argument of the shell inside it; then the container is removed.
+  expect(dockerOf(io).map(line => line.split(' ').slice(0, 3).join(' '))).toEqual(['docker run --rm', 'docker rm -f'])
+  expect(dockerOf(io)[0]?.endsWith(` -v ${wt(job)}:${wt(job)} -w ${wt(job)} --entrypoint sh node:22 -c ${command}`)).toBe(true)
+  expect(dockerOf(io)[0]).toContain(` --name ${name} `)
+  expect(dockerOf(io)[1]).toBe(`docker rm -f ${name}`)
   // Nothing of the command ran on this machine: beside docker, only the plugin's own reads.
   expect(io.ran.filter(line => !line.startsWith('docker ') && !line.startsWith('id -'))).toEqual(['git rev-parse --verify refs/remotes/origin/main^{commit}', `git show ${BASE}:.claude/factory.json`])
 })
@@ -222,11 +221,11 @@ test('a command has 2 minutes, or what the builder asks for, 10 minutes at most'
   const limitOf = async (timeout_ms?: unknown) => {
     await onShell(io, { agentId: 'sh42', command: 'npm test', timeout_ms })
 
-    return io.timeouts.at(-1)
+    return io.timeouts[io.ran.map(line => line.startsWith('docker run')).lastIndexOf(true)]
   }
   expect([await limitOf(), await limitOf(300_000), await limitOf(9_000_000), await limitOf(5), await limitOf('soon'), await limitOf(-1)]).toEqual([120_000, 300_000, 600_000, 1_000, 120_000, 120_000])
-  // The container that runs is used again: no second one is made.
-  expect(dockerOf(io).some(line => line.startsWith('docker run'))).toBe(false)
+  // Each command had a container of its own, and each container was removed.
+  expect([dockerOf(io).filter(line => line.startsWith('docker run --rm')).length, dockerOf(io).filter(line => line.startsWith('docker rm -f')).length]).toEqual([6, 6])
 })
 
 test("the shell tool answers only the builder of a job that builds in a container", async () => {
@@ -271,7 +270,7 @@ test('with no container the command is not run, and the builder is told why', as
   expect(await onShell(bare, { agentId: 'b47', command: 'ls' })).toEqual({ deny: 'The command was not run: the settings name no container.' })
   expect(dockerOf(bare)).toEqual([])
   // The base branch names a container that the person did not approve.
-  const quiet = shellWorld([job], BOXED, true, [])
+  const quiet = shellWorld([job], BOXED, [])
   quiet.time = 60_000
   expect(await onShell(quiet, { agentId: 'b47', command: 'ls' })).toEqual({ deny: 'The command was not run: the container settings are not approved.' })
   expect(dockerOf(quiet)).toEqual([])
@@ -289,11 +288,94 @@ test('with no container the command is not run, and the builder is told why', as
 
 test("the container is the base branch's: the file in the person's checkout names no image", async () => {
   const job = build('48', 'container')
-  const io = shellWorld([job], BOXED, false)
+  const io = shellWorld([job])
   io.time = 150_000
   io.files['/r/.claude/factory.json'] = '{"factory": {"container": {"image": "evil:1"}}}'
   rememberAgent('b48', { jobId: job.id, role: 'builder', focus: '' })
   expect(await onShell(io, { agentId: 'b48', command: 'ls' })).toEqual({ result: 'exit 0\nhello\n' })
-  expect(dockerOf(io).find(line => line.startsWith('docker run'))).toContain(' node:22 sleep infinity')
+  expect(dockerOf(io).find(line => line.startsWith('docker run'))).toContain(' --entrypoint sh node:22 -c ls')
   expect(dockerOf(io).some(line => line.includes('evil'))).toBe(false)
+})
+
+const SHELL_RUNS = 'A command of this job runs in its container. Wait for it to end, then call again.'
+
+test("a command and a file call of one job never run at the same time", async () => {
+  const job = build('49', 'container')
+  const other = build('50', 'container')
+  const io = shellWorld([job, other])
+  io.time = 200_000
+  rememberAgent('b49', { jobId: job.id, role: 'builder', focus: '' })
+  rememberAgent('b50', { jobId: other.id, role: 'builder', focus: '' })
+  // The container of job 49 runs until the test lets it end.
+  const run = io.run
+  let release: () => void = () => undefined
+  let isRunning = false
+  io.run = async (argv, init) => {
+    // Only the first command of job 49 is held.
+    if (argv[1] === 'run' && argv.join(' ').includes(job.id) && !isRunning) {
+      isRunning = true
+      await new Promise<void>(resolve => (release = resolve))
+    }
+
+    return run(argv, init)
+  }
+  const until = async (isTrue: () => boolean) => {
+    for (let i = 0; i < 5000 && !isTrue(); i += 1) await Promise.resolve()
+  }
+  const command = onShell(io, { agentId: 'b49', command: 'npm test' })
+  await until(() => isRunning)
+  expect(isRunning).toBe(true)
+
+  // While it runs, a file call of that job is refused: when the engine asks, and when the call comes.
+  expect(await onToolCheck(io, { agentId: 'b49', tool: 'Read', input: { file_path: `${wt(job)}/README.md` } })).toEqual({ decision: 'deny', reason: SHELL_RUNS })
+  let wrote = 0
+  const write = async () => {
+    wrote += 1
+
+    return 'written'
+  }
+  for (const tool of ['Read', 'Write', 'Edit', 'Glob', 'Grep']) expect([tool, await onFileCall(io, { agentId: 'b49', tool }, write)]).toEqual([tool, { deny: SHELL_RUNS }])
+  expect(wrote).toBe(0)
+  // A second command of the job does not start either.
+  expect(await onShell(io, { agentId: 'b49', command: 'ls' })).toEqual({ deny: 'Another command of this job runs. Wait for it to end, then call again.' })
+  // Another job, an agent that is not the line's, and the session's own model are not held up; nor is a tool that is no file tool.
+  expect(await onFileCall(io, { agentId: 'b50', tool: 'Write' }, write)).toBe('written')
+  expect(await onFileCall(io, { agentId: 'stranger', tool: 'Write' }, write)).toBe('written')
+  expect(await onFileCall(io, { tool: 'Write' }, write)).toBe('written')
+  expect(await onFileCall(io, { agentId: 'b49', tool: 'SubagentHandback' }, write)).toBe('written')
+  release()
+  expect(await command).toEqual({ result: 'exit 0\nhello\n' })
+  expect(await onFileCall(io, { agentId: 'b49', tool: 'Write' }, write)).toBe('written')
+
+  // The other way round: while a file call of the job runs, no command starts.
+  let finish: () => void = () => undefined
+  let isWriting = false
+  const writing = onFileCall(io, { agentId: 'b49', tool: 'Edit' }, () => {
+    isWriting = true
+
+    return new Promise<string>(resolve => (finish = () => resolve('edited')))
+  })
+  await until(() => isWriting)
+  expect(isWriting).toBe(true)
+  const runs = dockerOf(io).length
+  expect(await onShell(io, { agentId: 'b49', command: 'ls' })).toEqual({ deny: 'A file call of this job runs. Wait for it to end, then call again.' })
+  expect(dockerOf(io).length).toBe(runs)
+  finish()
+  expect(await writing).toBe('edited')
+  expect(await onShell(io, { agentId: 'b49', command: 'ls' })).toEqual({ result: 'exit 0\nhello\n' })
+  // A file call that fails frees the job too.
+  await onFileCall(io, { agentId: 'b49', tool: 'Write' }, async () => Promise.reject(new Error('disk full'))).catch(() => undefined)
+  expect(await onShell(io, { agentId: 'b49', command: 'ls' })).toEqual({ result: 'exit 0\nhello\n' })
+})
+
+test('a job that builds on this machine is not held up by this rule', async () => {
+  const job = build('51')
+  const io = world([job])
+  rememberAgent('b51', { jobId: job.id, role: 'builder', focus: '' })
+  let finish: () => void = () => undefined
+  const first = onFileCall(io, { agentId: 'b51', tool: 'Edit' }, () => new Promise<string>(resolve => (finish = () => resolve('a'))))
+  for (let i = 0; i < 200; i += 1) await Promise.resolve()
+  expect(await onFileCall(io, { agentId: 'b51', tool: 'Write' }, async () => 'b')).toBe('b')
+  finish()
+  expect(await first).toBe('a')
 })

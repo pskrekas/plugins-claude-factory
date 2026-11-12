@@ -7,7 +7,7 @@ import type { CheckRun } from '../core/gate'
 import type { Job } from '../core/job'
 import { GATE_MARK, isBranchName, lineOf, parseSettings } from '../core/settings'
 import type { Settings } from '../core/settings'
-import { ensureContainer, removeContainer, runArgv } from './container'
+import { makeGate, removeContainer, runArgv } from './container'
 import type { Io } from './io'
 import { writeJobFile } from './jobs'
 import { consentKeyOf } from './readers/repo'
@@ -147,7 +147,7 @@ export async function runGate(
     let box: { name: string; folder: string } | null = null
     try {
       if (spec !== false) {
-        const made = await ensureContainer(io, root, job.id, 'gate', spec)
+        const made = await makeGate(io, root, job.id, spec)
         if (!made.ok) return stop(`the gate's container could not be made (${made.why})`)
         box = made
       }

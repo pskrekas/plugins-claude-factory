@@ -208,7 +208,8 @@ const SPLIT = /;|&&|\|\||\||&|\n|\$\(|`|\(|\)/
 // as every text check of a command is.
 export function forbiddenIn(command: string, forbidden: string[][], depth = 0): string | null {
   for (const simple of command.split(SPLIT)) {
-    const words = wordsOf(simple)
+    // As the shell reads plain words: with no quotes and no backslashes in them.
+    const words = wordsOf(simple).map(word => word.replace(/['"\\]/g, ''))
     if (isForbidden(words, forbidden)) return simple
     const program = baseName(words[0] ?? '')
     if (depth < 2 && (SHELLS.includes(program) || program === 'eval')) {

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { stateFolderOf } from '../core/state-path'
-import { dockerState, ensureContainer, removeContainer, runArgv, runShell, sweepContainers } from '../hooks/container'
+import { dockerState, makeGate, removeContainer, runArgv, runOnce, sweepContainers } from '../hooks/container'
 import { fakeIo } from './kit'
 
 const LABEL = stateFolderOf('/r/.git')
@@ -41,57 +41,69 @@ test('docker and the image are there, or one line says what is missing', async (
   expect(await dockerState(world({}), '--privileged')).toEqual({ ok: false, why: 'not an image name' })
 })
 
-test("a job's container is made over its worktree, and used again while it runs", async () => {
-  const io = world({ 'docker inspect': { exitCode: 1, stderr: 'No such object' }, 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 0, stdout: 'abc\n' } })
-  expect(await ensureContainer(io, '/r', ID, 'job', SPEC)).toEqual({ ok: true, name: JOB, folder: WT })
-  expect(docker(io)).toEqual([
-    `docker inspect --format {{.State.Running}} ${JOB}`,
-    `docker rm -f ${JOB}`,
-    `docker run -d --name ${JOB} --label factory.state=${LABEL} --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -v ${WT}/.git:${WT}/.git:ro -w ${WT} node:22 sleep infinity`,
-  ])
-  const again = world({ 'docker inspect': { exitCode: 0, stdout: 'true\n' } })
-  expect((await ensureContainer(again, '/r', ID, 'job', SPEC)).ok).toBe(true)
-  expect(docker(again).length).toBe(1)
-  // One that stopped is removed and made again.
-  const stopped = world({ 'docker inspect': { exitCode: 0, stdout: 'false\n' }, 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 0 } })
-  await ensureContainer(stopped, '/r', ID, 'job', SPEC)
-  expect(docker(stopped).map(line => line.split(' ').slice(0, 2).join(' '))).toEqual(['docker inspect', 'docker rm', 'docker run'])
+test("a builder's command runs in a container of its own over the job's worktree, and the container is gone when the command ends", async () => {
+  const io = world({ 'docker run': { exitCode: 3, stdout: 'out line\n', stderr: 'err line\n' }, 'docker rm': { exitCode: 1, stderr: 'No such container' } })
+  const command = 'npm test -- "a b"; echo $(id) &'
+  expect(await runOnce(io, '/r', ID, SPEC, command, 120_000)).toEqual({ ok: true, text: 'exit 3\nout line\n[stderr]\nerr line\n', exitCode: 3 })
+  // One run, then the container is removed by name: also one that a time limit or a lost docker left alive.
+  expect(docker(io)).toEqual([`docker run --rm --name ${JOB} --label factory.state=${LABEL} --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network bridge --user 501:20 -e HOME=/tmp -v ${WT}:${WT} -v ${WT}/.git:${WT}/.git:ro -w ${WT} --entrypoint sh node:22 -c ${command}`, `docker rm -f ${JOB}`])
+  expect(io.timeouts[io.ran.findIndex(line => line.startsWith('docker run'))]).toBe(120_000)
+
+  const long = world({ 'docker run': { exitCode: 0, stdout: 'x'.repeat(100_000) + 'THE-END' } })
+  const cut = await runOnce(long, '/r', ID, SPEC, 'ls', 1000)
+  expect(cut.ok && [cut.text.length <= 30_200, cut.text.endsWith('THE-END'), cut.text.includes('[the start of the output is cut]')]).toEqual([true, true, true])
+  const lost = world({ 'docker run': { exitCode: 0, stdout: 'only the start', isCut: true } })
+  const kept = await runOnce(lost, '/r', ID, SPEC, 'ls', 1000)
+  expect(kept.ok && kept.text).toContain('[the end of the output is missing: the command printed more than is kept]')
 })
 
-test("the gate's container is over the gate's clean copy; a container that cannot be made says why", async () => {
-  const io = world({ 'docker inspect': { exitCode: 1 }, 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 0 } })
-  expect(await ensureContainer(io, '/r', ID, 'gate', SPEC)).toEqual({ ok: true, name: GATE, folder: `${DIR}/gate/${ID}` })
-  expect(docker(io).at(-1)).toContain(`-v ${DIR}/gate/${ID}:${DIR}/gate/${ID} -w ${DIR}/gate/${ID} node:22`)
-  expect(docker(io).at(-1)?.includes('.git:')).toBe(false)
-  // The copy's `.git` file (git made the copy) cannot be changed from inside either.
-  const linked = world({ 'docker inspect': { exitCode: 1 }, 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 0 } }, { [`${DIR}/gate/${ID}/.git`]: 'gitdir: x\n' })
-  await ensureContainer(linked, '/r', ID, 'gate', SPEC)
-  expect(docker(linked).at(-1)).toContain(`-v ${DIR}/gate/${ID}:${DIR}/gate/${ID} -v ${DIR}/gate/${ID}/.git:${DIR}/gate/${ID}/.git:ro -w ${DIR}/gate/${ID} node:22`)
+test('a command that does not end in time is stopped: its container is removed', async () => {
+  const slow = world({ 'docker run': 'hang', 'docker rm': { exitCode: 0 } })
+  expect(await runOnce(slow, '/r', ID, SPEC, 'sleep 999', 5000)).toEqual({ ok: true, text: 'The command did not end in 5 s. It was stopped; what it printed is lost.', exitCode: null })
+  expect(docker(slow).at(-1)).toBe(`docker rm -f ${JOB}`)
+})
 
-  const broken = world({ 'docker inspect': { exitCode: 1 }, 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 125, stderr: 'docker: invalid reference format.\nSee docker run --help' } })
-  expect(await ensureContainer(broken, '/r', ID, 'job', SPEC)).toEqual({ ok: false, why: 'docker: docker: invalid reference format. See docker run --help' })
+test('a command that cannot run says why, and nothing runs', async () => {
+  expect(await runOnce(world({}), '/r', ID, SPEC, '', 1000)).toEqual({ ok: false, why: 'the command is empty or too long' })
+  expect(await runOnce(world({}), '/r', ID, SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'docker is not on this machine' })
   // No folder, no container.
-  expect(await ensureContainer(world({}), '/r', '99-no-such-job', 'job', SPEC)).toEqual({ ok: false, why: 'the job has no folder' })
-  expect(await ensureContainer(world({}), '/r', '../x', 'job', SPEC)).toEqual({ ok: false, why: 'the job has no folder' })
+  const none = world({ docker: { exitCode: 0 } })
+  expect(await runOnce(none, '/r', '99-no-such-job', SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'the job has no folder' })
+  expect(await runOnce(none, '/r', '../x', SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'the job has no folder' })
+  expect(docker(none)).toEqual([])
+  // A container of the same name is still there (a run that was lost): it is removed, and the command runs once more.
+  let tries = 0
+  const taken = world({ 'docker rm': { exitCode: 0 } })
+  const answer = taken.answer
+  taken.answer = argv => {
+    if (argv[1] !== 'run') return answer?.(argv)
+    tries += 1
+
+    return tries === 1 ? { exitCode: 125, stdout: '', stderr: `docker: Error response from daemon: Conflict. The container name "/${JOB}" is already in use by container "abc".` } : { exitCode: 0, stdout: 'ok\n' }
+  }
+  expect(await runOnce(taken, '/r', ID, SPEC, 'ls', 1000)).toEqual({ ok: true, text: 'exit 0\nok\n', exitCode: 0 })
+  expect(docker(taken).map(line => line.split(' ').slice(0, 2).join(' '))).toEqual(['docker run', 'docker rm', 'docker run', 'docker rm'])
+  // Docker itself refuses (not the command): the reason is told, with no exit code of a command.
+  const refused = world({ 'docker run': { exitCode: 125, stderr: 'docker: invalid reference format.\nSee docker run --help' }, 'docker rm': { exitCode: 0 } })
+  expect(await runOnce(refused, '/r', ID, SPEC, 'ls', 1000)).toEqual({ ok: false, why: 'docker: docker: invalid reference format. See docker run --help' })
 })
 
-test('a command runs inside the container, and its answer is its exit code and the end of what it printed', async () => {
-  const io = world({ 'docker exec': { exitCode: 3, stdout: 'out line\n', stderr: 'err line\n' } })
-  const command = 'npm test -- "a b"; echo $(id)'
-  expect(await runShell(io, JOB, WT, command, 120_000)).toEqual({ text: 'exit 3\nout line\n[stderr]\nerr line\n', exitCode: 3 })
-  expect(io.ran.at(-1)).toBe(`docker exec -w ${WT} ${JOB} sh -c ${command}`)
-  expect(io.timeouts.at(-1)).toBe(120_000)
+test("the gate's container is made new over the gate's clean copy; one that cannot be made says why", async () => {
+  const io = world({ 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 0 } })
+  expect(await makeGate(io, '/r', ID, SPEC)).toEqual({ ok: true, name: GATE, folder: `${DIR}/gate/${ID}` })
+  // A container an earlier gate run left is never used again.
+  expect(docker(io).map(line => line.split(' ').slice(0, 3).join(' '))).toEqual(['docker rm -f', 'docker run -d'])
+  expect(docker(io).at(-1)).toContain(`-v ${DIR}/gate/${ID}:${DIR}/gate/${ID} -w ${DIR}/gate/${ID} --entrypoint sleep node:22 infinity`)
+  expect(docker(io).at(-1)?.includes('.git:')).toBe(false)
+  // The copy's `.git` file (git made the copy) cannot be changed from inside.
+  const linked = world({ 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 0 } }, { [`${DIR}/gate/${ID}/.git`]: 'gitdir: x\n' })
+  await makeGate(linked, '/r', ID, SPEC)
+  expect(docker(linked).at(-1)).toContain(`-v ${DIR}/gate/${ID}:${DIR}/gate/${ID} -v ${DIR}/gate/${ID}/.git:${DIR}/gate/${ID}/.git:ro -w ${DIR}/gate/${ID} --entrypoint sleep node:22`)
 
-  const long = world({ 'docker exec': { exitCode: 0, stdout: 'x'.repeat(100_000) + 'THE-END' } })
-  const cut = await runShell(long, JOB, WT, 'ls', 1000)
-  expect([cut.text.length <= 30_200, cut.text.endsWith('THE-END'), cut.text.includes('[the start of the output is cut]')]).toEqual([true, true, true])
-  const lost = world({ 'docker exec': { exitCode: 0, stdout: 'only the start', isCut: true } })
-  expect((await runShell(lost, JOB, WT, 'ls', 1000)).text).toContain('[the end of the output is missing: the command printed more than is kept]')
-
-  const slow = world({ 'docker exec': 'hang' })
-  expect(await runShell(slow, JOB, WT, 'sleep 999', 5000)).toEqual({ text: 'The command did not end in 5 s. It was left; what it printed is lost.', exitCode: null })
-  expect(await runShell(world({}), JOB, WT, '', 1000)).toEqual({ text: 'The command was not run: it is empty or too long.', exitCode: null })
-  expect((await runShell(world({}), JOB, WT, 'ls', 1000)).text).toBe('The command could not start: docker is not on this machine.')
+  const broken = world({ 'docker rm': { exitCode: 0 }, 'docker run': { exitCode: 125, stderr: 'docker: invalid reference format.\nSee docker run --help' } })
+  expect(await makeGate(broken, '/r', ID, SPEC)).toEqual({ ok: false, why: 'docker: docker: invalid reference format. See docker run --help' })
+  expect(await makeGate(world({}), '/r', ID, SPEC)).toEqual({ ok: false, why: 'docker is not on this machine' })
+  expect(await makeGate(world({ docker: { exitCode: 0 } }), '/r', '99-no-such-job', SPEC)).toEqual({ ok: false, why: 'the job has no folder' })
 })
 
 test("the gate's commands run in the container as argument lists", async () => {

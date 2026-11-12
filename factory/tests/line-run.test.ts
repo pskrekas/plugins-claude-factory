@@ -818,6 +818,9 @@ test('in a container: the job says so, its builder has no shell of this machine,
   const gate = `${DIR}/gate/${id}`
   expect(
     inOrder(w.io.ran.filter(line => /^(git|gh|npm|docker) /.test(line)), [
+      // Nothing of the builder runs when the plugin reads its folder: a container that is left goes first.
+      `docker rm -f ${boxOf('job', id)}`,
+      `${IN_TREE(id)} status --porcelain`,
       `${IN_TREE(id)} commit --no-verify --no-gpg-sign -m Factory: item 12, round 1`,
       `git worktree add --detach ${gate} ${SHA1}`,
       `docker run -d --name ${boxOf('gate', id)} `,

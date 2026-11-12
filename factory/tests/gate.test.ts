@@ -306,9 +306,8 @@ test("with a container the gate's commands run inside it, over the clean copy, a
   expect(steps(io).slice(6)).toEqual([
     `git worktree remove --force ${CLEAN}`,
     `git worktree add --detach ${CLEAN} ${SHA}`,
-    `docker inspect --format {{.State.Running}} ${BOX}`,
     `docker rm -f ${BOX}`,
-    `docker run -d --name ${BOX} --label factory.state=${stateFolderOf('/r/.git')} --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network none --user 501:20 -e HOME=/tmp -v ${CLEAN}:${CLEAN} -v ${CLEAN}/.git:${CLEAN}/.git:ro -w ${CLEAN} node:22 sleep infinity`,
+    `docker run -d --name ${BOX} --label factory.state=${stateFolderOf('/r/.git')} --init --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 --memory 4g --cpus 2 --network none --user 501:20 -e HOME=/tmp -v ${CLEAN}:${CLEAN} -v ${CLEAN}/.git:${CLEAN}/.git:ro -w ${CLEAN} --entrypoint sleep node:22 infinity`,
     `${IN_BOX} npm run lint`,
     `${IN_BOX} npm test`,
     // The container goes first, then the copy.
