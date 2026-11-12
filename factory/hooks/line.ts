@@ -46,7 +46,11 @@ const NO_ANSWER = 'gave no answer the line can read'
 const UNSEEN = 'the fence did not see this agent'
 const NOT_SENT = 'the comment was not sent'
 const HIDDEN_QUESTION = 'The factory has a question about this item. Its text cannot be shown here: see the job on the machine that runs the line.'
-const HIDDEN_REASON = 'The factory needs a person. The reason cannot be shown here: see the job on the machine that runs the line.'
+// What is posted when a job waits for the person who runs the line. The
+// question itself stays on the job: it can hold text that an agent wrote, and
+// an agent with a shell can read what must not be on a public item.
+const NEEDS_PERSON = 'The factory needs a person for this item. The question is in the Factory pane on the machine that runs the line.'
+const MAX_AUTHOR_QUESTION = 300
 
 let isAdvancing = false
 // A call that found another at work asked it to go round once more.
@@ -98,21 +102,6 @@ export async function tidy(io: Io, root: string, dir: string, job: Job): Promise
   for (const map of [gates, repeats, mergeAsked, fails, abandoned]) map.delete(job.id)
 }
 
-// The first lines of a report's summary, as plain text.
-async function summaryOf(io: Io, dir: string, job: Job, name: string): Promise<string[]> {
-  const text = (await readInside(io, dir, `jobs/${job.id}/files/round-${job.round}/${name}`, 200_000)) ?? ''
-  const lines = text.split('\n')
-  const from = lines.findIndex(line => line.trim() === '## Summary')
-  if (from < 0) return []
-  const out: string[] = []
-  for (const line of lines.slice(from + 1)) {
-    if (line.startsWith('#') || out.length >= 5) break
-    if (line.trim() !== '') out.push(clean(line).slice(0, 300))
-  }
-
-  return out
-}
-
 // The test files and build settings the branch changed, from the full gate's report.
 async function testFilesOf(io: Io, dir: string, job: Job): Promise<string[]> {
   const text = (await readInside(io, dir, `jobs/${job.id}/files/round-${job.round}/merge-checks.md`, 300_000)) ?? ''
@@ -144,9 +133,11 @@ function planRowOf(step: Step & { do: 'ask' | 'move' }, maxRisk: string): PlanRo
 type Ask = Step & { do: 'ask' }
 
 // Tells the item that the job waits: the label first (setting it twice
-// changes nothing), then the comment. A comment that the settings refuse (a
-// forbidden word in text an agent wrote) is sent as a fixed text. Answers why
-// it failed, or null.
+// changes nothing), then the comment. Text that an agent wrote is posted in
+// one case only: Intake's question to the item's author (Intake has no shell
+// and reads the clean checkout), cut short, and as a fixed text when the
+// settings refuse it. A limit's name is the plugin's own text. Every other
+// question stays on the job, for the pane. Answers why it failed, or null.
 async function tellItem(ctx: Ctx, job: Job, step: Ask): Promise<string | null> {
   if (ctx.tracker === null) return null
   // Intake's question is for the item's author; every other one is for the person who runs the line.
@@ -154,10 +145,15 @@ async function tellItem(ctx: Ctx, job: Job, step: Ask): Promise<string | null> {
   try {
     await ctx.tracker.setState(job.itemId, 'needs-human')
     try {
-      await ctx.tracker.comment(job.itemId, isForAuthor ? `The factory has a question about this item: ${step.question}` : `The factory needs a person: ${step.question}`)
+      const text = isForAuthor
+        ? `The factory has a question about this item: ${step.question.slice(0, MAX_AUTHOR_QUESTION)}`
+        : step.asker === 'limit'
+          ? `The factory needs a person: ${step.question}`
+          : NEEDS_PERSON
+      await ctx.tracker.comment(job.itemId, text)
     } catch (error) {
       if (!why(error).includes(NOT_SENT)) throw error
-      await ctx.tracker.comment(job.itemId, isForAuthor ? HIDDEN_QUESTION : HIDDEN_REASON)
+      await ctx.tracker.comment(job.itemId, isForAuthor ? HIDDEN_QUESTION : NEEDS_PERSON)
     }
 
     return null
@@ -436,10 +432,9 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
             if ('failed' in made || made.exitCode !== 0) throw new Error('the pull request could not be marked ready')
           }
           const files = await testFilesOf(io, dir, job)
+          // No report text of an agent is posted: the reports are in the job's files, for the pane.
           const text = [
             `The factory finished this. The pull request is ready for you to merge: ${job.pr?.url ?? '(no pull request)'}`,
-            '',
-            ...(await summaryOf(io, dir, job, 'decision.md')),
             '',
             `Test and settings files the branch changed: ${files.length === 0 ? 'none' : files.join(', ')}`,
           ].join('\n')

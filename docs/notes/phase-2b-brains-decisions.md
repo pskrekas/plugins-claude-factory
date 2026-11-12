@@ -50,6 +50,7 @@ What follows from it:
 8. **Only the comments of the item's author and of the person who runs the line
    reach an agent** (design 8.1). `/factory run <id>` runs only an item that
    carries the mark.
+9a. **Text that an agent wrote is not posted on the item,** except Intake's question or refusal for the item's author (Intake has no shell). A job that waits posts a fixed text; the question is on the job, for the pane. The ready comment holds the pull request's address and the names of changed test files, no report text. The pull request itself is agent-written and public: that cannot be closed.
 9. **A job is written only when what is on disk is still the job the step was
    worked out for.** A person's command during a gate wins.
 10. **A job that the line ends stays in the state folder for the rest of its day**
@@ -77,9 +78,12 @@ all). The README's "Before you run the line" says so.
 
 Known gaps that were reported and not fixed:
 
-- A command substitution inside a word (`a$(b)c`); an option value joined to a short
-  flag (`-C.git`); `cd` options (`-P`, `--`); `HOME` or `PWD` set without `=`
-  (`read HOME`).
+- A command substitution inside a word (`a$(b)c`); the git folder joined to a short
+  flag (`-C.git`); `HOME` or `PWD` set without `=` (`read HOME`).
+- The fence follows `cd` from one simple command to the next, and holds a path with
+  `..` to the worktree too. It starts each shell call at the worktree: if the engine
+  keeps the shell's folder between calls, a relative path is judged from the wrong
+  place (toward refusing, not toward allowing).
 - The shell can read any file the person can.
 - A script, a `Makefile` target or an `npm` script that the builder writes runs
   unread.

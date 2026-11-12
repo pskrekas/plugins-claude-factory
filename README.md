@@ -75,6 +75,7 @@ It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
 - **The gate runs the branch's code** with your rights, before a reviewer has read it.
 - **What does not depend on the fence:** the gate runs in its own clean copy of one commit; what the plugin itself pushes is the commit the gate judged, to the job's own branch; the plugin never merges; your branch protection on GitHub still holds. **What does depend on it:** a builder that gets past the fence has your `git` and your `gh` login, and can read and write what you can.
 - **A pushed round starts your CI.** The plugin pushes a job's branch after the fast checks passed, before a reviewer has read it. A workflow that runs on a push runs the branch's code with the secrets that workflow has. A branch that changes a protected path (put `.github/` there) is never pushed.
+- **What goes public.** The pull request is what an agent wrote, pushed to your repository: a builder can commit anything it can read. On the issue the plugin posts its own fixed texts, the name of a limit, the pull request's address, the names of changed test files, and Intake's question or refusal for the item's author. A builder's or a reviewer's own words are never posted there: you read them in the pane.
 - **Who can speak to the agents.** Only an issue that carries the mark runs, and only you put the mark on. Of an issue's comments, only those of its author and yours reach an agent.
 
 ### Start
@@ -99,7 +100,7 @@ It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
 
 Each way back to Build is a round. After `maxRounds` (3) with no pass the job stops and asks you. A risk above `maxRisk` (`low`) stops after Intake and asks you.
 
-Each agent reads the job's files and writes exactly one file. Its answer is one line that starts with a fixed word (`DONE`, `OK`, `CHANGES`, `READY`, …); the plugin decides by that word. A question or a reason on that line is shown to you and posted on the item; nothing else an agent says is read. An answer the line cannot read starts the station once more, then asks you. An agent that does not answer within `factory.stationTimeoutMin` (30) makes its job ask; `/factory answer <id>` starts the station again. The plugin cannot stop an agent: one it gave up on may still work for a while, and its station does not start again until it has ended.
+Each agent reads the job's files and writes exactly one file. Its answer is one line that starts with a fixed word (`DONE`, `OK`, `CHANGES`, `READY`, …); the plugin decides by that word. A question or a reason on that line is shown to you in the pane (only Intake's goes on the item); nothing else an agent says is read. An answer the line cannot read starts the station once more, then asks you. An agent that does not answer within `factory.stationTimeoutMin` (30) makes its job ask; `/factory answer <id>` starts the station again. The plugin cannot stop an agent: one it gave up on may still work for a while, and its station does not start again until it has ended.
 
 A step that cannot be done (a push that is refused, a label that cannot be set) is tried once more at the next call. After two tries the job waits for you, with the reason.
 

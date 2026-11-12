@@ -129,7 +129,7 @@ const namesGitFolder = (text: string) => {
 // set one of git's own.
 const SETTERS = ['export', 'declare', 'typeset', 'local', 'readonly', 'read', 'set', 'unset']
 const GIT_PLACES = ['-c', '-C', '--git-dir', '--work-tree', '--exec-path', '--namespace']
-const WRITERS = ['rm', 'mv', 'cp', 'ln', 'tee', 'chmod', 'chown', 'truncate', 'dd', 'touch', 'mkdir', 'rmdir', 'install', 'rsync']
+const WRITERS = ['rm', 'mv', 'cp', 'ln', 'tee', 'chmod', 'chown', 'truncate', 'dd', 'touch', 'mkdir', 'rmdir', 'install', 'rsync', 'tar', 'unzip', 'curl', 'wget']
 const baseName = (word: string) => word.slice(word.lastIndexOf('/') + 1)
 const unquote = (word: string) => word.replace(/^['"]+|['"]+$/g, '')
 const isRemoteName = (word: string | undefined) => word !== undefined && (word.startsWith('origin/') || word.startsWith('refs/'))
@@ -175,7 +175,10 @@ function gitVerdict(words: string[], simple: string): Deny | null {
     if (!isFiles) return deny(STAY, simple)
   }
   // A fetch or a pull that writes a local branch, or takes from this repository itself.
-  if ((sub === 'fetch' || sub === 'pull') && rest.some(word => word.includes(':') || word === '.')) return deny(STAY, simple)
+  // Also one that takes what to fetch from a place the fence does not read.
+  const isOddFetch = (word: string) =>
+    word.includes(':') || word === '.' || word.startsWith('+') || ['--stdin', '--refmap', '--upload-pack', '-u', '--update-head-ok'].some(flag => word === flag || word.startsWith(flag + '='))
+  if ((sub === 'fetch' || sub === 'pull') && rest.some(isOddFetch)) return deny(STAY, simple)
   if (sub === 'branch' && rest.some(word => !word.startsWith('-') || BRANCH_CHANGES.includes(word))) return deny(STAY, simple)
   // A new branch or tag whose name could be read in the base's place.
   if ((sub === 'branch' || sub === 'tag') && isRemoteName(rest.find(word => !word.startsWith('-')))) return deny(REF, simple)
@@ -225,9 +228,18 @@ function simpleVerdict(simple: string, who: Who, depth: number, at: { cwd: strin
   // The shell stays inside the job (or in scratch space): a write after a
   // change of folder is then inside it too.
   const isInJob = (full: string | null) => full !== null && (isIn(full, who.worktree) || full === who.outFile || SCRATCH.some(folder => isIn(full, folder)))
+  // The folder that `at.cwd` holds is where the shell is only when every `cd`
+  // before took effect; one in brackets, in a pipe or in the background did
+  // not. So a path with `..` must be inside the job from the worktree too,
+  // which is the highest folder of the job the shell can be in.
+  const isInside = (path: string) =>
+    isInJob(resolvePath(path, at.cwd)) && (!path.split('/').includes('..') || isInJob(resolvePath(path, who.worktree)))
   if (program === 'cd' || program === 'pushd') {
-    const to = resolvePath(words.slice(1).find(word => !word.startsWith('-')) ?? '', at.cwd)
-    if (!isInJob(to) || to === null) return deny(OUT_WRITE, simple)
+    // One folder, and no entry of the folder stack (`+1`, `-2`).
+    const folders = words.slice(1).filter(word => !word.startsWith('-') && !word.startsWith('+'))
+    if (folders.length !== 1 || words.slice(1).some(word => /^[+-]\d+$/.test(word))) return deny(NOT_PLAIN, simple)
+    const to = resolvePath(folders[0] ?? '', at.cwd)
+    if (to === null || !isInside(folders[0] ?? '')) return deny(OUT_WRITE, simple)
     at.cwd = to
   }
   if (SETTERS.includes(program) && words.slice(1).some(isOdd)) return deny(NOT_PLAIN, simple)
@@ -249,10 +261,15 @@ function simpleVerdict(simple: string, who: Who, depth: number, at: { cwd: strin
   // A path in a write is inside the job (the worktree, the one report file)
   // or in scratch space. The text check cannot tell what is read from what is
   // written, so every full path and every path with `..` is held to this.
-  // A path can follow a write mark or an `=` with no space (`x>/path`, `--to=/path`).
-  for (const path of raw.flatMap(word => unquote(word).split(/[>=]/))) {
+  // A path can follow a write mark or an `=` with no space (`x>/path`,
+  // `--to=/path`), or a one-letter option (`-t/path`).
+  const pathsOf = (word: string) =>
+    unquote(word)
+      .replace(/^-[A-Za-z]+(?=[/.])/, '')
+      .split(/[>=]/)
+  for (const path of raw.flatMap(pathsOf)) {
     if (!path.startsWith('/') && !path.split('/').includes('..')) continue
-    if (!isInJob(resolvePath(path, at.cwd))) return deny(OUT_WRITE, simple)
+    if (!isInside(path)) return deny(OUT_WRITE, simple)
   }
 
   return null
