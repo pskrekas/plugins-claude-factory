@@ -88,3 +88,27 @@ test('a read sets the time and the status line', async ($, on) => {
   expect(await paneText($)).toContain('read 0 s ago')
   expect(world.status.length).toBeGreaterThan(0)
 })
+
+test('commands shown for one repo are never approved for another', async ($, on) => {
+  const world = engine(on, {
+    files: {
+      '/r/.claude/factory.json': CHECK,
+      '/other/.claude/factory.json': '{"checks":[{"name":"a","run":["evil"]}]}',
+    },
+  })
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+
+  // The session moves to another repo after the panel showed the first one's command.
+  world.root = '/other'
+  expect((await $.command.run(cmd('approve'))).text).toBe(
+    'Not approved yet. The settings file names 1 command:\nevil\nRun /factory approve again to allow it.',
+  )
+  expect((await $.command.run(cmd('approve'))).text).toBe('Approved 1 command:\nevil')
+
+  // The first repo's command was shown, but never approved.
+  world.root = '/r'
+  await $.command.run(cmd(''))
+  expect(await paneText($)).toContain('SETTINGS NOT APPROVED')
+  expect(world.ran).toEqual([])
+})

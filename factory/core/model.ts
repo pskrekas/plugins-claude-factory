@@ -15,6 +15,7 @@ export type {
 
 export function emptyModel(): PanelModel {
   return {
+    root: null,
     consent: 'none',
     pendingCommands: [],
     settingsError: null,

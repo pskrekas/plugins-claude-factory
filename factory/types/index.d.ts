@@ -51,6 +51,8 @@ export type WorktreeRow = { path: string; branch: string | null; isMerged: boole
 export type Consent = 'none' | 'needed' | 'approved'
 
 export type PanelModel = {
+  // The repo this model was read for: its commands are approved for it only.
+  root: string | null
   consent: Consent
   pendingCommands: string[]
   settingsError: string | null

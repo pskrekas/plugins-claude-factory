@@ -79,6 +79,7 @@ export function engine(
     sounds: 0,
     writes: [] as string[],
     isOpen: false,
+    root: '/r',
     clock: mock.clock(on, { now: world.now ?? 0 }),
   }
   mock.store(on)
@@ -114,8 +115,8 @@ export function engine(
     return { value: undefined }
   })
   on('agent.list', () => ({ value: (world.agents ?? []) as never }))
-  on('session.repo', () => ({ value: { root: '/r', remote: world.remote ?? null } as never }))
-  on('session.cwd', () => ({ value: '/r' }))
+  on('session.repo', () => ({ value: { root: seen.root, remote: world.remote ?? null } as never }))
+  on('session.cwd', () => ({ value: seen.root }))
   on('fs.read', (_, e) => {
     const text = seen.files[e.path]
     if (text === undefined) throw new Error('ENOENT: no such file ' + e.path)

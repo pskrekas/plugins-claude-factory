@@ -6,6 +6,7 @@ import type { Settings } from '../core/settings'
 import type { Io } from './io'
 import { progressReader } from './readers/progress'
 import { loadSettings } from './readers/settings'
+import type { Loaded } from './readers/settings'
 
 export type Ctx = { root: string; settings: Settings; consent: Consent; now: number }
 
@@ -18,8 +19,8 @@ export type Reader = {
 
 export const readers: Reader[] = [progressReader]
 
-export async function refresh(io: Io): Promise<PanelModel> {
-  const loaded = await loadSettings(io)
+export async function refresh(io: Io, given?: Loaded): Promise<PanelModel> {
+  const loaded = given ?? (await loadSettings(io))
   const now = await io.now()
   const prev = await io.getModel()
   const ctx: Ctx = { root: loaded.root, settings: loaded.settings, consent: loaded.consent, now }
@@ -28,6 +29,7 @@ export async function refresh(io: Io): Promise<PanelModel> {
   const isApproved = loaded.consent === 'approved'
   const model: PanelModel = {
     ...prev,
+    root: loaded.root,
     consent: loaded.consent,
     pendingCommands: loaded.consent === 'needed' ? loaded.commands : [],
     settingsError: loaded.error,
@@ -53,27 +55,36 @@ const it = (lines: string[]) => (lines.length === 1 ? 'it' : 'them')
 const again = (lines: string[]) =>
   `${lines.join('\n')}\nRun /factory approve again to allow ${it(lines)}.`
 
-// `/factory approve`: allows exactly the commands the panel last showed. A file
-// that was never shown, or that changed since, is shown first and approved by a
-// second run, so the person never approves a line they did not see.
+const sameLines = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((line, i) => line === b[i])
+
+// `/factory approve`: allows exactly the commands the panel last showed, for
+// the repo it showed them for. The settings file is read again first: a file
+// that was never shown, that changed since, or that belongs to another repo
+// than the one on screen is shown now and approved only by a second run. So
+// the person never approves a line they did not see.
 export async function approve(io: Io): Promise<string> {
-  const shown = (await io.getModel()).pendingCommands
-  if (shown.length === 0) {
-    const now = await refresh(io)
-    if (now.consent !== 'needed') return 'Nothing to approve.'
-    const lines = now.pendingCommands
+  const onScreen = await io.getModel()
+  const loaded = await loadSettings(io)
+  if (loaded.consent !== 'needed') {
+    await refresh(io, loaded)
 
-    return `Not approved yet. The settings file names ${count(lines)}:\n${again(lines)}`
+    return 'Nothing to approve.'
   }
-  const key = storeKey(await io.root())
+  const lines = loaded.commands
+  const wasShown = onScreen.root === loaded.root && onScreen.pendingCommands.length > 0
+  if (!wasShown || !sameLines(onScreen.pendingCommands, lines)) {
+    await refresh(io, loaded)
+    const why = wasShown
+      ? `The settings file changed. It now names ${count(lines)}`
+      : `Not approved yet. The settings file names ${count(lines)}`
+
+    return `${why}:\n${again(lines)}`
+  }
+  const key = storeKey(loaded.root)
   const before = approvedOf(await io.storeGet(key))
-  await io.storeSet(key, [...new Set([...before, ...shown])].sort())
-  const now = await refresh(io)
-  if (now.consent === 'needed') {
-    const lines = now.pendingCommands
+  await io.storeSet(key, [...new Set([...before, ...lines])].sort())
+  await refresh(io)
 
-    return `The settings file changed. It now names ${count(lines)}:\n${again(lines)}`
-  }
-
-  return `Approved ${count(shown)}:\n${shown.join('\n')}`
+  return `Approved ${count(lines)}:\n${lines.join('\n')}`
 }
