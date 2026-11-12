@@ -12,11 +12,12 @@ import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
 import { ROLES } from '../core/factory-settings'
 import { ancestorsOf, confirmedTop } from '../core/top'
-import { isOwnReport, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
+import { checkedSpawn, isOwnReport, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
 import type { Io } from './io'
 import { answerJob, rejectJob, stopLine } from './commands'
 import { init } from './init'
 import { whereText } from './jobs'
+import { advance } from './line'
 import { loadSettings } from './readers/settings'
 import { approve, refresh, refreshAgents } from './refresh'
 import { PANE, TITLE } from './state'
@@ -279,10 +280,19 @@ export const register: Register = (on, options) => {
     return verdict === null ? next(e) : verdict
   })
 
+  // The end of a turn. For an agent of the line it is a fact for the inbox.
+  // Then the jobs are advanced here, in this hook: an agent is fenced only
+  // when a hook that is still running starts it (docs/notes/r2b-check.md).
+  // The end of one of the session's own turns advances the line too, so a
+  // station that was left for a hook is picked up.
   on('turn.complete', async ($, e, next) => {
-    if (io !== null) await onTurn(io, e).catch(() => false)
+    const ready = io
+    if (ready !== null) await onTurn(ready, e).catch(() => false)
     const done = await next(e)
-    if (io !== null && e.agentId !== undefined) void refreshAgents(io).catch(() => undefined)
+    if (ready !== null) {
+      await advance(ready, a => checkedSpawn(ready, input => $.agent.spawn(input), a)).catch(() => undefined)
+      if (e.agentId !== undefined) void refreshAgents(ready).catch(() => undefined)
+    }
 
     return done
   })

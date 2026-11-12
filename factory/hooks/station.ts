@@ -84,6 +84,17 @@ export async function collect(
   return { ok: true }
 }
 
+// Removes what an agent left in `out/` for a station that starts again, so
+// that the file of a failed try is never taken for the next try's.
+export async function discardOut(io: Io, root: string, job: Job, role: Role, focus: string): Promise<void> {
+  const dir = await stateDirOf(io, root)
+  if (dir === null || (role === 'reviewer' && !isFocus(focus))) return
+  const [folder, out] = await Promise.all([io.stat(`${dir}/jobs/${job.id}`), io.stat(`${dir}/jobs/${job.id}/out`)])
+  if (folder !== null && out !== null && out.realPath === `${folder.realPath}/out`) {
+    await io.run(['rm', '-f', `${out.realPath}/${OUT_FILE[role](focus)}`])
+  }
+}
+
 // The job after an agent's turn: the agent is off its work, and its time and
 // its estimated cost are added at the job's station.
 export function spendOf(job: Job, fact: Fact & { kind: 'turn' }, f: FactorySettings, now: number): Job {

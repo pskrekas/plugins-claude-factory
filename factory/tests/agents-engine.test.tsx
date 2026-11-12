@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { move, newJob, startWork } from '../core/job'
 import type { Job } from '../core/job'
+import { lockText } from '../core/lock'
 import { START, STATE, engine } from './kit'
 
 const NOW = 1_000_000
@@ -71,4 +72,34 @@ test('only the line starts an agent of its types, and it starts in the job\'s wo
   // Another kind of agent is not touched.
   await $.agent.spawn({ subagentType: 'general-purpose', description: 'x', prompt: 'p' } as never)
   expect(w.spawned.at(-1)).toEqual({ type: 'general-purpose', description: 'x', cwd: undefined })
+})
+
+test('when an agent of the line ends, its hook advances the job; a new agent that the fence did not see stops the line', async ($, on) => {
+  const spec = startWork(move(newJob({ id: '35', title: 'A thing' }, 1), 'spec', 'ok', 1, { risk: 'low', surfaces: [], reviewers: ['code'] }), { agentId: 'e35', role: 'spec', focus: '', startedAt: NOW }, NOW)
+  const w = engine(on, {
+    files: {
+      [`${STATE}/jobs/${spec.id}/job.json`]: JSON.stringify(spec),
+      [`${STATE}/jobs/${spec.id}/out/spec.md`]: '## Summary\n- build it',
+      [`${STATE}/worktrees/${spec.id}/README.md`]: 'x',
+      [`${STATE}/run.json`]: JSON.stringify({ version: 1, session: 'session-1', startedAt: NOW, queue: [] }),
+      [`${STATE}/lock.1/holder`]: lockText('session-1', NOW, '/r'),
+    },
+    agents: [{ id: 'e35', status: 'completed', type: 'factory:spec', description: 'x' }],
+    now: NOW,
+  })
+  await $.session.start(START)
+  await $.turn.complete({ agentId: 'e35', answer: 'DONE', durationMs: 60_000, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+
+  // The hook advanced the job: the spec's file was taken, the job is in Build,
+  // and the builder was started with the line's own description.
+  const job = JSON.parse(w.files[`${STATE}/jobs/${spec.id}/job.json`] ?? '{}') as Job
+  expect(job.stage).toBe('build')
+  expect(w.files[`${STATE}/jobs/${spec.id}/files/spec.md`]).toBe('## Summary\n- build it')
+  expect(w.spawned.map(one => one.description)).toEqual([`factory builder ${spec.id}`])
+  // This test engine does not run the plugin's own agent.spawn hook for a
+  // spawn the plugin makes (the real engine does: docs/notes/r2b-check.md).
+  // So the fence did not see the agent, and the line stops itself.
+  expect(job.work).toEqual([])
+  expect(w.files[`${STATE}/stop`]).toBe('stop\n')
+  expect(w.toasts).toContain('Factory: an agent started outside the fence. The line is stopped.')
 })

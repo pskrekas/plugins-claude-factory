@@ -323,6 +323,7 @@ export function fakeIo(
     links?: Set<string>
     // A path whose real place is another one.
     reals?: Record<string, string>
+    remote?: string | null
   } = {},
 ) {
   const files = world.files ?? {}
@@ -348,7 +349,7 @@ export function fakeIo(
       | null,
     now: async () => io.time,
     root: async () => '/r',
-    remote: async () => null,
+    remote: async () => world.remote ?? null,
     sessionId: async () => io.session,
     stateDir: async () => world.stateDir ?? '/state',
     stat: async (path: string) => {
@@ -459,8 +460,13 @@ export function fakeIo(
     toast: (text: string) => {
       io.toasts.push(text)
     },
-    sound: () => undefined,
-    agents: async () => [],
+    sounds: 0,
+    sound: () => {
+      io.sounds += 1
+    },
+    // The session's agents, as the engine lists them.
+    agentList: [] as { id: string; status: string; type: string; description: string }[],
+    agents: async () => io.agentList as never,
     isPaneDrawn: async () => true,
   }
 

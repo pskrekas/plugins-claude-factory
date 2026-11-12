@@ -30,8 +30,10 @@ const MAX_TEXT = 20_000
 const ITEM_ID = /^[A-Za-z0-9#][A-Za-z0-9_.#-]{0,39}$/
 const NO_TRACKER = ' No tracker is set: nothing was written to one.'
 
-type Ctx = {
+export type Ctx = {
   root: string
+  // The branch jobs start from and are compared with.
+  base: string
   now: number
   f: FactorySettings
   run: Run
@@ -40,7 +42,9 @@ type Ctx = {
   mark: string | null
 }
 
-async function context(io: Io): Promise<Ctx> {
+// What a command or the line needs to act: the repo, the settings, and the
+// tracker when there is one.
+export async function context(io: Io): Promise<Ctx> {
   const { settings, root } = await loadSettings(io)
   const remote = await io.remote()
   // Every gh call names the repository of `origin`. A remote that names none
@@ -53,6 +57,7 @@ async function context(io: Io): Promise<Ctx> {
 
   return {
     root,
+    base: settings.baseBranch,
     now: await io.now(),
     f: settings.factory,
     run,
