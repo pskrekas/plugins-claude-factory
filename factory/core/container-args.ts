@@ -1,0 +1,87 @@
+// Every docker call the factory makes, as a plain argument list. Pure.
+//
+// This is the whole list. A container of the factory sees one folder (a job's
+// worktree, or the gate's clean copy), at its own path; it gets no right that
+// a plain process does not have; and no word of an agent is an option of
+// `docker`: a builder's command is one argument of `sh -c` inside the
+// container. A test checks every list this file can answer against those rules.
+import { isImage } from './factory-settings'
+import type { ContainerSpec } from './factory-settings'
+import { isJobId } from './job'
+
+const MAX_COMMAND = 100_000
+
+export const containerName = (kind: 'job' | 'gate', jobId: string): string => (kind === 'job' ? `factory-${jobId}` : `factory-gate-${jobId}`)
+
+export type DockerCall =
+  | { do: 'image'; image: string }
+  | { do: 'make'; name: string; spec: ContainerSpec; folder: string; user: string; label: string; hasGitFile: boolean }
+  | { do: 'running'; name: string }
+  | { do: 'shell'; name: string; cwd: string; command: string }
+  | { do: 'argv'; name: string; cwd: string; argv: string[] }
+  | { do: 'remove'; name: string }
+  | { do: 'list'; label: string }
+
+// `factory-<job id>` or `factory-gate-<job id>`: the factory touches no other container.
+const isName = (name: string) => {
+  const id = name.startsWith('factory-gate-') ? name.slice('factory-gate-'.length) : name.startsWith('factory-') ? name.slice('factory-'.length) : ''
+
+  return id !== '' && isJobId(id)
+}
+// An absolute path with no `..`, no `:` (the mount's own separator), no space and no control character.
+const isFolder = (path: string) => path.startsWith('/') && !path.split('/').includes('..') && !/[\s:\u0000-\u001f\u007f]/.test(path)
+const isSpec = (spec: ContainerSpec) =>
+  isImage(spec.image) && (spec.network === 'on' || spec.network === 'none') && /^[1-9][0-9]{0,5}[mg]$/.test(spec.memory) && spec.cpus >= 0.5 && spec.cpus <= 16
+const isLabel = (label: string) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(label)
+
+// The argument list of a call, or null when one of its values breaks a rule.
+export function dockerArgs(call: DockerCall): string[] | null {
+  if ('name' in call && !isName(call.name)) return null
+  if ('cwd' in call && !isFolder(call.cwd)) return null
+  if ('label' in call && !isLabel(call.label)) return null
+
+  switch (call.do) {
+    case 'image':
+      return isImage(call.image) ? ['docker', 'image', 'inspect', '--format', '{{.Id}}', call.image] : null
+    case 'make': {
+      if (!isSpec(call.spec) || !isFolder(call.folder) || !/^\d{1,10}:\d{1,10}$/.test(call.user)) return null
+      const { folder, spec } = call
+
+      return [
+        'docker', 'run', '-d',
+        '--name', call.name,
+        '--label', `factory.state=${call.label}`,
+        '--init',
+        // No right that a plain process does not have, and none to gain.
+        '--cap-drop', 'ALL',
+        '--security-opt', 'no-new-privileges',
+        '--pids-limit', '512',
+        '--memory', spec.memory,
+        '--cpus', String(spec.cpus),
+        '--network', spec.network === 'on' ? 'bridge' : 'none',
+        // The person's own user id, so files in the mounted folder stay the person's.
+        '--user', call.user,
+        '-e', 'HOME=/tmp',
+        // The one folder it sees, at its own path.
+        '-v', `${folder}:${folder}`,
+        // A worktree's `.git` is a file that names the repository's git folder
+        // (which is not in the container). It cannot be changed from inside.
+        ...(call.hasGitFile ? ['-v', `${folder}/.git:${folder}/.git:ro`] : []),
+        '-w', folder,
+        spec.image,
+        'sleep', 'infinity',
+      ]
+    }
+    case 'running':
+      return ['docker', 'inspect', '--format', '{{.State.Running}}', call.name]
+    case 'shell':
+      // The command is one argument: only the shell inside the container reads it.
+      return call.command === '' || call.command.length > MAX_COMMAND ? null : ['docker', 'exec', '-w', call.cwd, call.name, 'sh', '-c', call.command]
+    case 'argv':
+      return call.argv.length === 0 ? null : ['docker', 'exec', '-w', call.cwd, call.name, ...call.argv]
+    case 'remove':
+      return ['docker', 'rm', '-f', call.name]
+    case 'list':
+      return ['docker', 'ps', '-a', '--filter', `label=factory.state=${call.label}`, '--format', '{{.Names}}']
+  }
+}
