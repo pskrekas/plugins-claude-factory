@@ -10,7 +10,7 @@ import type { Job } from '../core/job'
 import { STALE_MS, holderOf, lockOf, lockText } from '../core/lock'
 import { stateFolderOf } from '../core/state-path'
 import type { Io } from './io'
-import { readInside } from './readers/files'
+import { readInside, writeInside } from './readers/files'
 import { consentKeyOf } from './readers/repo'
 
 const MAX_JOB_BYTES = 256 * 1024
@@ -116,7 +116,7 @@ export async function writeJob(io: Io, root: string, job: Job): Promise<void> {
   // Written beside the job file, read back, then renamed over it: one rename,
   // so a reader sees the old job or the new one and never half of one.
   const file = `${state.dir}/jobs/${job.id}/job.json`
-  await io.writeFile(`${file}.tmp`, text)
+  await writeInside(io, state.dir, `jobs/${job.id}/job.json.tmp`, text)
   const back = await readInside(io, state.dir, `jobs/${job.id}/job.json.tmp`, MAX_JOB_BYTES)
   if (back === null || parseJob(back, job.id) === null) throw new Error(`the job file did not read back: ${job.id}`)
   if (!ran(await io.run(['mv', '-f', `${file}.tmp`, file]))) throw new Error(`the job file could not be put in place: ${job.id}`)
@@ -164,7 +164,7 @@ export async function writeJobFile(io: Io, root: string, id: string, name: strin
   const state = await stateOf(io, root)
   if (!isJobId(id) || !FILE_NAME.test(name)) throw new Error(`not a job file name: ${name.slice(0, 60)}`)
   if ('no' in state || !(await claim(io, state))) throw new Error('no' in state ? state.no : NOT_OURS)
-  await io.writeFile(`${state.dir}/jobs/${id}/files/${name}`, text.slice(0, MAX_FILE_CHARS))
+  await writeInside(io, state.dir, `jobs/${id}/files/${name}`, text.slice(0, MAX_FILE_CHARS))
 }
 
 // What the person told a job: one more numbered file. Answers the job with
@@ -180,7 +180,7 @@ export async function addFeedback(io: Io, root: string, job: Job, text: string):
 export async function setStop(io: Io, root: string, isOn: boolean): Promise<void> {
   const state = await stateOf(io, root)
   if ('no' in state || !(await claim(io, state))) throw new Error('no' in state ? state.no : NOT_OURS)
-  await io.writeFile(`${state.dir}/stop`, isOn ? 'stop\n' : '')
+  await writeInside(io, state.dir, 'stop', isOn ? 'stop\n' : '')
 }
 
 export async function isStopped(io: Io, root: string): Promise<boolean> {

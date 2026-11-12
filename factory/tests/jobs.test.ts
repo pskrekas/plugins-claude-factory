@@ -384,3 +384,34 @@ test('lockInfo reads who holds the lock and never writes', async () => {
   // A lock with no heartbeat for five minutes holds nothing.
   expect(await lockInfo(me, '/r', 1000 + STALE_MS + 1)).toEqual({ state: 'free', holder: null })
 })
+
+test('a file of a job is never written through a link', async () => {
+  const j = job('1')
+  const files = `${DIR}/jobs/${j.id}/files`
+  for (const link of [`${files}/spec.md`, `${files}/round-1`, files, `${DIR}/jobs/${j.id}`]) {
+    const io = fakeIo({ files: { '/r/x': '' }, links: new Set([link]) })
+    await writeJob(io, '/r', j).catch(() => undefined)
+    const before = Object.keys(io.files).length
+    for (const name of ['spec.md', 'round-1/checks.md']) {
+      const hits = `${files}/${name}`.startsWith(link)
+      let error: unknown = null
+      await writeJobFile(io, '/r', j.id, name, 'text').catch(caught => (error = caught))
+      expect(error !== null).toBe(hits)
+    }
+    // Nothing was written at the link, or under it.
+    expect(Object.keys(io.files).some(file => file === link || file.startsWith(link + '/'))).toBe(false)
+    expect(Object.keys(io.files).length).toBeGreaterThanOrEqual(before)
+  }
+})
+
+test('a job file and a job are not written into a folder that is a link', async () => {
+  const j = job('1')
+  const io = fakeIo({ files: { '/r/x': '' }, links: new Set([`${DIR}/jobs/${j.id}`]) })
+  let error: unknown = null
+  await writeJob(io, '/r', j).catch(caught => (error = caught))
+  expect(error).not.toBe(null)
+  error = null
+  await writeJobFile(io, '/r', j.id, 'spec.md', 'x').catch(caught => (error = caught))
+  expect(error).not.toBe(null)
+  expect(Object.keys(io.files).filter(file => file.includes('/jobs/'))).toEqual([])
+})

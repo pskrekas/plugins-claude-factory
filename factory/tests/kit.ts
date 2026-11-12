@@ -272,6 +272,8 @@ export function fakeIo(
     session?: string
     now?: number
     stateDir?: string
+    // Paths that are symbolic links.
+    links?: Set<string>
   } = {},
 ) {
   const files = world.files ?? {}
@@ -300,7 +302,7 @@ export function fakeIo(
 
       return isDir(path) ? { kind: 'dir' as const, size: 0, mtimeMs: dirs.get(path) ?? 0, realPath: path } : null
     },
-    isLink: async () => false,
+    isLink: async (path: string) => world.links?.has(path) ?? false,
     readFile: async (path: string) => {
       io.reads.push(path)
 
