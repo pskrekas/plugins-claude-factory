@@ -4,6 +4,7 @@ import type { Engine } from 'claude-code/testing'
 import { mock } from 'claude-code/testing'
 
 import { emptyModel } from '../core/model'
+import { stateFolderOf } from '../core/state-path'
 import type { FactoryView, JobView, PanelModel } from '../core/model'
 
 export const PANE = {
@@ -75,8 +76,6 @@ export function engine(
     path?: string
     // Last change of a file, for the newest-first order.
     mtimes?: Record<string, number>
-    // True when git tracks a file under .factory/.
-    tracked?: boolean
   },
 ) {
   const seen = {
@@ -193,14 +192,13 @@ export function engine(
       value: [...names].map(([name, isDir]) => ({ name, kind: isDir ? 'dir' : 'file', size: 0, mtimeMs: 0 })) as never,
     }
   })
-  on('env.get', (_, e) => ({ value: e.name === 'PATH' ? (world.path ?? '/usr/bin:/bin') : undefined }))
+  on('env.get', (_, e) => ({
+    value: e.name === 'PATH' ? (world.path ?? '/usr/bin:/bin') : e.name === 'HOME' ? '/home/me' : undefined,
+  }))
   on('process.run', (_, e) => {
     // The top of the working tree: answered here, and not counted as a run.
     if (e.argv.join(' ') === 'git rev-parse --show-toplevel') {
       return { value: { exitCode: 0, stdout: seen.root + '\n', stderr: '' } as never }
-    }
-    if (e.argv.join(' ') === 'git ls-files --error-unmatch .factory') {
-      return { value: { exitCode: world.tracked ? 0 : 1, stdout: '', stderr: '' } as never }
     }
     seen.cwds.push(e.init?.cwd)
     seen.ran.push(e.argv.join(' '))
@@ -248,7 +246,7 @@ export const COMPOSE = {
 // An Io held in memory, for code that takes an Io and needs no engine: a file
 // map, a session id, a clock. `git ls-files` says whether .factory is tracked.
 export function fakeIo(
-  world: { files?: Record<string, string>; session?: string; now?: number; tracked?: boolean } = {},
+  world: { files?: Record<string, string>; session?: string; now?: number } = {},
 ) {
   const files = world.files ?? {}
   const isDir = (path: string) => Object.keys(files).some(file => file.startsWith(path + '/'))
@@ -263,6 +261,7 @@ export function fakeIo(
     root: async () => '/r',
     remote: async () => null,
     sessionId: async () => io.session,
+    stateDir: async () => '/state',
     stat: async (path: string) => {
       const text = files[path]
       if (text !== undefined) return { kind: 'file' as const, size: text.length, mtimeMs: 0, realPath: path }
@@ -290,9 +289,6 @@ export function fakeIo(
     },
     run: async (argv: string[]) => {
       io.ran.push(argv.join(' '))
-      if (argv.join(' ') === 'git ls-files --error-unmatch .factory') {
-        return { exitCode: world.tracked ? 0 : 1, stdout: '', stderr: '' }
-      }
 
       return { failed: 'not-found' as const }
     },
@@ -348,3 +344,7 @@ export const VIEW: FactoryView = {
   today: { done: 3, minutes: 41, costUsd: 9.8, firstRound: 2, finished: 3 },
   note: null,
 }
+
+// Where the factory keeps the state of the repo at /r: under the person's home
+// (the kit's HOME is /home/me), never in the repo.
+export const STATE = '/home/me/.local/state/claude-factory/' + stateFolderOf('/r')

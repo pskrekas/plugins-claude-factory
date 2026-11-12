@@ -61,10 +61,9 @@ test('/factory init writes a first settings file, which then waits for approval'
   await $.session.start(START)
 
   expect((await $.command.run(cmd('init'))).text).toBe(
-    'Wrote .claude/factory.json. Read it, then run /factory approve. .factory/ is in .gitignore.',
+    'Wrote .claude/factory.json. Read it, then run /factory approve.',
   )
-  expect(world.writes).toEqual(['/r/.claude/factory.json', '/r/.gitignore'])
-  expect(world.files['/r/.gitignore']).toBe('.factory/\n')
+  expect(world.writes).toEqual(['/r/.claude/factory.json'])
   const { settings, error } = parseSettings(world.files['/r/.claude/factory.json'] ?? null)
   expect(error).toBe(null)
   expect(settings.baseBranch).toBe('develop')
@@ -101,35 +100,4 @@ test('an unknown argument lists the commands', async ($, on) => {
   expect((await $.command.run(cmd('nope'))).text).toBe(
     'Commands: /factory, /factory close, /factory init, /factory approve',
   )
-})
-
-test('/factory init adds .factory/ to an existing .gitignore, once', async ($, on) => {
-  const world = engine(on, { files: { '/r/.gitignore': 'node_modules/' }, run: git })
-  await $.session.start(START)
-  await $.command.run(cmd('init'))
-
-  expect(world.files['/r/.gitignore']).toBe('node_modules/\n.factory/\n')
-})
-
-test('/factory init leaves a .gitignore that already has the line', async ($, on) => {
-  const world = engine(on, { files: { '/r/.gitignore': 'dist/\n.factory\n' }, run: git })
-  await $.session.start(START)
-
-  expect((await $.command.run(cmd('init'))).text).toBe(
-    'Wrote .claude/factory.json. Read it, then run /factory approve.',
-  )
-  expect(world.files['/r/.gitignore']).toBe('dist/\n.factory\n')
-})
-
-test('/factory init does not write a .gitignore that is a link', async ($, on) => {
-  const world = engine(on, {
-    files: { '/elsewhere/ignore': 'x\n' },
-    links: { '/r/.gitignore': '/elsewhere/ignore' },
-    run: git,
-  })
-  await $.session.start(START)
-  await $.command.run(cmd('init'))
-
-  expect(world.files['/elsewhere/ignore']).toBe('x\n')
-  expect(world.writes).toEqual(['/r/.claude/factory.json'])
 })

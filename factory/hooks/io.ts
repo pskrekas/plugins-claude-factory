@@ -15,6 +15,9 @@ export type Io = {
   remote: () => Promise<string | null>
   // This session's id: what the lock file names its holder by.
   sessionId: () => Promise<string>
+  // The folder of the person's own where the factory keeps its state, or null
+  // when there is no home folder. Never a folder of the repo.
+  stateDir: () => Promise<string | null>
   // What a path is, how large, and where it really is once every symbolic
   // link is followed; null when there is nothing there.
   stat: (

@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-12-factory-plugin-design.md`, sections 4.1 (FACTORY row), 4.2, 4.3, 5.1 (station names only), 5.3, 5.4 (the sums and the score, not how cost is measured), 5.5 (the queue rule), 6 (`factory` keys), 8.1 (lock, limits, `maxRisk`). **Not in this plan** (they are phase 2b): starting agents, the fence, the gate's run, worktrees, any write to the tracker or the PR host, `/factory plan|run|stop|answer|reject`, the approval of gate commands, custom station prompts.
 
+## Changed during the build
+
+The state is **not** kept in `<working tree>/.factory/`, as the tasks below still say. A security review of Task 4 showed that a folder handed to someone (an archive with its own `.git`) can bring untracked job files, so no check of the repo can make such a folder trustworthy. The state is kept under the person's home instead: `$XDG_STATE_HOME/claude-factory/<repo>/` or `~/.local/state/claude-factory/<repo>/` (`factory/core/state-path.ts`, `Io.stateDir`), one folder per repository, shared by its worktrees. The "tracked by git" rule, the `.gitignore` line of `/factory init` and Review Focus 1 are replaced by: a `.factory/` folder in a repo is never read.
+
 ## Global Constraints
 
 - Everything in phase 1's plan (`docs/superpowers/plans/2026-11-12-phase-1-panel.md`, "Global Constraints") still holds: no project or company names, no stored tokens, all rules in `factory/core/` as pure functions, no row wider than the pane, a section with nothing to show takes no room.

@@ -7,6 +7,7 @@ import { rowsOf } from '../core/layout'
 import type { Tone } from '../core/layout'
 import { emptyModel } from '../core/model'
 import { failureOf } from '../core/run'
+import { stateBaseOf } from '../core/state-path'
 import type { Io } from './io'
 import { init } from './init'
 import { approve, refresh, refreshAgents } from './refresh'
@@ -90,6 +91,11 @@ export const register: Register = (on, options) => {
           .then(repo => repo?.remote ?? null)
           .catch(() => null),
       sessionId: () => $.session.id(),
+      stateDir: async () =>
+        stateBaseOf(
+          await $.env.get('HOME').catch(() => undefined),
+          await $.env.get('XDG_STATE_HOME').catch(() => undefined),
+        ),
       stat: path =>
         $.fs
           .stat(path, { resolve: true })

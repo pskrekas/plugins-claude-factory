@@ -87,8 +87,8 @@ Prior art, and what we take from each:
   Jira and Asana (section 11).
 - C5. No tokens: adapters use tools where the person is logged in (`gh`, `az`, an MCP
   server).
-- C6. Plugin name `factory`; settings file `.claude/factory.json`; state folder
-  `.factory/` (git-ignored).
+- C6. Plugin name `factory`; settings file `.claude/factory.json`; the state is kept
+  in a folder of the person's own, outside the repo (section 5.3).
 - C7. Safety defaults: 2 slots, 3 rounds, low risk only, a cost limit per job and per
   day, a lock, protected paths, a disk guard (section 8).
 - C8. Reviewers use a model as strong as the builder. Only "must fix" findings cause a
@@ -228,7 +228,10 @@ one line. The detail is in the files; the next agent reads them.
 ### 5.3 State
 
 ```
-.factory/                      git-ignored, local to the machine
+<state>/                       the person's own folder, never in the repo:
+                               $XDG_STATE_HOME/claude-factory/<repo>/ or
+                               ~/.local/state/claude-factory/<repo>/, one per
+                               repository, shared by its worktrees
   lock                         one session moves the jobs (section 8.1)
   jobs/<job-id>/
     job.json                   stage, round, risk, routing, times, cost, PR, history
@@ -448,7 +451,10 @@ comment; the plugin checks before it sends.
   purpose never runs for another. Until approval the panel shows "settings not
   approved", the number of commands, and the parts that run no settings command. This
   is part of phase 1.
-- **One orchestrator per repo.** `.factory/lock` holds the session id and a heartbeat
+- **The state is not in the repo.** A repo can be handed over with any files in it,
+  also with job files. So the jobs and the lock are kept under the person's home
+  folder, and a `.factory/` folder that a repo brings is never read.
+- **One orchestrator per repo.** The `lock` file of the state folder holds the session id and a heartbeat
   time. A second session shows the line read-only and says who holds the lock. A lock
   with no heartbeat for five minutes can be taken.
 - **The fence.** Factory agents run with no permission question to the person. In
@@ -507,7 +513,8 @@ comment; the plugin checks before it sends.
    hooks/      the hooks module: events, commands, the pane, the orchestrator loop
    types/      the state contract
    tests/
- REPO    .claude/factory.json  ·  .factory/ (state)
+ REPO    .claude/factory.json
+ HOME    ~/.local/state/claude-factory/<repo>/  (jobs, lock, worktrees)
 ```
 
 - All behaviour lives in `core/` as pure functions with direct tests. The hooks module

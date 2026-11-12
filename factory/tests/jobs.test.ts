@@ -3,10 +3,12 @@ import { expect, test } from 'claude-code/testing'
 import { move, newJob } from '../core/job'
 import { STALE_MS, lockOf, lockText } from '../core/lock'
 import { readJobs, releaseLock, takeLock, writeJob } from '../hooks/jobs'
+import { stateBaseOf, stateFolderOf } from '../core/state-path'
 import { fakeIo } from './kit'
 
 const job = (id: string, at = 1000) => newJob({ id, title: 'Add a thing' }, at)
-const path = (id: string) => `/r/.factory/jobs/${id}/job.json`
+const DIR = '/state/' + stateFolderOf('/r')
+const path = (id: string) => `${DIR}/jobs/${id}/job.json`
 
 test('the lock rule', async () => {
   expect(lockOf(null, 's1', 1000)).toBe('free')
@@ -36,9 +38,10 @@ test('bad job files are skipped and counted', async () => {
       [path(good.id)]: JSON.stringify(good),
       [path('2-half')]: '{ half',
       [path('3-wrong-folder')]: JSON.stringify(job('9')),
-      '/r/.factory/jobs/NOT_AN_ID/job.json': JSON.stringify(good),
-      '/r/.factory/jobs/4-empty/notes.md': 'no job file here',
-      '/r/.factory/jobs/stray.txt': 'a file, not a folder',
+      [`${DIR}/jobs/NOT_AN_ID/job.json`]: JSON.stringify(good),
+      [`${DIR}/jobs/4-empty/notes.md`]: 'no job file here',
+      [`${DIR}/jobs/stray.txt`]: 'a file, not a folder',
+      '/r/x': '',
     },
   })
 
@@ -62,15 +65,45 @@ test('jobs come newest first', async () => {
   expect((await readJobs(io, '/r')).jobs.map(j => j.itemId)).toEqual(['2', '3', '1'])
 })
 
-test('a .factory folder that git tracks is not used', async () => {
-  const io = fakeIo({ files: { [path('1-add-a-thing')]: JSON.stringify(job('1')) }, tracked: true })
-
-  expect(await readJobs(io, '/r')).toEqual({
-    jobs: [],
-    skipped: 0,
-    note: '.factory/ is tracked by git. It is not used.',
+test('job files inside the repo are never read: the state is under the home folder', async () => {
+  const io = fakeIo({
+    files: { '/r/.factory/jobs/1-add-a-thing/job.json': JSON.stringify(job('1')), '/r/x': '' },
   })
+
+  expect(await readJobs(io, '/r')).toEqual({ jobs: [], skipped: 0, note: null })
   expect(io.reads).toEqual([])
+  await writeJob(io, '/r', job('2'))
+  expect(Object.keys(io.files).filter(file => file.startsWith('/r/')).sort()).toEqual([
+    '/r/.factory/jobs/1-add-a-thing/job.json',
+    '/r/x',
+  ])
+})
+
+test('the state folder of a repo', async () => {
+  expect(stateBaseOf('/home/me', undefined)).toBe('/home/me/.local/state/claude-factory')
+  expect(stateBaseOf('/home/me', '/var/state')).toBe('/var/state/claude-factory')
+  expect(stateBaseOf('/home/me', 'relative/x')).toBe('/home/me/.local/state/claude-factory')
+  expect(stateBaseOf(undefined, undefined)).toBe(null)
+  expect(stateBaseOf('not-absolute', undefined)).toBe(null)
+  const folder = stateFolderOf('/Users/me/code/my app/.git')
+  expect(folder).toMatch(/^[a-z0-9-]{1,48}-[0-9a-f]{8}$/)
+  expect(folder.startsWith('users-me-code-my-app-git-')).toBe(true)
+  expect(stateFolderOf('/a/b')).not.toBe(stateFolderOf('/a-b'))
+  expect(stateFolderOf('/' + 'x'.repeat(500)).length).toBeLessThanOrEqual(57)
+  expect(stateFolderOf('../..')).toMatch(/^[a-z0-9-]*-?[0-9a-f]{8}$/)
+})
+
+test('two working trees of one repository share the jobs', async () => {
+  const files = {
+    '/r/.git/HEAD': 'x',
+    '/r/.git/worktrees/wt/gitdir': '/wt/.git\n',
+    '/wt/.git': 'gitdir: /r/.git/worktrees/wt\n',
+  }
+  const io = fakeIo({ files })
+  await writeJob(io, '/wt', job('1'))
+
+  expect((await readJobs(io, '/r')).jobs.map(j => j.itemId)).toEqual(['1'])
+  expect(Object.keys(io.files).some(file => file.startsWith('/state/' + stateFolderOf('/r/.git') + '/jobs/'))).toBe(true)
 })
 
 test('a job with a bad id is not written', async () => {
