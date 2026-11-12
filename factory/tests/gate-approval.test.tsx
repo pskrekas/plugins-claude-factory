@@ -19,8 +19,8 @@ test('the pane lists the gate commands with their mark, and approving them never
 
   const rows = await paneText($, 60)
   expect(rows).toContain('SETTINGS NOT APPROVED · 3 commands')
-  expect(rows).toContain('gate: npm test')
-  expect(rows).toContain('gate: npm run build')
+  expect(rows).toContain('[gate] npm test')
+  expect(rows).toContain('[gate] npm run build')
   expect((await $.command.run(cmd('approve'))).text).toBe('Approved 3 commands.')
   expect(world.ran).toContain('x y')
   expect(world.ran.some(line => line.startsWith('npm'))).toBe(false)
@@ -43,7 +43,7 @@ function ioWith(base: string | null, approved: string[]) {
 }
 
 test("the gate's commands are the base branch's, when they are approved", async () => {
-  const io = ioWith(SETTINGS, ['gate: npm run build', 'gate: npm test', 'x y'])
+  const io = ioWith(SETTINGS, ['[gate] npm run build', '[gate] npm test', 'x y'])
   expect(await gateCommands(io, '/r', 'main', 'fast')).toEqual({ ok: true, commands: [['npm', 'test']] })
   expect(await gateCommands(io, '/r', 'main', 'full')).toEqual({
     ok: true,
@@ -56,7 +56,7 @@ test('a gate command approved only as a check does not run in the gate', async (
     ok: false,
     why: 'gate commands are not approved',
   })
-  expect(await gateCommands(ioWith(SETTINGS, ['gate: npm test']), '/r', 'main', 'full')).toEqual({
+  expect(await gateCommands(ioWith(SETTINGS, ['[gate] npm test']), '/r', 'main', 'full')).toEqual({
     ok: false,
     why: 'gate commands are not approved',
   })
@@ -81,7 +81,7 @@ test('why there is no gate', async () => {
 
 test("a job's own settings file cannot change the gate", async () => {
   // The working tree's file names another command; the base branch's is used.
-  const io = ioWith(SETTINGS, ['gate: npm run build', 'gate: npm test', 'x y'])
+  const io = ioWith(SETTINGS, ['[gate] npm run build', '[gate] npm test', 'x y'])
   io.files['/r/.claude/factory.json'] = JSON.stringify({ gate: { fast: [['true']] } })
 
   expect(await gateCommands(io, '/r', 'main', 'fast')).toEqual({ ok: true, commands: [['npm', 'test']] })

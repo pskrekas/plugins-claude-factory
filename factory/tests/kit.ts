@@ -303,6 +303,8 @@ export function fakeIo(
     reads: [] as string[],
     ran: [] as string[],
     stdins: [] as (string | undefined)[],
+    // Where each command ran.
+    cwds: [] as (string | undefined)[],
     // A program whose next run fails, to test what a failure leaves behind.
     failNext: null as string | null,
     // Answers for commands the fake does not act out itself (git, gh).
@@ -344,6 +346,7 @@ export function fakeIo(
     run: async (argv: string[], init?: { cwd?: string; timeoutMs?: number; stdin?: string; env?: Record<string, string> }) => {
       io.ran.push(argv.join(' '))
       io.stdins.push(init?.stdin)
+      io.cwds.push(init?.cwd)
       const done = (ok: boolean) => ({ exitCode: ok ? 0 : 1, stdout: '', stderr: '' })
       if (io.failNext === argv[0]) {
         io.failNext = null

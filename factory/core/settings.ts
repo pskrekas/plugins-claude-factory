@@ -327,13 +327,16 @@ export function lineOf(argv: string[]): string {
   return argv.map(arg => (PLAIN_ARG.test(arg) ? arg : quoted(arg))).join(' ')
 }
 
-// The mark of a gate command on the approval list.
-export const GATE_MARK = 'gate: '
+// The mark of a gate command on the approval list. It starts with a character
+// that `lineOf` can never put first: a plain argument cannot hold `[`, and a
+// quoted one starts with a double quote. So no check's line can look like a
+// gate's, and the two kinds of approval cannot be mixed up.
+export const GATE_MARK = '[gate] '
 
 // Every command the settings file can make the plugin run, one line each: the
 // checks, then the gate's commands with their mark. A person approves both
 // kinds together, but a line approved for one purpose never runs for the
-// other: `gate: npm test` does not let `npm test` run as a check each minute,
+// other: `[gate] npm test` does not let `npm test` run as a check each minute,
 // and an approved check does not open the gate.
 export function commandsOf(settings: Settings): string[] {
   const checks = new Set<string>()

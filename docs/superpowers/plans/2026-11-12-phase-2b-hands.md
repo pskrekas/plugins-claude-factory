@@ -334,7 +334,7 @@ Rules:
 - Test: `factory/tests/gate-approval.test.tsx`
 
 **Interfaces:**
-- `commandsOf(settings)` answers the checks' lines as before, then the gate's lines, each marked: `gate: <line>` (fast and full, once each, sorted). A person approves both kinds together; a line approved as `gate: npm test` never lets `npm test` run as a check, and the reverse.
+- `commandsOf(settings)` answers the checks' lines as before, then the gate's lines, each marked: `[gate] <line>` (fast and full, once each, sorted). A person approves both kinds together; a line approved as `[gate] npm test` never lets `npm test` run as a check, and the reverse.
 - Produces:
 
 ```ts
@@ -346,11 +346,11 @@ Rules:
 - `gateCommands` reads the settings of the **base branch**: `git show origin/<base>:.claude/factory.json` (in `root`, 10 s; output over 256 KiB is refused), parses it with `parseSettings`, and takes `gate.fast` or `gate.full`.
 - It answers `{ ok: false, why }` for: a base that is not a branch name (`not a branch name`); git failing (`no settings file on <base>`); a settings error (`settings on <base>: <error>`); no command for that kind (`no gate`, spec 8.2 "No gate, no factory"); a command whose marked line is not on the approved list of this repository (`gate commands are not approved`).
 - The approved list is read with the store key of phase 1 (`loadSettings`' `key`).
-- The pane's approval rows show the marked lines as they are (`gate: npm test`).
+- The pane's approval rows show the marked lines as they are (`[gate] npm test`).
 
 - [ ] **Step 1: Write the failing tests:**
-  - pure: `commandsOf` for checks `[x y]` and gate `{ fast: [[npm, test]], full: [[npm, test], [npm, run, build]] }` is `['x y', 'gate: npm run build', 'gate: npm test']`;
-  - engine: with such a settings file the pane lists `gate: npm test` under `SETTINGS NOT APPROVED · 3 commands`, and after two `/factory approve` the check `x y` runs and `npm test` never runs as a check;
+  - pure: `commandsOf` for checks `[x y]` and gate `{ fast: [[npm, test]], full: [[npm, test], [npm, run, build]] }` is `['x y', '[gate] npm run build', '[gate] npm test']`;
+  - engine: with such a settings file the pane lists `[gate] npm test` under `SETTINGS NOT APPROVED · 3 commands`, and after two `/factory approve` the check `x y` runs and `npm test` never runs as a check;
   - `fakeIo`: `gateCommands` answers the base branch's fast commands when they are approved; `gate commands are not approved` when the store holds only `npm test` (unmarked); `no gate` for an empty list; `no settings file on main` when `git show` fails; and when the working tree's own settings file names other gate commands, the answer is still the base branch's (the fake's `git show` answer differs from the file on disk).
 - [ ] **Step 2: Run** — Expected: FAIL.
 - [ ] **Step 3: Implement.**
@@ -473,7 +473,7 @@ Rules (spec 4.4, 5.5):
 **Files:**
 - Modify: `README.md`, `docs/notes/r1-check.md`
 
-- [ ] **Step 1: README.** The three commands in the table; under "The factory line": the gate (fast and full, read from the base branch, approved as `gate: …` lines, the ten-minute limit of a command), that the factory writes labels `<mark>:in-progress` and `<mark>:needs-human` and comments, opens draft pull requests and never merges, and that worktrees live in the state folder. Under "What it can reach": the full list of `git` and `gh` calls the plugin can make (from `core/git-args.ts` and the two adapters).
+- [ ] **Step 1: README.** The three commands in the table; under "The factory line": the gate (fast and full, read from the base branch, approved as `[gate] …` lines, the ten-minute limit of a command), that the factory writes labels `<mark>:in-progress` and `<mark>:needs-human` and comments, opens draft pull requests and never merges, and that worktrees live in the state folder. Under "What it can reach": the full list of `git` and `gh` calls the plugin can make (from `core/git-args.ts` and the two adapters).
 - [ ] **Step 2: `docs/notes/r1-check.md`:** a checklist for the owner in a scratch GitHub repo with one issue: copy a sample job that waits, `/factory answer`, `/factory reject`, and look at the issue's labels and comments.
 - [ ] **Step 3: Run** — validate, test, tsc — Expected: PASS.
 - [ ] **Step 4: Commit** — `git commit -m "docs: the hands of the line"`
