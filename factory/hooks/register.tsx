@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
+import { agentSpecs, typeOf } from '../core/agents'
 import { briefOf } from '../core/brief'
 import { safePath } from '../core/checks'
 import { rowsOf } from '../core/layout'
@@ -9,11 +10,14 @@ import { emptyModel } from '../core/model'
 import { displayWidth } from '../core/rows'
 import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
+import { ROLES } from '../core/factory-settings'
 import { ancestorsOf, confirmedTop } from '../core/top'
+import { isOwnReport, onSpawn, onToolCheck, onTurn, rememberAgent } from './agent-events'
 import type { Io } from './io'
 import { answerJob, rejectJob, stopLine } from './commands'
 import { init } from './init'
 import { whereText } from './jobs'
+import { loadSettings } from './readers/settings'
 import { approve, refresh, refreshAgents } from './refresh'
 import { PANE, TITLE } from './state'
 
@@ -27,6 +31,7 @@ const MINIMUM = [2, 1, 322] as const
 const REFRESH_MS = 60_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
 const GIT_TOP_MS = 5_000
+const AGENT_TYPES = ROLES.map(typeOf)
 const ONLY_A_PERSON_CAN = 'Only a person can do this. Type the command at the prompt.'
 const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
 
@@ -56,6 +61,8 @@ export const register: Register = (on, options) => {
   // after every reload. See hooks/io.ts for why it exists.
   let io: Io | null = null
   let brief: string | null = null
+  // False when an agent type could not be registered: then the line does not run.
+  let hasAgentTypes = true
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -195,6 +202,16 @@ export const register: Register = (on, options) => {
     }
     const ready = io
 
+    // The agent types of the line. They are the plugin's alone: the model is
+    // not offered them, and a spawn that the line did not make is refused.
+    const { settings } = await loadSettings(ready)
+    for (const spec of agentSpecs(settings.factory)) {
+      await $.agent.register(spec).catch(() => {
+        hasAgentTypes = false
+        $.ui.log(`factory: the agent type ${spec.name} could not be registered`)
+      })
+    }
+
     await $.command.register({
       name: 'factory',
       description: 'Open the Factory work panel (close | init | approve | where | stop | answer | reject)',
@@ -233,19 +250,41 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // An agent that starts or ends shows at once: this reads the agent list only.
+  on('agent.offer', async ($, e, next) => (AGENT_TYPES.includes(e.agent) ? { isOffered: false } : next(e)))
+
+  // An agent of the line starts in its job's worktree, and only when the line
+  // itself started it. Any agent that starts or ends shows in the pane at once.
   on('agent.spawn', async ($, e, next) => {
-    const spawned = await next(e)
+    const ours = io === null ? (AGENT_TYPES.includes(e.subagentType) ? { deny: NOT_READY } : null) : await onSpawn(io, e)
+    if (ours !== null && 'deny' in ours) return { deny: ours.deny }
+    const spawned = await next(ours === null ? e : { ...e, cwd: ours.cwd })
+    if (ours !== null && spawned.agentId !== undefined) rememberAgent(spawned.agentId, ours)
     if (io !== null) void refreshAgents(io).catch(() => undefined)
 
     return spawned
   })
 
+  // The fence. It answers only for an agent of the line and only for the tools
+  // of its role; every other call goes on unchanged.
+  on('tool.check', async ($, e, next) => {
+    const verdict = io === null ? null : await onToolCheck(io, e)
+
+    return verdict === null ? next(e) : verdict
+  })
+
   on('turn.complete', async ($, e, next) => {
+    if (io !== null) await onTurn(io, e).catch(() => false)
     const done = await next(e)
     if (io !== null && e.agentId !== undefined) void refreshAgents(io).catch(() => undefined)
 
     return done
+  })
+
+  // The report of an agent of the line is not a prompt for the session's model.
+  on('prompt.submit', async ($, e, next) => {
+    if (io !== null && (await isOwnReport(io, e).catch(() => false))) return { drop: 'factory: an agent of the line finished' }
+
+    return next(e)
   })
 
   on('command.run', { command: 'factory' }, async ($, e) => {

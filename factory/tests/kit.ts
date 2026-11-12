@@ -105,6 +105,9 @@ export function engine(
     // True when git refuses the repository (a `.git` another user owns).
     gitRefuses: false,
     cwds: [] as (string | undefined)[],
+    // The agent types the plugin registered, and the agents it started.
+    registered: [] as { name: string; tools?: readonly string[]; model?: string }[],
+    spawned: [] as { type: string; description: string; cwd?: string }[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
   }
   mock.store(on)
@@ -145,8 +148,20 @@ export function engine(
   })
   on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'x', scope: 'shared' }] }) as never)
   on('agent.list', () => ({ value: seen.agents as never }))
-  on('agent.spawn', () => ({ model: 'm', agentId: 'a1' }) as never)
-  on('turn.complete', () => ({}) as never)
+  on('agent.spawn', (_, e) => {
+    seen.spawned.push({ type: e.subagentType, description: e.description, cwd: (e as { cwd?: string }).cwd })
+
+    return { model: 'm', agentId: `a${seen.spawned.length}` } as never
+  })
+  on('agent.register', (_, e) => {
+    seen.registered.push(e as { name: string; tools?: readonly string[]; model?: string })
+
+    return { value: { agent: 'factory:' + e.name } as never }
+  })
+  on('agent.offer', () => ({ isOffered: true }) as never)
+  on('tool.check', () => ({ decision: 'ask' }) as never)
+  on('prompt.submit', (_, e) => ({ text: e.text }) as never)
+  on('turn.complete', (_, e) => ({ text: e.answer }) as never)
   on('session.repo', () => ({
     value: { root: seen.repoRoot ?? seen.root, remote: world.remote ?? null } as never,
   }))
@@ -242,6 +257,11 @@ export function engine(
     if (plain[0] === 'rm' && plain[1] === '-r' && plain[2] !== undefined) {
       const gone = plain[2]
       for (const file of Object.keys(seen.files).filter(name => name.startsWith(gone + '/'))) delete seen.files[file]
+
+      return ok(true)
+    }
+    if (plain[0] === 'rm' && plain[1] !== undefined) {
+      delete seen.files[plain[1]]
 
       return ok(true)
     }
@@ -383,6 +403,10 @@ export function fakeIo(
         if (argv.includes('-p') && isDir(a)) return done(true)
         if (isDir(a) || files[a] !== undefined) return done(false)
         dirs.set(a, io.time)
+        // With -p the folders above it are made too, as mkdir does.
+        if (argv.includes('-p')) {
+          for (let up = a.slice(0, a.lastIndexOf('/')); up !== '' && !isDir(up); up = up.slice(0, up.lastIndexOf('/'))) dirs.set(up, io.time)
+        }
 
         return done(true)
       }
@@ -410,6 +434,12 @@ export function fakeIo(
 
         return done(true)
       }
+      // rm -f of one file.
+      if (program === 'rm' && a !== undefined) {
+        delete files[a]
+
+        return done(true)
+      }
 
       return { failed: 'not-found' as const }
     },
@@ -425,7 +455,10 @@ export function fakeIo(
       return io.model
     },
     status: () => undefined,
-    toast: () => undefined,
+    toasts: [] as string[],
+    toast: (text: string) => {
+      io.toasts.push(text)
+    },
     sound: () => undefined,
     agents: async () => [],
     isPaneDrawn: async () => true,

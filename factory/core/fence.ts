@@ -39,7 +39,7 @@ const TOO_DEEP = 'A shell inside a shell inside a shell is not run.'
 
 // A path as the tools see it, with `.` and `..` resolved. A relative path is
 // under `base`. Null for a path that cannot be judged.
-function resolve(path: string, base: string): string | null {
+export function resolvePath(path: string, base: string): string | null {
   if (path === '' || path.startsWith('~') || /[\u0000-\u001f\u007f]/.test(path)) return null
   const parts: string[] = []
   for (const part of (path.startsWith('/') ? path : `${base}/${path}`).split('/')) {
@@ -60,7 +60,7 @@ const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ?
 
 function readVerdict(tool: string, input: Record<string, unknown>, who: Who): Verdict {
   const inJob = (path: string) => {
-    const full = resolve(path, who.worktree)
+    const full = resolvePath(path, who.worktree)
 
     return full !== null && (isIn(full, who.worktree) || isIn(full, who.jobDir))
   }
@@ -94,7 +94,7 @@ function readVerdict(tool: string, input: Record<string, unknown>, who: Who): Ve
 function writeVerdict(input: Record<string, unknown>, who: Who): Verdict {
   const file = text(input.file_path)
   if (file === null) return deny(NOT_UNDERSTOOD, '')
-  const full = resolve(file, who.worktree)
+  const full = resolvePath(file, who.worktree)
   if (full === null) return deny(NOT_HERE, file)
   const git = `${who.worktree}/.git`
   const inCode = who.role === 'builder' && isIn(full, who.worktree) && !isIn(full, git)
@@ -111,11 +111,17 @@ const GIT_SENDS = ['push', 'send-pack', 'http-push']
 // variable, a pattern, a group of choices, a home folder.
 const isOdd = (word: string | undefined) => word !== undefined && /['"\\$*?[\]{}~]/.test(word)
 // By any case: some disks do not tell `.GIT` from `.git`.
+// Also a part that starts with a dot and holds a pattern (`.g*`, `.gi?`,
+// `.{git}`, `.*`): the shell could fill it in as the git folder.
 const namesGitFolder = (text: string) => {
   const word = text.toLowerCase()
+  if (word === '.git' || word.endsWith('/.git') || word.includes('.git/')) return true
 
-  return word === '.git' || word.endsWith('/.git') || word.includes('.git/')
+  return word.split('/').some(part => /^[.[{]/.test(part) && /[*?[\]{}]/.test(part))
 }
+// Shell words that set a variable: with a name built from pieces they could
+// set one of git's own.
+const SETTERS = ['export', 'declare', 'typeset', 'local', 'readonly', 'read', 'set', 'unset']
 const GIT_PLACES = ['-c', '-C', '--git-dir', '--work-tree', '--exec-path', '--namespace']
 const WRITERS = ['rm', 'mv', 'cp', 'ln', 'tee', 'chmod', 'chown', 'truncate', 'dd', 'touch', 'mkdir', 'rmdir', 'install', 'rsync']
 const baseName = (word: string) => word.slice(word.lastIndexOf('/') + 1)
@@ -184,9 +190,9 @@ function simpleVerdict(simple: string, who: Who, depth: number): Deny | null {
     }
   }
   // Into the git folder: what follows would write there with no path to see.
-  if ((program === 'cd' || program === 'pushd') && words.slice(1).some(word => namesGitFolder(word) || (word.startsWith('.') && isOdd(word)))) {
-    return deny(GIT_FOLDER, simple)
-  }
+  if ((program === 'cd' || program === 'pushd') && words.slice(1).some(namesGitFolder)) return deny(GIT_FOLDER, simple)
+  if (SETTERS.includes(program) && words.slice(1).some(isOdd)) return deny(NOT_PLAIN, simple)
+  if (program === 'printf' && words.includes('-v')) return deny(NOT_PLAIN, simple)
   if (program === 'git') {
     const refused = gitVerdict(words, simple)
     if (refused !== null) return refused

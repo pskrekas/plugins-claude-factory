@@ -47,13 +47,18 @@ test('ways around the words are refused too', async () => {
     'export "GIT_DIR"=/x', 'declare -x GIT_DIR=/x', 'read GIT_DIR < f', 'printf -v GIT_WORK_TREE /x', 'X=GIT_DIR; eval "$X=/x"',
     // The git folder by another spelling, or by a pattern.
     'cd .GIT', 'cd .Git/hooks', 'cd .gi?', 'cd .g*', 'echo x > .GIT/config', 'rm -rf ./.Git',
+    // The git folder as a pattern, in a write.
+    'rm -rf .gi?', 'echo x > .g*/config', 'cp evil .[g]it/hooks/pre-commit', 'mv x .{git}/config', 'rm -rf .*', 'cd [.]git',
+    // A variable whose name is built from pieces.
+    'export "$A$B"=/x', 'declare -x "GI""T_DIR"=/x', 'read -r "$NAME" < f', 'printf -v "$NAME" /x', 'export {A,B}=1',
     // Into the git folder, then a write with no path.
     'cd .git && echo x > config', 'cd ./.git/hooks; cp /tmp/x pre-commit', `cd ${WT}/.git`, 'pushd .git',
   ]
   for (const command of bad) expect([command, bash(command)?.decision]).toEqual([command, 'deny'])
   expect(bash('GIT_DIR=/x/.git git status')).toEqual({ decision: 'deny', reason: "Git settings and refs are not an agent's to change.", command: 'GIT_DIR=/x/.git git status' })
   // Ordinary variables and folders are still fine.
-  for (const ok of ['NODE_ENV=test npm test', 'CI=1 npm run build', 'cd src && npm test', 'cd .github && ls', 'bash -c "npm test"', 'bash scripts/build.sh'])
+  for (const ok of ['NODE_ENV=test npm test', 'CI=1 npm run build', 'cd src && npm test', 'cd .github && ls', 'bash -c "npm test"', 'bash scripts/build.sh',
+    'rm -rf dist/*', 'cp src/*.ts out/', 'export NODE_ENV=test', 'ls .github/*.yml', 'printf "%s" x'])
     expect([ok, bash(ok)]).toEqual([ok, ALLOW])
 })
 
