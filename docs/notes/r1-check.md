@@ -16,15 +16,22 @@ Two rules of the mod API found here, which the plan did not know:
 - A `$.state` atom must be a const of the file that calls `read` or `update`
   on it. It cannot be imported from another file.
 
-## To check by the owner, in a terminal
+## Checked by the owner, in a terminal (2026-11-12)
 
-Run `claude --plugin-dir ./factory` in this repo and type `/factory`. Write here:
+`claude --plugin-dir ./factory` in this repo, on the branch `phase-1-panel`, then `/factory`.
 
-- [ ] The pane opens (docked or inline), and at what terminal width.
-- [ ] No dim line that starts with `factory:` in the transcript.
-- [ ] `factory/.claude-plugin/types/` exists after the load; then
+- [x] The pane opens, docked beside the transcript, in a terminal of 241 by 71.
+      It shows `No settings file. Run /factory init.`, `TASK`, the branch
+      `phase-1-panel` and `read 4 s ago`. The command answers
+      `factory: Factory pane opened.`
+- [x] No dim line that starts with `factory:` in the transcript.
+- [x] `factory/.claude-plugin/types/` exists after the load, and
       `npx -p typescript tsc -p factory` has no errors.
-- [ ] The login type (personal, Team, Enterprise).
+- [x] Claude Code 2.1.322. The session header shows the plan `Claude Ultra`
+      (a personal login, no managed settings).
+
+Not seen yet: a narrow terminal (the pane inline), the sections that need a
+settings file, the status line with a value, an alert.
 
 ## Whole-plugin check by hand (plan Task 10, Step 6)
 
