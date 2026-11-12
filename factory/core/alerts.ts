@@ -1,5 +1,6 @@
 // What changed for the worse between two reads of the model. Pure.
 import { clean } from './layout'
+import { isWaitingForYou } from './line'
 import type { PanelModel } from './model'
 
 const MAX_ALERT = 160
@@ -22,6 +23,18 @@ export function alertsFor(prev: PanelModel, next: PanelModel): string[] {
   for (const port of next.ports) {
     const before = prev.ports.find(old => old.name === port.name && old.port === port.port)
     if (before?.state === 'up' && port.state === 'down') alerts.push(`${port.name} :${port.port} is DOWN`)
+  }
+
+  // A factory job that waits for the person now and did not before.
+  const waitedBefore = new Set((prev.factory?.jobs ?? []).filter(isWaitingForYou).map(job => job.itemId))
+  for (const job of next.factory?.jobs ?? []) {
+    if (!isWaitingForYou(job) || waitedBefore.has(job.itemId)) continue
+    if (job.stage === 'ready') {
+      const pr = job.prNumber === null ? 'The pull request' : `PR ${job.prNumber}`
+      alerts.push(`${job.itemId}: ${pr} is ready. You merge.`)
+    } else {
+      alerts.push(`${job.itemId} needs you: ${job.question ?? 'see the panel'}`)
+    }
   }
 
   return alerts.map(text => clean(text).slice(0, MAX_ALERT))

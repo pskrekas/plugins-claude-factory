@@ -7,6 +7,7 @@ import { agentRows } from '../core/work'
 import type { Settings } from '../core/settings'
 import type { Io } from './io'
 import { checksReader } from './readers/checks'
+import { factoryReader } from './readers/factory'
 import { progressReader } from './readers/progress'
 import { loadSettings } from './readers/settings'
 import { taskReader } from './readers/task'
@@ -30,7 +31,7 @@ export type Reader = {
   read: (io: Io, ctx: Ctx, prev: PanelModel) => Promise<Partial<PanelModel>>
 }
 
-export const readers: Reader[] = [taskReader, progressReader, checksReader, workReader]
+export const readers: Reader[] = [taskReader, factoryReader, progressReader, checksReader, workReader]
 
 export async function refresh(
   io: Io,

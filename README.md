@@ -48,6 +48,7 @@ The status line shows the task id, the first progress percent, the checks and a 
 | `/factory` | opens the pane and reads everything |
 | `/factory close` | closes it |
 | `/factory init` | looks at the repo and writes a first `.claude/factory.json`; it never overwrites one |
+| `/factory where` | says where the factory keeps its state for this repository |
 | `/factory approve` | opens the pane and allows the commands it shows (see below). Only your own Enter at the prompt counts |
 
 While the pane is on screen it reads again once a minute.
@@ -55,6 +56,34 @@ While the pane is on screen it reads again once a minute.
 Two options, in `/config`: `openOnStart` (open the pane when a session starts, off by default) and `sound` (the alert sound, on by default).
 
 It works on macOS and Linux. It uses `df` and `nc`, which Windows does not have.
+
+## The factory line (not running yet)
+
+The next version runs the line: a tracker item with a mark goes through Intake, Spec, Build, Gate, Review and Approve, and comes out as a ready pull request that a person merges. This version already knows what a job is and draws it.
+
+The **FACTORY** section of the pane shows:
+
+```
+ Queue -> Intake -> Spec -> Build -> Gate -> Review -> Approve -> You
+   4        0        0        1       0        1          0        2
+                              ^       │        │
+                              ├─fail──┘        │
+                              └─── changes ────┘
+```
+
+- the stations, with the number of jobs at each one, and the two loops back to Build (lit while a job is on them);
+- one row per running job: a cell for each station (`done`, `now`, `fail`, `changes`), then its round, who sent it back, its time and its cost;
+- **NEEDS YOU**: the jobs that wait for a person (a question, or a pull request to merge);
+- the size of the queue (open GitHub issues that carry the mark) and the totals of the day.
+
+A job is a file, `job.json`, in a folder of its own. The plugin keeps these under your home folder, never in the repo: `~/.local/state/claude-factory/<repo>/jobs/` (or under `$XDG_STATE_HOME`). `/factory where` prints the folder for the repo you are in. The folder is named after the path of the repository, so a repo that you move to another place starts with no jobs. A `.factory/` folder that a repo brings along is never read, so a repo cannot show you jobs of its own.
+
+Nothing creates a job yet. To see the section, copy the three sample jobs into the state folder and open the pane:
+
+```sh
+mkdir -p "<the folder /factory where printed>/jobs"
+cp -R docs/examples/factory-jobs/* "<the folder /factory where printed>/jobs/"
+```
 
 ## Settings
 
@@ -85,6 +114,7 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 | `checks` | `run` with `want`: ok when the output equals `want`. `run` alone: ok on exit 0. `minFreeGb`: ok when the disk has that much free. At most 20. |
 | `ports` | a name and a port on this machine. At most 20. |
 | `owed` | a markdown file; its open checkboxes are counted. |
+| `factory` | how the line runs, used when it runs: `slots` (2), `maxRounds` (3), `maxRisk` (`low`), `costLimitUsd` and `timeLimitMin` (`{ job, day }`), `minFreeDiskGb` (15), `protectedPaths`, `forbiddenCommands`, `forbiddenCommentWords`, `models`, `reviewers`. One refused value refuses the whole `factory` key. |
 
 ## What it can reach
 
@@ -94,6 +124,8 @@ The panel reads. It changes nothing but its own state and, when you ask, `.claud
 - **It stores no password and no token.** `gh` uses your own login.
 - **It runs no command from a settings file until you approve it.** A settings file arrives with a clone, so the panel first shows `SETTINGS NOT APPROVED`, the number of commands and every command in full. `/factory approve` allows exactly the lines the pane showed while it was on screen, for that repo; a file the pane has not shown yet is shown first, and a second `/factory approve` allows it. Only your own Enter at the prompt can approve. The approved lines are kept outside the repo, for the repo and all its worktrees; a line that changes asks again.
 - **What an approval covers.** It covers the command line you read, not the code that command runs. A check must name a program on your `PATH` (never a file of the repo), runs with a `PATH` that leaves the repo out, and is not run when one of its arguments names a file of the repo. These are guards against the plain cases, not a boundary: a command that runs repo code by its nature (an inline script, a build tool) runs what the repo holds at that time. Approve a check as you would approve the same command in a shell.
+- **The factory's state is yours, not the repo's.** Jobs and the lock are files under your home folder. The folder is named after the repository's path, holds that path, and is not used when it names another repository or when it would be inside the repo.
+- **It checks where the repo starts.** The top of the working tree is the nearest folder above the session's that holds a `.git`, and only when git names the same folder. A folder's own git config can make git name any path, and another user of the machine can put a `.git` in a shared folder; when the two do not agree, the plugin stays in the session's own folder.
 - **It reads only files inside the repo.** A progress file, the owed file or the settings file that is a link to somewhere else is not read. `/factory init` does not write through a link.
 - **What the model is told.** The session brief holds facts the plugin worked out (a ticket id, a branch, a percent, a count). It leaves out text other people wrote: an issue's title, a progress file's name, the reason in a blocked line. The answer of `/factory approve` holds a count, never the command lines.
 - Text from files, the tracker and commands is shown with control characters removed.

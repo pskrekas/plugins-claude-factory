@@ -6,23 +6,27 @@ import { safePath } from '../core/checks'
 import { rowsOf } from '../core/layout'
 import type { Tone } from '../core/layout'
 import { emptyModel } from '../core/model'
+import { displayWidth } from '../core/rows'
 import { failureOf } from '../core/run'
+import { stateBaseOf } from '../core/state-path'
+import { ancestorsOf, confirmedTop } from '../core/top'
 import type { Io } from './io'
 import { init } from './init'
+import { whereText } from './jobs'
 import { approve, refresh, refreshAgents } from './refresh'
 import { PANE, TITLE } from './state'
 
 // Change the tag when PanelModel's fields change: it declines what an earlier
 // version stored, which outlives a reload.
 const panel = atom({ plugin: 'factory', key: 'panel' } as const, emptyModel(), {
-  shape: 'panel-1',
+  shape: 'panel-2',
 })
 
 const MINIMUM = [2, 1, 322] as const
 const REFRESH_MS = 60_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
-const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
 const GIT_TOP_MS = 5_000
+const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
 
 // Theme keys, so the colours follow the person's theme.
 const COLOR: Record<Tone, string | undefined> = {
@@ -67,16 +71,39 @@ export const register: Register = (on, options) => {
     // worktree `$.session.repo()` names the main checkout, which is not where
     // this session's files and branch are.
     const tops = new Map<string, string>()
+    const realOf = (path: string) =>
+      $.fs
+        .stat(path, { resolve: true })
+        .then(found => found.realPath ?? null)
+        .catch(() => null)
     const root = async () => {
       const at = await $.session.root().catch(() => $.session.cwd())
       const known = tops.get(at)
       if (known !== undefined) return known
-      const env = { PATH: safePath(await $.env.get('PATH').catch(() => undefined), at) }
-      const top = await $.process
-        .run(['git', 'rev-parse', '--show-toplevel'], { cwd: at, env, timeoutMs: GIT_TOP_MS })
-        .then(done => (done.exitCode === 0 ? done.stdout.trim() : ''))
-        .catch(() => '')
-      const found = top !== '' ? top : at
+      // The nearest folder, from the session's own upward, that holds a `.git`,
+      // and only if git, asked from the session's folder, names the same one
+      // (core/top.ts says why both). Else the session's folder.
+      const real = (await realOf(at)) ?? at
+      let walkTop: string | null = null
+      for (const dir of ancestorsOf(real)) {
+        const hasGit = await $.fs.exists(`${dir}/.git`).catch(() => false)
+        if (hasGit) {
+          walkTop = dir
+          break
+        }
+      }
+      let gitTop: string | null = null
+      if (walkTop !== null) {
+        // Cleaned against the outermost folder that could be the repo, so a
+        // `git` inside it (a tool folder of the repo on the PATH) is never run.
+        const env = { PATH: safePath(await $.env.get('PATH').catch(() => undefined), walkTop) }
+        const said = await $.process
+          .run(['git', 'rev-parse', '--show-toplevel'], { cwd: real, env, timeoutMs: GIT_TOP_MS })
+          .then(done => (done.exitCode === 0 ? done.stdout.trim() : ''))
+          .catch(() => '')
+        gitTop = said === '' ? null : await realOf(said)
+      }
+      const found = confirmedTop(real, walkTop, gitTop)
       tops.set(at, found)
 
       return found
@@ -89,6 +116,12 @@ export const register: Register = (on, options) => {
           .repo()
           .then(repo => repo?.remote ?? null)
           .catch(() => null),
+      sessionId: () => $.session.id(),
+      stateDir: async () =>
+        stateBaseOf(
+          await $.env.get('HOME').catch(() => undefined),
+          await $.env.get('XDG_STATE_HOME').catch(() => undefined),
+        ),
       stat: path =>
         $.fs
           .stat(path, { resolve: true })
@@ -157,7 +190,7 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'factory',
-      description: 'Open the Factory work panel (close | init | approve)',
+      description: 'Open the Factory work panel (close | init | approve | where)',
     })
     // One quick read now, so the status line and the session brief have the
     // branch and the progress before the first prompt. It runs no `gh` and no
@@ -231,8 +264,9 @@ export const register: Register = (on, options) => {
       return { text: await approve(io) }
     }
     if (arg === 'init') return { text: await init(io) }
+    if (arg === 'where') return { text: await whereText(io, await io.root()) }
 
-    return { text: 'Commands: /factory, /factory close, /factory init, /factory approve' }
+    return { text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where' }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -244,7 +278,18 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {rows.map(row => {
-          const gap = Math.max(1, columns - row.left.length - row.right.length)
+          if (row.cells) {
+            return (
+              <Text>
+                {row.cells.map((cell, i) => (
+                  <Text bold={cell.tone === 'head'} dimColor={cell.tone === 'dim'} color={COLOR[cell.tone]}>
+                    {(i > 0 ? ' ' : '') + cell.text}
+                  </Text>
+                ))}
+              </Text>
+            )
+          }
+          const gap = Math.max(1, columns - displayWidth(row.left) - displayWidth(row.right))
 
           return (
             <Text bold={row.tone === 'head'} dimColor={row.tone === 'dim'} color={COLOR[row.tone]}>

@@ -4,7 +4,8 @@ import type { Engine } from 'claude-code/testing'
 import { mock } from 'claude-code/testing'
 
 import { emptyModel } from '../core/model'
-import type { PanelModel } from '../core/model'
+import { stateFolderOf } from '../core/state-path'
+import type { FactoryView, JobView, PanelModel } from '../core/model'
 
 export const PANE = {
   plugin: 'factory',
@@ -51,7 +52,7 @@ export const FULL: PanelModel = {
 
 // What `state.get` answers for the panel atom holding `model`.
 export function stored(model: PanelModel) {
-  return { value: { value: { shape: 'panel-1', value: model }, version: 1 } }
+  return { value: { value: { shape: 'panel-2', value: model }, version: 1 } }
 }
 
 type Run = { exitCode: number; stdout: string; stderr?: string }
@@ -86,6 +87,8 @@ export function engine(
     writes: [] as string[],
     reads: [] as string[],
     paths: [] as (string | undefined)[],
+    // The PATH of the git call that asks where the repo starts.
+    probePaths: [] as (string | undefined)[],
     agents: (world.agents ?? []) as unknown[],
     isOpen: false,
     // The pane is on screen: placed, and the tab the surface shows.
@@ -94,6 +97,11 @@ export function engine(
     // The working tree the session is in, and the main checkout when it differs.
     root: '/r',
     repoRoot: null as string | null,
+    // What git says is the top of the working tree. By default git is honest:
+    // the nearest folder above the session's that holds a `.git`.
+    gitTop: null as string | null,
+    // True when git refuses the repository (a `.git` another user owns).
+    gitRefuses: false,
     cwds: [] as (string | undefined)[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
   }
@@ -117,6 +125,7 @@ export function engine(
       : []) as never,
   }))
   on('session.root', () => ({ value: seen.root }))
+  on('session.id', () => ({ value: 'session-1' }))
   on('ui.status', (_, e) => {
     seen.status.push(e.text)
 
@@ -162,6 +171,7 @@ export function engine(
       } as never,
     }
   })
+  on('fs.exists', (_, e) => ({ value: seen.files[real(e.path)] !== undefined || isDir(real(e.path)) }))
   on('fs.read', (_, e) => {
     seen.reads.push(e.path)
     const text = seen.files[real(e.path)]
@@ -190,11 +200,21 @@ export function engine(
       value: [...names].map(([name, isDir]) => ({ name, kind: isDir ? 'dir' : 'file', size: 0, mtimeMs: 0 })) as never,
     }
   })
-  on('env.get', (_, e) => ({ value: e.name === 'PATH' ? (world.path ?? '/usr/bin:/bin') : undefined }))
+  on('env.get', (_, e) => ({
+    value: e.name === 'PATH' ? (world.path ?? '/usr/bin:/bin') : e.name === 'HOME' ? '/home/me' : undefined,
+  }))
   on('process.run', (_, e) => {
-    // The top of the working tree: answered here, and not counted as a run.
     if (e.argv.join(' ') === 'git rev-parse --show-toplevel') {
-      return { value: { exitCode: 0, stdout: seen.root + '\n', stderr: '' } as never }
+      seen.probePaths.push(e.init?.env?.PATH)
+      const from = e.init?.cwd ?? seen.root
+      const dirs = from.split('/').map((_, i, parts) => parts.slice(0, parts.length - i).join('/') || '/')
+      const honest = dirs.find(dir => seen.files[real(`${dir}/.git`)] !== undefined || isDir(real(`${dir}/.git`)))
+      const top = seen.gitTop ?? honest
+      if (seen.gitRefuses || top === undefined) {
+        return { value: { exitCode: 128, stdout: '', stderr: 'fatal: detected dubious ownership' } as never }
+      }
+
+      return { value: { exitCode: 0, stdout: top + '\n', stderr: '' } as never }
     }
     seen.cwds.push(e.init?.cwd)
     seen.ran.push(e.argv.join(' '))
@@ -238,3 +258,147 @@ export const COMPOSE = {
   outputStyle: null,
   traits: [],
 } as never
+
+// An Io held in memory, for code that takes an Io and needs no engine: a file
+// map, a session id, a clock. `git ls-files` says whether .factory is tracked.
+export function fakeIo(
+  world: {
+    files?: Record<string, string>
+    // Folders made with mkdir, shared by the sessions of one test.
+    dirs?: Map<string, number>
+    session?: string
+    now?: number
+    stateDir?: string
+  } = {},
+) {
+  const files = world.files ?? {}
+  const dirs = world.dirs ?? new Map<string, number>()
+  const isDir = (path: string) => dirs.has(path) || Object.keys(files).some(file => file.startsWith(path + '/'))
+  const io = {
+    files,
+    session: world.session ?? 'session-1',
+    time: world.now ?? 0,
+    model: emptyModel(),
+    reads: [] as string[],
+    ran: [] as string[],
+    now: async () => io.time,
+    root: async () => '/r',
+    remote: async () => null,
+    sessionId: async () => io.session,
+    stateDir: async () => world.stateDir ?? '/state',
+    stat: async (path: string) => {
+      const text = files[path]
+      if (text !== undefined) return { kind: 'file' as const, size: text.length, mtimeMs: 0, realPath: path }
+
+      return isDir(path) ? { kind: 'dir' as const, size: 0, mtimeMs: dirs.get(path) ?? 0, realPath: path } : null
+    },
+    isLink: async () => false,
+    readFile: async (path: string) => {
+      io.reads.push(path)
+
+      return files[path] ?? null
+    },
+    listDir: async (path: string) => {
+      const names = new Set<string>()
+      for (const file of Object.keys(files)) {
+        if (!file.startsWith(path + '/')) continue
+        const rest = file.slice(path.length + 1)
+        names.add(rest.includes('/') ? rest.split('/')[0] + '/' : rest)
+      }
+
+      return [...names]
+    },
+    writeFile: async (path: string, text: string) => {
+      files[path] = text
+    },
+    run: async (argv: string[]) => {
+      io.ran.push(argv.join(' '))
+      const done = (ok: boolean) => ({ exitCode: ok ? 0 : 1, stdout: '', stderr: '' })
+      const [program, a, b] = argv
+      // mkdir makes a folder only if nothing is there: it is the atomic step of the lock.
+      if (program === 'mkdir' && a !== undefined) {
+        if (isDir(a) || files[a] !== undefined) return done(false)
+        dirs.set(a, io.time)
+
+        return done(true)
+      }
+      if (program === 'mv' && a !== undefined && b !== undefined) {
+        if (!isDir(a)) return done(false)
+        for (const file of Object.keys(files).filter(name => name.startsWith(a + '/'))) {
+          files[b + file.slice(a.length)] = files[file] ?? ''
+          delete files[file]
+        }
+        dirs.delete(a)
+        dirs.set(b, io.time)
+
+        return done(true)
+      }
+      if (program === 'rm' && a === '-r' && b !== undefined) {
+        for (const file of Object.keys(files).filter(name => name.startsWith(b + '/'))) delete files[file]
+        dirs.delete(b)
+
+        return done(true)
+      }
+
+      return { failed: 'not-found' as const }
+    },
+    storeGet: async () => undefined,
+    storeSet: async () => undefined,
+    getModel: async () => io.model,
+    updateModel: async (change: (model: PanelModel) => PanelModel) => {
+      io.model = change(io.model)
+
+      return io.model
+    },
+    status: () => undefined,
+    toast: () => undefined,
+    sound: () => undefined,
+    agents: async () => [],
+    isPaneDrawn: async () => true,
+  }
+
+  return io
+}
+
+const jobView = (over: Partial<JobView> & Pick<JobView, 'itemId' | 'stage'>): JobView => ({
+  title: 'A job',
+  stoppedIn: null,
+  round: 1,
+  maxRounds: 3,
+  sentBack: null,
+  question: null,
+  prNumber: null,
+  minutes: 0,
+  costUsd: null,
+  ...over,
+})
+
+// A factory with two running jobs (one on the gate's loop) and two that wait.
+export const VIEW: FactoryView = {
+  jobs: [
+    jobView({ itemId: 'PROJ-12', stage: 'review', minutes: 9, costUsd: 2.1 }),
+    jobView({
+      itemId: 'PROJ-13',
+      stage: 'build',
+      round: 2,
+      sentBack: { by: 'gate', why: '2 tests failed' },
+      minutes: 14,
+      costUsd: 3.4,
+    }),
+    jobView({ itemId: 'PROJ-14', stage: 'needs-info', stoppedIn: 'intake', question: 'Which default font?' }),
+    jobView({ itemId: 'PROJ-10', stage: 'ready', prNumber: 51 }),
+  ],
+  counts: [4, 0, 0, 1, 0, 1, 0, 2],
+  running: 2,
+  waiting: 2,
+  moreRunning: 0,
+  moreWaiting: 0,
+  queue: 4,
+  slots: 2,
+  today: { done: 3, minutes: 41, costUsd: 9.8, firstRound: 2, finished: 3 },
+  note: null,
+}
+
+// Where the factory keeps the state of the repo at /r: under the person's home
+// (the kit's HOME is /home/me), never in the repo.
+export const STATE = '/home/me/.local/state/claude-factory/' + stateFolderOf('/r')

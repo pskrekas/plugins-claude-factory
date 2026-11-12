@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "id": "14-different-fonts",
+  "itemId": "14",
+  "title": "Different fonts",
+  "stage": "needs-info",
+  "round": 1,
+  "risk": null,
+  "surfaces": [],
+  "reviewers": [],
+  "stoppedIn": "intake",
+  "question": "Which font is the default?",
+  "sentBack": null,
+  "pr": null,
+  "createdAt": 1794490000000,
+  "updatedAt": 1794490090000,
+  "agentMs": 90000,
+  "costUsd": 0.2,
+  "spend": [
+    {
+      "day": "2026-11-12",
+      "ms": 90000,
+      "usd": 0.2
+    }
+  ],
+  "stageMs": {
+    "intake": 90000
+  },
+  "granted": {
+    "rounds": 0,
+    "usd": 0,
+    "minutes": 0
+  },
+  "history": [
+    {
+      "at": 1794490000000,
+      "from": null,
+      "to": "intake",
+      "reason": "started"
+    },
+    {
+      "at": 1794490090000,
+      "from": "intake",
+      "to": "needs-info",
+      "reason": "a question for the author"
+    }
+  ]
+}

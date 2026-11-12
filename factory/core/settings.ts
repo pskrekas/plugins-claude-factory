@@ -2,6 +2,10 @@
 // wrong falls back to its default and is named in `error` (the first one only).
 // Unknown keys are ignored, so a later phase's keys never break this one.
 
+import { FACTORY_DEFAULTS, parseFactory } from './factory-settings'
+import type { FactorySettings } from './factory-settings'
+import { CONTROL_CHAR, isInside, isObject, isText } from './rules'
+
 export type CheckSpec = { name: string; run?: string[]; want?: string; minFreeGb?: number }
 
 export type TrackerKind = 'github' | 'azure-boards' | 'jira' | 'asana' | 'mcp'
@@ -16,6 +20,7 @@ export type Settings = {
   ports: { name: string; port: number }[]
   owed: string | null
   gate: { fast: string[][]; full: string[][] }
+  factory: FactorySettings
 }
 
 export const DEFAULTS: Settings = {
@@ -28,6 +33,7 @@ export const DEFAULTS: Settings = {
   ports: [],
   owed: null,
   gate: { fast: [], full: [] },
+  factory: FACTORY_DEFAULTS,
 }
 
 const TRACKERS: readonly string[] = ['github', 'azure-boards', 'jira', 'asana', 'mcp']
@@ -45,11 +51,7 @@ const NOT_PATH = 'a check must name a program on PATH, not a path'
 // A key's parser: the value, or a string saying why it is refused.
 type Parsed<T> = { ok: T } | { no: string }
 
-const isObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === 'object' && v !== null && !Array.isArray(v)
-const isText = (v: unknown): v is string => typeof v === 'string' && v !== ''
 
-const CONTROL_CHAR = /[\u0000-\u001f\u007f-\u009f]/
 
 // Why `v` is refused as a command (an argv), or null when it is one.
 function argvProblem(v: unknown): string | null {
@@ -156,20 +158,14 @@ function isPattern(source: string): boolean {
   return depth === 0 && repeats <= MAX_REPEATS
 }
 
-// A path the plugin reads must stay in the repo: what it finds there is shown
-// in the panel and told to the model, so a settings file must not be able to
-// point it at a file elsewhere on the machine.
-function isInside(path: string): boolean {
-  if (path.startsWith('/') || path.startsWith('~') || path.includes('\\')) return false
-  if (CONTROL_CHAR.test(path)) return false
-
-  return !path.split('/').includes('..')
-}
-
 function repoPath(v: unknown): Parsed<string> {
   if (!isText(v)) return { no: WRONG }
 
   return isInside(v) ? { ok: v } : { no: OUTSIDE }
+}
+
+export function isMark(mark: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9:_ -]{0,49}$/.test(mark)
 }
 
 function ticketPattern(v: unknown): Parsed<string> {
@@ -180,7 +176,9 @@ function ticketPattern(v: unknown): Parsed<string> {
 
 function tracker(v: unknown): Parsed<Settings['tracker']> {
   if (!isObject(v) || !isText(v.kind) || !TRACKERS.includes(v.kind)) return { no: WRONG }
-  if (v.mark !== undefined && !isText(v.mark)) return { no: WRONG }
+  // The mark is handed to the tracker's command as an argument: it must look
+  // like a label, so it can never be read as an option.
+  if (v.mark !== undefined && (!isText(v.mark) || !isMark(v.mark))) return { no: WRONG }
   if (v.project !== undefined && !isText(v.project)) return { no: WRONG }
 
   return {
@@ -301,6 +299,7 @@ export function parseSettings(source: string | null): { settings: Settings; erro
   take('ports', ports)
   take('owed', repoPath)
   take('gate', gate)
+  take('factory', parseFactory)
 
   return { settings, error }
 }

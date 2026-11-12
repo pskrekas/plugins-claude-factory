@@ -47,6 +47,52 @@ export type AgentRow = {
 
 export type WorktreeRow = { path: string; branch: string | null; isMerged: boolean }
 
+// One factory job, as the pane draws it.
+export type JobStage =
+  | 'intake'
+  | 'needs-info'
+  | 'spec'
+  | 'build'
+  | 'gate'
+  | 'review'
+  | 'approve'
+  | 'needs-human'
+  | 'ready'
+  | 'done'
+  | 'rejected'
+
+export type JobView = {
+  itemId: string
+  title: string
+  stage: JobStage
+  stoppedIn: JobStage | null
+  round: number
+  maxRounds: number
+  sentBack: { by: 'gate' | 'review' | 'approve' | 'you'; why: string } | null
+  question: string | null
+  prNumber: number | null
+  minutes: number
+  costUsd: number | null
+}
+
+export type FactoryView = {
+  // Some of the running jobs, then some of the waiting ones; at most 20.
+  jobs: JobView[]
+  // The jobs at each station, of all jobs: Queue, Intake … Approve, You.
+  counts: number[]
+  // How many jobs run and how many wait for the person, of all jobs.
+  running: number
+  waiting: number
+  // Running and waiting jobs that are not in `jobs`.
+  moreRunning: number
+  moreWaiting: number
+  // Items that carry the mark; null when it is not known.
+  queue: number | null
+  slots: number
+  today: { done: number; minutes: number; costUsd: number | null; firstRound: number; finished: number }
+  note: string | null
+}
+
 // none = the repo has no settings file
 export type Consent = 'none' | 'needed' | 'approved'
 
@@ -60,6 +106,8 @@ export type PanelModel = {
   shown: string[]
   settingsError: string | null
   task: TaskState | null
+  // The factory line; null when there is nothing to show.
+  factory: FactoryView | null
   progress: ProgressState[]
   // Progress files that exist and are not listed (only the newest are).
   progressMore: number

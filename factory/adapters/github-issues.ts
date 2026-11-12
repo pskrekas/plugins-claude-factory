@@ -3,6 +3,9 @@ import type { RunResult } from '../core/run'
 import type { Run, Tracker, TrackerItem } from './tracker'
 
 const FIELDS = 'number,title,state,body,author,comments,url'
+const LIST_FIELDS = 'number,title,state,labels'
+const LIST_LIMIT = 100
+const MARK = /^[A-Za-z0-9][A-Za-z0-9:_ -]{0,49}$/
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -44,6 +47,49 @@ export async function readIssue(
   return { item: ok ? parseGhIssue(result.stdout) : null, result }
 }
 
-export function githubIssues(run: Run): Pick<Tracker, 'read'> {
-  return { read: async id => (await readIssue(run, id)).item }
+export function parseGhIssueList(
+  json: string,
+): { id: string; title: string; state: string; labels: string[] }[] {
+  let raw: unknown
+  try {
+    raw = JSON.parse(json)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(raw)) return []
+
+  return raw.filter(isObject).flatMap(issue => {
+    if (typeof issue.number !== 'number' || typeof issue.title !== 'string') return []
+    const labels = Array.isArray(issue.labels) ? issue.labels.filter(isObject).map(label => text(label.name)) : []
+
+    return [{ id: String(issue.number), title: issue.title, state: text(issue.state).toLowerCase(), labels }]
+  })
+}
+
+// The open issues that carry the mark and that the factory does not have yet:
+// an issue with a label `<mark>:…` (in progress, needs a person) is left out.
+// The mark is an argument of `gh`, so one that does not look like a label runs
+// nothing. `items` is null when the list could not be read.
+export async function listIssues(
+  run: Run,
+  mark: string,
+): Promise<{ items: { id: string; title: string; state: string }[] | null; result: RunResult | null }> {
+  if (!MARK.test(mark)) return { items: null, result: null }
+  const result = await run([
+    'gh', 'issue', 'list', '--label', mark, '--state', 'open',
+    '--limit', String(LIST_LIMIT), '--json', LIST_FIELDS,
+  ])
+  if ('failed' in result || result.exitCode !== 0) return { items: null, result }
+  const items = parseGhIssueList(result.stdout)
+    .filter(issue => !issue.labels.some(label => label.startsWith(`${mark}:`)))
+    .map(({ id, title, state }) => ({ id, title, state }))
+
+  return { items, result }
+}
+
+export function githubIssues(run: Run): Pick<Tracker, 'read' | 'list'> {
+  return {
+    read: async id => (await readIssue(run, id)).item,
+    list: async mark => (await listIssues(run, mark)).items ?? [],
+  }
 }

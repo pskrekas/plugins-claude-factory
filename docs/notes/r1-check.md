@@ -47,3 +47,17 @@ To do by the owner, in a scratch git repo with a GitHub remote:
 - [ ] CHECKS shows `disk ok`. The status line shows a text.
 - [ ] Add a line `BLOCKED: test` to the progress file and wait one minute. A
       toast appears, with a short sound.
+
+## The FACTORY section, by hand (phase 2a)
+
+To do by the owner, in any git repo, with `claude --plugin-dir <this repo>/factory`:
+
+- [ ] `/factory where` prints a folder under your home.
+- [ ] Copy the sample jobs: `mkdir -p "<that folder>/jobs" && cp -R <this repo>/docs/examples/factory-jobs/* "<that folder>/jobs/"`.
+- [ ] `/factory` in a wide terminal: the FACTORY section shows the line with its
+      loops, the job `12` with `fail` under Gate and `now` under Build, and
+      NEEDS YOU (2) with a question and `PR 19 is ready. You merge.`
+- [ ] The gate's loop (`fail`) is in the warning colour; the `You` count is red.
+- [ ] In a narrow terminal the line is the short form (`Q0 I0 S0 B1 …`).
+- [ ] The status line shows `factory 1 run, 2 need you`.
+- [ ] Remove the sample jobs when done: `rm -r "<that folder>/jobs"`.
