@@ -439,8 +439,8 @@ comment; the plugin checks before it sends.
   showed while it was on screen (placed, and the tab the surface shows), for the repo
   it showed them for; lines the pane has not shown are shown first and approved by a
   second run. Only the person's own Enter at the prompt can approve. The approval is
-  stored outside the repo (`$.store`), keyed by the repository's main checkout (so its
-  worktrees share it), as the full list of approved command lines (never a digest); a
+  stored outside the repo (`$.store`), keyed by the repository's own git folder as git
+  names it (a linked worktree shares it; a repository cloned inside another does not), as the full list of approved command lines (never a digest); a
   command that is not in the list asks again. A command is shown in full, in printable
   ASCII; one with a control character is refused. The list holds the checks' commands;
   the gate's commands get their own approval in phase 2, so a line approved for one

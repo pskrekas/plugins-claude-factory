@@ -94,6 +94,8 @@ export function engine(
     // The working tree the session is in, and the main checkout when it differs.
     root: '/r',
     repoRoot: null as string | null,
+    // What git names as the repository's own folder; by default the main checkout's `.git`.
+    commonDir: null as string | null,
     cwds: [] as (string | undefined)[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
   }
@@ -195,6 +197,11 @@ export function engine(
     // The top of the working tree: answered here, and not counted as a run.
     if (e.argv.join(' ') === 'git rev-parse --show-toplevel') {
       return { value: { exitCode: 0, stdout: seen.root + '\n', stderr: '' } as never }
+    }
+    if (e.argv.join(' ') === 'git rev-parse --path-format=absolute --git-common-dir') {
+      const dir = seen.commonDir ?? (seen.repoRoot ?? seen.root) + '/.git'
+
+      return { value: { exitCode: 0, stdout: dir + '\n', stderr: '' } as never }
     }
     seen.cwds.push(e.init?.cwd)
     seen.ran.push(e.argv.join(' '))

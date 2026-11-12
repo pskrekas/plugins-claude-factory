@@ -93,3 +93,7 @@ that was made to continue, with its cost if it is wrong. The owner can change an
 - spec 4.1 keys w and o for MORE lines and the agent's model are not built.
 - the agent.spawn hook has no .catch (validator note).
 - a settings file over 256 KiB reads as "No settings file", and init then says it exists.
+
+## After the final review
+
+- Security review: approvals were keyed by the session's repository, while the settings are read from the working tree's top; a repository cloned inside another could then use the outer one's approvals for the same command line. The key is now the repository's own git folder (`git rev-parse --git-common-dir`), which a linked worktree shares and a nested repository does not — test 'an approval never covers another repository that sits inside this one' RED→GREEN, suite 122/122.

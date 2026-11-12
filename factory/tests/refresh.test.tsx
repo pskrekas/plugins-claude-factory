@@ -196,3 +196,25 @@ test('in a linked worktree the panel reads the worktree, and an approval covers 
   await $.command.run(cmd(''))
   expect((await paneText($)).some(row => row.startsWith('SETTINGS NOT APPROVED'))).toBe(false)
 })
+
+test('an approval never covers another repository that sits inside this one', async ($, on) => {
+  const world = engine(on, {
+    files: { '/main/.claude/factory.json': CHECK, '/main/vendor/other/.claude/factory.json': CHECK },
+    run: argv => (argv[0] === 'x' ? { exitCode: 0, stdout: '' } : undefined),
+  })
+  world.root = '/main'
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+  await $.command.run(cmd('approve'))
+  expect(world.ran.filter(line => line === 'x').length).toBe(1)
+
+  // A different repository, cloned inside: the same command line, another repo.
+  // The session still names the outer repository as "the repo".
+  world.root = '/main/vendor/other'
+  world.repoRoot = '/main'
+  world.commonDir = '/main/vendor/other/.git'
+  await $.command.run(cmd(''))
+
+  expect((await paneText($))[0]).toBe('SETTINGS NOT APPROVED · 1 command')
+  expect(world.ran.filter(line => line === 'x').length).toBe(1)
+})
