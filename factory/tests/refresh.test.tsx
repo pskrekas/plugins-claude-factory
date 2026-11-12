@@ -1,4 +1,6 @@
+import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 import { START, cmd, engine, paneText, settingsRuns } from './kit'
 
@@ -251,4 +253,65 @@ test('a folder that only claims to be a worktree of a repo does not get its appr
 
   expect((await paneText($))[0]).toBe('SETTINGS NOT APPROVED · 1 command')
   expect(world.ran.filter(line => line === 'x').length).toBe(1)
+})
+
+// A person's repo at /main with one approved command, and a real worktree of it at /main-wt.
+async function approvedMain($: Engine, on: On, extra: { files: Record<string, string>; links: Record<string, string> }) {
+  const world = engine(on, {
+    files: {
+      '/main/.claude/factory.json': CHECK,
+      '/main/.git/HEAD': 'x',
+      '/main/.git/worktrees/real/gitdir': '/main-wt/.git\n',
+      '/main-wt/.git': 'gitdir: /main/.git/worktrees/real\n',
+      ...extra.files,
+    },
+    links: extra.links,
+    run: argv => (argv[0] === 'x' ? { exitCode: 0, stdout: '' } : undefined),
+  })
+  world.root = '/main'
+  await $.session.start(START)
+  await $.command.run(cmd(''))
+  await $.command.run(cmd('approve'))
+  expect(world.ran.filter(line => line === 'x').length).toBe(1)
+
+  return world
+}
+
+test('a tree whose .git is a link to a repo folder does not get that repo approvals', async ($, on) => {
+  const world = await approvedMain($, on, {
+    files: { '/evil/.claude/factory.json': CHECK },
+    links: { '/evil/.git': '/main/.git' },
+  })
+
+  world.root = '/evil'
+  await $.command.run(cmd(''))
+
+  expect((await paneText($))[0]).toBe('SETTINGS NOT APPROVED · 1 command')
+  expect(world.ran.filter(line => line === 'x').length).toBe(1)
+})
+
+test('a tree whose .git is a link to a real worktree file does not get that repo approvals', async ($, on) => {
+  const world = await approvedMain($, on, {
+    files: { '/evil/.claude/factory.json': CHECK },
+    links: { '/evil/.git': '/main-wt/.git' },
+  })
+
+  world.root = '/evil'
+  await $.command.run(cmd(''))
+
+  expect((await paneText($))[0]).toBe('SETTINGS NOT APPROVED · 1 command')
+  expect(world.ran.filter(line => line === 'x').length).toBe(1)
+})
+
+test('the real worktree of an approved repo shares its approvals', async ($, on) => {
+  const world = await approvedMain($, on, {
+    files: { '/main-wt/.claude/factory.json': CHECK },
+    links: {},
+  })
+
+  world.root = '/main-wt'
+  await $.command.run(cmd(''))
+
+  expect((await paneText($)).some(row => row.startsWith('SETTINGS NOT APPROVED'))).toBe(false)
+  expect(world.ran.filter(line => line === 'x').length).toBe(2)
 })

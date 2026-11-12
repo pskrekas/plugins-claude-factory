@@ -26,13 +26,20 @@ async function pointer(io: Io, path: string): Promise<string | null> {
 //   that merely claims to be a worktree of someone's repository (unpacked from
 //   an archive, say) cannot write it.
 // - Anything else (no git, a submodule, a link that does not check out): the
-//   tree's own path. What git itself would answer is not asked: a hostile tree
-//   can make git name any folder.
+//   tree's own path.
+//
+// Two things are never trusted. What git itself would answer: a hostile tree
+// can make git name any folder. And a `.git` that is a symbolic link, or that
+// is anywhere but directly inside this tree: every comparison below is with
+// `<this tree's real path>/.git`, so a link to another repository's `.git`, or
+// to a real worktree's `.git` file, proves nothing.
 export async function consentKeyOf(io: Io, root: string): Promise<string> {
-  const dotGit = await io.stat(`${root}/.git`)
   const own = (await io.stat(root))?.realPath ?? root
-  if (dotGit === null) return own
-  if (dotGit.kind === 'dir') return dotGit.realPath
+  const expected = `${own}/.git`
+  if (await io.isLink(`${root}/.git`)) return own
+  const dotGit = await io.stat(`${root}/.git`)
+  if (dotGit === null || dotGit.realPath !== expected) return own
+  if (dotGit.kind === 'dir') return expected
 
   const line = await pointer(io, `${root}/.git`)
   const target = line?.startsWith('gitdir:') ? line.slice('gitdir:'.length).trim() : ''
@@ -42,10 +49,11 @@ export async function consentKeyOf(io: Io, root: string): Promise<string> {
   const worktrees = parentOf(gitDir.realPath)
   if (nameOf(worktrees) !== 'worktrees') return own
 
-  // The way back: <main .git>/worktrees/<name>/gitdir must name this tree's `.git`.
+  // The way back: <main .git>/worktrees/<name>/gitdir must name this tree's own `.git`.
   const back = await pointer(io, `${gitDir.realPath}/gitdir`)
-  const named = back === null || back === '' ? null : await io.stat(back)
-  if (named === null || named.realPath !== dotGit.realPath) return own
+  if (back === null || back === '' || (await io.isLink(back))) return own
+  const named = await io.stat(back)
+  if (named === null || named.realPath !== expected) return own
 
   return parentOf(worktrees)
 }
