@@ -112,6 +112,52 @@ export async function worktreeGitDir(
   return { gitDir: real, workTree }
 }
 
+// Puts a folder's own `.git` file back as git made it: one plain file that
+// names the folder of the repository's git folder that names it back. A
+// command in a container can put anything in its place (a git repository of
+// its own, a link), and then a `git` that a person, the engine or a tool
+// runs in that folder would read the builder's settings and start the
+// programs they name. Called only when nothing of the job runs. Every other
+// entry named `.git`, by any case, at the top of the folder is removed.
+// False when git knows no such folder: then nothing is written, and a `.git`
+// that is not a plain file is still removed.
+export async function healGitFile(io: Io, root: string, folder: string): Promise<boolean> {
+  const here = await io.stat(folder)
+  if (here === null || here.kind !== 'dir') return false
+  const common = await consentKeyOf(io, root)
+  const home = common.endsWith('/.git') ? await io.stat(`${common}/worktrees`) : null
+  let expected: string | null = null
+  for (const entry of home === null || home.kind !== 'dir' ? [] : await io.listDir(home.realPath)) {
+    if (!entry.endsWith('/')) continue
+    const gitDir = `${home?.realPath}/${entry.slice(0, -1)}`
+    const back = await pointer(io, `${gitDir}/gitdir`)
+    const parent = back === null || !back.endsWith('/.git') ? null : await io.stat(back.slice(0, -'/.git'.length))
+    if (parent === null || parent.realPath !== here.realPath) continue
+    expected = `gitdir: ${gitDir}\n`
+    break
+  }
+  const dot = `${folder}/.git`
+  let isWhole = false
+  for (const entry of await io.listDir(folder)) {
+    const name = entry.endsWith('/') ? entry.slice(0, -1) : entry
+    if (name.toLowerCase() !== '.git') continue
+    const info = name === '.git' && !entry.endsWith('/') && !(await io.isLink(dot)) ? await io.stat(dot) : null
+    const isPlain = info !== null && info.kind === 'file' && info.size <= MAX_POINTER
+    // With no known pointer a plain file is left: the plugin's own check refuses a wrong one.
+    if (isPlain && expected === null) continue
+    if (isPlain && (await io.readFile(dot)) === expected) {
+      isWhole = true
+      continue
+    }
+    // By its name with no `/` at the end: a link is removed, not followed.
+    await io.run(['rm', '-r', '-f', `${folder}/${name}`], { timeoutMs: GIT_TIMEOUT_MS })
+  }
+  if (expected === null) return false
+  if (!isWhole) await io.writeFile(dot, expected)
+
+  return true
+}
+
 const FIND_TIMEOUT_MS = 60_000
 
 // Every entry of a job's folder that is named `.git`, by any case; null when

@@ -6,6 +6,7 @@ import {
   addCleanCopy,
   addWorktree,
   commitAll,
+  healGitFile,
   changedFiles,
   headOf,
   diffText,
@@ -397,4 +398,43 @@ test("a git repository inside the job's folder stops every git call on the folde
   blind.answer = argv => (argv[0] === 'find' ? { exitCode: 1, stdout: '', stderr: 'find: permission denied' } : undefined)
   expect(await worktreeGitDir(blind, '/r', ID)).toBe(null)
   expect(await commitAll(blind, '/r', JOB12)).toEqual({ ok: false, why: 'the worktree is not the one git made' })
+})
+
+const POINTER = `gitdir: ${GIT_DIR}\n`
+
+test("the folder's own .git file is put back when a command changed it", async () => {
+  // As git made it: nothing is touched.
+  const whole = fakeIo({ files: LINKED })
+  expect(await healGitFile(whole, '/r', WT)).toBe(true)
+  expect([whole.ran, whole.written]).toEqual([[], []])
+
+  // In its place: a git repository of the builder's own, another text, a link, or the file under another case beside a folder.
+  const hostile: [string, Record<string, string>, Set<string>?][] = [
+    ['a repository', { [`${WT}/.git/config`]: '[core]\n\tfsmonitor = /x', [`${WT}/.git/HEAD`]: 'ref: refs/heads/main' }],
+    ['another text', { [`${WT}/.git`]: 'gitdir: /somewhere/else\n' }],
+    ['more than the pointer', { [`${WT}/.git`]: `${POINTER}[core]\n` }],
+    ['a link', { [`${WT}/.git`]: 'x' }, new Set([`${WT}/.git`])],
+    ['another case', { [`${WT}/.GIT/config`]: 'x' }],
+    ['nothing', {}],
+  ]
+  for (const [what, files, links] of hostile) {
+    const base = Object.fromEntries(Object.entries(LINKED).filter(([name]) => name !== `${WT}/.git` || what === 'another case'))
+    const io = fakeIo({ files: { ...base, [`${WT}/src/a.ts`]: 'x', ...files }, links })
+    expect([what, await healGitFile(io, '/r', WT)]).toEqual([what, true])
+    // What is there now is the pointer git wrote, as a plain file, and no other `.git` of any case.
+    expect([what, io.files[`${WT}/.git`], await io.isLink(`${WT}/.git`)]).toEqual([what, POINTER, false])
+    expect([what, Object.keys(io.files).filter(name => name.toLowerCase().startsWith(`${WT}/.git/`.toLowerCase()))]).toEqual([what, []])
+    // The builder's other files are not touched, and no link is followed (the name has no `/` at its end).
+    expect(io.files[`${WT}/src/a.ts`]).toBe('x')
+    expect(io.ran.every(line => line.startsWith(`rm -r -f ${WT}/.`) && !line.endsWith('/'))).toBe(true)
+  }
+
+  // A folder that git does not know (no folder of the repo names it): a hostile `.git` is still removed, and none is written.
+  const unknown = fakeIo({ files: { '/r/.git/HEAD': 'x', [`${WT}/.git/config`]: 'x', [`${WT}/a.ts`]: 'x' } })
+  expect(await healGitFile(unknown, '/r', WT)).toBe(false)
+  expect(Object.keys(unknown.files).some(name => name.startsWith(`${WT}/.git`))).toBe(false)
+  // A plain file there is left: the plugin's own check refuses a wrong one.
+  const plain = fakeIo({ files: { '/r/.git/HEAD': 'x', [`${WT}/.git`]: 'gitdir: x\n' } })
+  expect(await healGitFile(plain, '/r', WT)).toBe(false)
+  expect([plain.ran, plain.files[`${WT}/.git`]]).toEqual([[], 'gitdir: x\n'])
 })

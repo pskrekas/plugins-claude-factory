@@ -39,7 +39,10 @@ was confirmed on real git 2.50.1 and Docker Desktop 29.5.3, fixed, and tried aga
    a link to any file of the person in its place, and the next command's mount made
    docker follow the link. The mount is gone. A changed `.git` file now only stops
    the job: the plugin's check of it (`worktreeGitDir`) refuses a link and a pointer
-   that does not point back.
+   that does not point back. And after each command, when its container is gone, the
+   plugin puts the folder's own `.git` file back as git made it (`healGitFile`), and
+   removes any other entry named `.git` at the top: a `git` that a person, the engine
+   or a tool runs in that folder must not read a repository the builder put there.
 2. **No git call on a folder that holds a git repository of its own.** Git starts a
    second git inside such a repository (`status`, `add`, `commit`), and that one reads
    the inner repository's own settings: a `filter` there is a program on the person's
@@ -103,6 +106,12 @@ forbidden command. A rule that refused every `$` would refuse most shell command
 
 ## Small findings, not fixed
 
+- A builder that the line gave up on can still use its file tools inside the job (it
+  runs no command). What it writes after the gate read a commit is not in that
+  commit. The plugin cannot stop an agent (phase 2b).
+- A git repository that a builder made in a folder below the top stays until a
+  person removes it; the plugin makes no git call while it is there, but a `git` that
+  a person runs inside that folder reads its settings.
 - A job file from before this phase reads as `host`: a job of phase 2b that is still
   in flight keeps `Bash` after the person approved a container. No such job exists
   yet (the line has not run for real).

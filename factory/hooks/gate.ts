@@ -18,6 +18,7 @@ import {
   fetchBase,
   git,
   headOf,
+  healGitFile,
   removeCleanCopy,
   uncommittedFiles,
 } from './worktrees'
@@ -173,6 +174,8 @@ export async function runGate(
       // While docker does not say that it is gone, the copy stays; the next
       // gate run removes both.
       const isGone = spec === false || (await removeOf(io, root, job.id, 'gate').catch(() => false))
+      // The copy's own `.git` file is put back first: git checks it before it removes the copy.
+      if (isGone && spec !== false) await healGitFile(io, root, copy.path).catch(() => false)
       if (isGone) await removeCleanCopy(io, root, job.id)
     }
   }

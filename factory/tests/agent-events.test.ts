@@ -496,3 +496,27 @@ test('where a job builds is read from the job each time: an item that runs again
   expect((await onToolCheck(boxed, { agentId: 'b55', tool: 'Bash', input: { command: 'npm test' } }))?.decision).toBe('deny')
   expect(await onFileCall(boxed, { agentId: 'b55', tool: 'Write' }, async () => 'done')).toEqual({ deny: 'The call was not understood.' })
 })
+
+test("after each command of a builder the folder's own .git file is as git made it", async () => {
+  const job = build('56', 'container')
+  const io = shellWorld([job])
+  io.time = 450_000
+  const gitDir = `/r/.git/worktrees/${job.id}`
+  io.files[`${gitDir}/gitdir`] = `${wt(job)}/.git\n`
+  // The command left a git repository of its own where the pointer was.
+  io.files[`${wt(job)}/.git/config`] = '[core]\n\tfsmonitor = /x'
+  expect(await onShell(io, { agentId: 'b56', command: 'rm .git; git init' })).toEqual({ result: 'exit 0\nhello\n' })
+  expect(io.files[`${wt(job)}/.git`]).toBe(`gitdir: ${gitDir}\n`)
+  expect(io.files[`${wt(job)}/.git/config`]).toBe(undefined)
+  // First the container is gone, then the folder is put right.
+  expect(io.ran.findIndex(line => line.startsWith('docker rm -f')) < io.ran.findIndex(line => line.startsWith('rm -r -f'))).toBe(true)
+
+  // While docker does not confirm that the container is gone, the folder is not touched.
+  const stuck = shellWorld([build('57', 'container')])
+  stuck.time = 460_000
+  const answer = stuck.answer
+  stuck.answer = argv => (argv[1] === 'rm' && argv[0] === 'docker' ? { exitCode: 1, stdout: '', stderr: 'Cannot connect' } : answer?.(argv))
+  stuck.files[`${DIR}/worktrees/57-a-thing/.git/config`] = 'x'
+  await onShell(stuck, { agentId: 'b57', command: 'ls' })
+  expect(stuck.ran.some(line => line.startsWith('rm -r'))).toBe(false)
+})

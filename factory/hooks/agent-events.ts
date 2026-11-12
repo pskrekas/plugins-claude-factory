@@ -15,6 +15,7 @@ import { dropFact } from './inbox'
 import type { Io } from './io'
 import { readJob, readJobs, setStop, stateDirOf } from './jobs'
 import { loadSettings } from './readers/settings'
+import { healGitFile, worktreePath } from './worktrees'
 
 // Starts one agent of the line. Built by a hook from its own `$`, because an
 // agent is fenced only when a hook that is still running starts it.
@@ -324,6 +325,10 @@ async function shell(io: Io, e: { agentId?: string; command?: unknown; timeout_m
     // is removed first. While that fails, nothing of the job runs.
     if (box !== null && isMaybeAlive(box) && !(await removeContainer(io, box))) return { deny: STUCK }
     const ran = await runOnce(io, root, job.id, where.container, command, Math.round(Math.min(SHELL_MS.most, Math.max(SHELL_MS.least, asked))))
+    // Nothing of the job runs now: the folder's own `.git` file is put back
+    // as git made it, whatever the command left in its place.
+    const folder = ran.isGone ? await worktreePath(io, root, job.id) : null
+    if (folder !== null) await healGitFile(io, root, folder).catch(() => false)
 
     return ran.ok ? { result: ran.text } : { deny: `${NOT_RUN}: ${ran.why.replace(/\.$/, '')}.` }
   } finally {

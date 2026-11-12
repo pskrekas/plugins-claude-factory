@@ -454,6 +454,9 @@ export function fakeIo(
       }
       if (program === 'rm' && a === '-r' && b !== undefined) {
         for (const file of Object.keys(files).filter(name => name.startsWith(b + '/'))) delete files[file]
+        // A file or a link of that name goes too.
+        delete files[b]
+        world.links?.delete(b)
         dirs.delete(b)
 
         return done(true)
