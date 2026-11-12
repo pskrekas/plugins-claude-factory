@@ -154,7 +154,7 @@ export const register: Register = (on, options) => {
       writeFile: (path, text) => $.fs.write(path, text),
       run: async (argv, init) => {
         const path = await $.env.get('PATH').catch(() => undefined)
-        const env = { PATH: safePath(path, await root()) }
+        const env = { ...init?.env, PATH: safePath(path, await root()) }
 
         return $.process
           .run(argv, { ...init, env })

@@ -2,7 +2,21 @@ import { expect, test } from 'claude-code/testing'
 
 import { move, newJob } from '../core/job'
 import { STALE_MS, lockOf, lockText } from '../core/lock'
-import { readJobs, releaseLock, takeLock, writeJob } from '../hooks/jobs'
+import {
+  addFeedback,
+  findJob,
+  isStopped,
+  lockInfo,
+  readJob,
+  readJobs,
+  releaseLock,
+  retireJob,
+  setStop,
+  stateDirOf,
+  takeLock,
+  writeJob,
+  writeJobFile,
+} from '../hooks/jobs'
 import { sha256Hex, stateBaseOf, stateFolderOf } from '../core/state-path'
 import { fakeIo } from './kit'
 
@@ -124,16 +138,16 @@ test('two sessions cannot both hold the lock', async () => {
   const second = fakeIo({ files, dirs, session: 's2' })
 
   expect(await takeLock(first, '/r', 1000)).toEqual({ isHeld: true, holder: null })
-  expect(await takeLock(second, '/r', 2000)).toEqual({ isHeld: false, holder: 's1' })
+  expect(await takeLock(second, '/r', 2000)).toEqual({ isHeld: false, holder: '/r' })
   // A new take by the holder is its heartbeat.
   expect(await takeLock(first, '/r', 3000)).toEqual({ isHeld: true, holder: null })
-  expect(await takeLock(second, '/r', 3000 + STALE_MS)).toEqual({ isHeld: false, holder: 's1' })
+  expect(await takeLock(second, '/r', 3000 + STALE_MS)).toEqual({ isHeld: false, holder: '/r' })
 
   // No heartbeat for five minutes: the lock can be taken.
   expect(await takeLock(second, '/r', 3000 + STALE_MS + 1)).toEqual({ isHeld: true, holder: null })
   // The first session's release changes nothing now.
   await releaseLock(first, '/r')
-  expect(await takeLock(first, '/r', 3000 + STALE_MS + 2)).toEqual({ isHeld: false, holder: 's2' })
+  expect(await takeLock(first, '/r', 3000 + STALE_MS + 2)).toEqual({ isHeld: false, holder: '/r' })
 
   await releaseLock(second, '/r')
   expect(await takeLock(first, '/r', 3000 + STALE_MS + 3)).toEqual({ isHeld: true, holder: null })
@@ -258,4 +272,115 @@ test('a state folder records its repository, and one that belongs to another is 
   expect(Object.keys(io.files).some(file => file.includes('2-add-a-thing'))).toBe(false)
   expect(await takeLock(io, '/r', 1000)).toEqual({ isHeld: false, holder: null })
   expect(Object.keys(io.files).some(file => file.includes('lock'))).toBe(false)
+})
+
+test('a job is written through a temporary file and one rename', async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  const j = job('1')
+  await writeJob(io, '/r', j)
+
+  expect(io.files[path(j.id)]).toBe(JSON.stringify(j, null, 2) + '\n')
+  expect(Object.keys(io.files).some(file => file.endsWith('.tmp'))).toBe(false)
+  expect(io.ran).toContain(`mv -f ${path(j.id)}.tmp ${path(j.id)}`)
+  expect(await stateDirOf(io, '/r')).toBe(DIR)
+})
+
+test('a rename that fails leaves the old job as it was', async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  const old = job('1')
+  await writeJob(io, '/r', old)
+  io.failNext = 'mv'
+  let error: unknown = null
+  await writeJob(io, '/r', { ...old, title: 'changed' }).catch(caught => (error = caught))
+
+  expect(error).not.toBe(null)
+  expect((await readJob(io, '/r', old.id))?.title).toBe('Add a thing')
+})
+
+test('a temporary file is never read as a job', async () => {
+  const j = job('1')
+  const io = fakeIo({ files: { '/r/x': '', [path(j.id) + '.tmp']: JSON.stringify(j) } })
+
+  expect(await readJobs(io, '/r')).toEqual({ jobs: [], skipped: 1, note: '1 job file skipped' })
+  expect(await readJob(io, '/r', j.id)).toBe(null)
+})
+
+test('one job by its id, and the newest job of an item', async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  const j = job('1')
+  await writeJob(io, '/r', j)
+
+  expect(await readJob(io, '/r', j.id)).toEqual(j)
+  expect(await readJob(io, '/r', 'no-such-job')).toBe(null)
+  expect(await readJob(io, '/r', '../x')).toBe(null)
+  const older = { ...job('7'), id: '7-first-try', updatedAt: 100 }
+  const newer = { ...job('7'), id: '7-second-try', updatedAt: 200 }
+  expect(findJob([older, newer, j], '7')?.id).toBe('7-second-try')
+  expect(findJob([j], '9')).toBe(null)
+})
+
+test('a retired job is gone from the list and its folder is kept', async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  const j = job('1')
+  await writeJob(io, '/r', j)
+  await retireJob(io, '/r', j.id, 5000)
+
+  expect((await readJobs(io, '/r')).jobs).toEqual([])
+  expect(io.files[`${DIR}/retired/${j.id}.5000/job.json`]).toBe(JSON.stringify(j, null, 2) + '\n')
+  let error: unknown = null
+  await retireJob(io, '/r', '../x', 1).catch(caught => (error = caught))
+  expect(error).not.toBe(null)
+})
+
+test("a job's files go under files/, and only by a plain name", async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  const j = job('1')
+  await writeJob(io, '/r', j)
+  await writeJobFile(io, '/r', j.id, 'round-2/checks.md', 'x')
+  await writeJobFile(io, '/r', j.id, 'spec.md', 'y'.repeat(400_000))
+
+  expect(io.files[`${DIR}/jobs/${j.id}/files/round-2/checks.md`]).toBe('x')
+  expect(io.files[`${DIR}/jobs/${j.id}/files/spec.md`]?.length).toBe(256 * 1024)
+  for (const name of ['../x.md', 'job.json', 'a/b/c.md', 'X.md', 'round-1/../x.md', 'spec.txt', '']) {
+    let error: unknown = null
+    await writeJobFile(io, '/r', j.id, name, 'z').catch(caught => (error = caught))
+    expect(error).not.toBe(null)
+  }
+  expect(io.files[path(j.id)]).toBe(JSON.stringify(j, null, 2) + '\n')
+})
+
+test('feedback files are numbered', async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  const j = job('1')
+  await writeJob(io, '/r', j)
+  const once = await addFeedback(io, '/r', j, 'first')
+  const twice = await addFeedback(io, '/r', once, 'second')
+
+  expect([once.feedback, twice.feedback]).toEqual([1, 2])
+  expect(io.files[`${DIR}/jobs/${j.id}/files/feedback-1.md`]).toBe('first')
+  expect(io.files[`${DIR}/jobs/${j.id}/files/feedback-2.md`]).toBe('second')
+})
+
+test('the stop flag', async () => {
+  const io = fakeIo({ files: { '/r/x': '' } })
+  expect(await isStopped(io, '/r')).toBe(false)
+  await setStop(io, '/r', true)
+  expect(await isStopped(io, '/r')).toBe(true)
+  await setStop(io, '/r', false)
+  expect(await isStopped(io, '/r')).toBe(false)
+})
+
+test('lockInfo reads who holds the lock and never writes', async () => {
+  const files = { '/r/x': '' }
+  const dirs = new Map<string, number>()
+  const me = fakeIo({ files, dirs, session: 'me' })
+  const other = fakeIo({ files, dirs, session: 'other' })
+
+  expect(await lockInfo(me, '/r', 1000)).toEqual({ state: 'free', holder: null })
+  expect(Object.keys(files)).toEqual(['/r/x'])
+  await takeLock(other, '/r', 1000)
+  expect(await lockInfo(me, '/r', 2000)).toEqual({ state: 'theirs', holder: '/r' })
+  expect(await lockInfo(other, '/r', 2000)).toEqual({ state: 'mine', holder: null })
+  // A lock with no heartbeat for five minutes holds nothing.
+  expect(await lockInfo(me, '/r', 1000 + STALE_MS + 1)).toEqual({ state: 'free', holder: null })
 })

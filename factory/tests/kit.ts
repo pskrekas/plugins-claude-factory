@@ -86,6 +86,8 @@ export function engine(
     sounds: 0,
     writes: [] as string[],
     reads: [] as string[],
+    // What each command got on its standard input.
+    stdins: [] as (string | undefined)[],
     paths: [] as (string | undefined)[],
     // The PATH of the git call that asks where the repo starts.
     probePaths: [] as (string | undefined)[],
@@ -217,6 +219,7 @@ export function engine(
       return { value: { exitCode: 0, stdout: top + '\n', stderr: '' } as never }
     }
     seen.cwds.push(e.init?.cwd)
+    seen.stdins.push(e.init?.stdin)
     seen.ran.push(e.argv.join(' '))
     seen.paths.push(e.init?.env?.PATH)
     const answer = world.run?.(e.argv)
@@ -281,6 +284,11 @@ export function fakeIo(
     model: emptyModel(),
     reads: [] as string[],
     ran: [] as string[],
+    stdins: [] as (string | undefined)[],
+    // A program whose next run fails, to test what a failure leaves behind.
+    failNext: null as string | null,
+    // Answers for commands the fake does not act out itself (git, gh).
+    answer: null as ((argv: string[]) => { exitCode: number; stdout: string; stderr?: string } | undefined) | null,
     now: async () => io.time,
     root: async () => '/r',
     remote: async () => null,
@@ -311,18 +319,35 @@ export function fakeIo(
     writeFile: async (path: string, text: string) => {
       files[path] = text
     },
-    run: async (argv: string[]) => {
+    run: async (argv: string[], init?: { cwd?: string; timeoutMs?: number; stdin?: string; env?: Record<string, string> }) => {
       io.ran.push(argv.join(' '))
+      io.stdins.push(init?.stdin)
       const done = (ok: boolean) => ({ exitCode: ok ? 0 : 1, stdout: '', stderr: '' })
-      const [program, a, b] = argv
+      if (io.failNext === argv[0]) {
+        io.failNext = null
+
+        return done(false)
+      }
+      const given = io.answer?.(argv)
+      if (given !== undefined) return { exitCode: given.exitCode, stdout: given.stdout, stderr: given.stderr ?? '' }
+      const args = argv.filter(arg => arg !== '-p' && arg !== '-f')
+      const [program, a, b] = args
       // mkdir makes a folder only if nothing is there: it is the atomic step of the lock.
       if (program === 'mkdir' && a !== undefined) {
+        if (argv.includes('-p') && isDir(a)) return done(true)
         if (isDir(a) || files[a] !== undefined) return done(false)
         dirs.set(a, io.time)
 
         return done(true)
       }
       if (program === 'mv' && a !== undefined && b !== undefined) {
+        // One file: a rename over whatever is there.
+        if (files[a] !== undefined) {
+          files[b] = files[a] ?? ''
+          delete files[a]
+
+          return done(true)
+        }
         if (!isDir(a)) return done(false)
         for (const file of Object.keys(files).filter(name => name.startsWith(a + '/'))) {
           files[b + file.slice(a.length)] = files[file] ?? ''

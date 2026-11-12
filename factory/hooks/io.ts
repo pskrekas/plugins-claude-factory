@@ -31,7 +31,13 @@ export type Io = {
   listDir: (path: string) => Promise<string[]>
   writeFile: (path: string, text: string) => Promise<void>
   // Runs a host command. Never rejects.
-  run: (argv: string[], init?: { cwd?: string; timeoutMs?: number }) => Promise<RunResult>
+  // `stdin` is given to the program as its standard input: long text and text
+  // that came from outside goes there, never into an argument. `env` adds
+  // variables; PATH is always the plugin's own safe one.
+  run: (
+    argv: string[],
+    init?: { cwd?: string; timeoutMs?: number; stdin?: string; env?: Record<string, string> },
+  ) => Promise<RunResult>
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<void>
   getModel: () => Promise<PanelModel>
