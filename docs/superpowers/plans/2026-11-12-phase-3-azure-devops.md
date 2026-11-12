@@ -144,9 +144,9 @@ export function tagsAfter(tags: string[], mark: string, state: TrackerState): st
 ```
 
 - The lists, word for word (each ends with `--org <org> --detect false --output json`; `…` below stands for that):
-  - `item`: `az boards work-item show --id <digits> --expand none …`
+  - `item`: `az boards work-item show --id <digits> --expand fields …`
   - `item-comments`: `az devops invoke --area wit --resource comments --route-parameters project=<project> workItemId=<digits> --api-version 7.1-preview.4 …`
-  - `query`: `az boards query --wiql <one text> --project <project> …` with the text `SELECT [System.Id], [System.Title], [System.State], [System.Tags] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Tags] CONTAINS '<mark>' AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') ORDER BY [System.Id]`. The mark passes `isMark` and holds no `'`.
+  - `query`: `az boards query --wiql <one text> --project <project> …` with the text `SELECT [System.Id], [System.Title], [System.State], [System.Tags] FROM WorkItems WHERE [System.TeamProject] = '<project>' AND [System.Tags] CONTAINS '<mark>' AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved') ORDER BY [System.Id]`. The mark passes `isMark` and holds no `'`; a project name holds no `'` either (the rule of `azPlaceOf`). The project is in the text: `az` sends a WIQL text with no project around it (`az-check.md`).
   - `set-tags`: `az boards work-item update --id <digits> --fields=System.Tags=<tags joined by "; "> …`. A tag: `[A-Za-z0-9][A-Za-z0-9:_ .-]{0,99}`, no `;`, no `,`.
   - `discuss`: `az boards work-item update --id <digits> --discussion=@<file> …`
   - `link-item`: `az repos pr work-item add --id <pr> --work-items <digits> …`
@@ -201,8 +201,8 @@ export function azureBoards(run: Run, put: Put, place: AzPlace, mark: string, fo
 
 ```ts
 // status active -> open, completed -> merged, abandoned -> closed; isDraft; approvals = reviewers with vote >= 5 and no reviewer with vote < 0 (else 0);
-// url = <repository.webUrl>/pullrequest/<pullRequestId>; build is filled by parseAzPolicies.
-export function parseAzPr(json: string): PrState | null          // one object, or the first of a list
+// url = <org>/<project>/_git/<repo>/pullrequest/<pullRequestId>, built from the place (each part URL-encoded); build is filled by parseAzPolicies.
+export function parseAzPr(json: string, place: AzPlace): PrState | null   // one object, or the first of a list
 // 'none' for no policy; 'red' when any is rejected or broken; 'running' when any is queued or running; else 'green'.
 export function parseAzPolicies(json: string): PrState['build']
 export function azureRepos(run: Run, put: Put, place: AzPlace): PrHost
