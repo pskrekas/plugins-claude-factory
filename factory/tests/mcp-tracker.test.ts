@@ -333,14 +333,14 @@ test('why: each failed reading call gives its own reason, and a good call clears
   expect(quiet.calls).toEqual([])
   expect(odd.why?.()).toBe('show_task: not sent (a value broke a rule)')
   // A read that works clears the reason.
-  const later = server({ show_task: text('Not found.', true) })
+  let isDown = true
+  const later = server({ show_task: () => (isDown ? text('Not found.', true) : json(TASK)) })
   const t = mcpTracker(later.call, SPEC, 'factory', [])
-  await t.read('PROJ-12')
+  expect(await t.read('PROJ-12')).toBe(null)
   expect(t.why?.()).toBe('show_task: Not found.')
-  later.calls.length = 0
-  const fixed = mcpTracker(server().call, SPEC, 'factory', [])
-  expect((await fixed.read('PROJ-12'))?.title).toBe('Add dark mode')
-  expect(fixed.why?.()).toBe(null)
+  isDown = false
+  expect((await t.read('PROJ-12'))?.title).toBe('Add dark mode')
+  expect(t.why?.()).toBe(null)
   // me: its call's reason; with no me in the settings, none.
   const signedOut = mcpTracker(server({ who_am_i: text('Signed out.', true) }).call, SPEC, 'factory', [])
   expect(await signedOut.me()).toBe(null)

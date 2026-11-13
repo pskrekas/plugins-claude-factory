@@ -153,9 +153,10 @@ function valueProblem(v: unknown, kind: Kind, depth: number): string | null {
     if (hides(v)) return 'a control character'
     for (const hit of v.match(PLACEHOLDER) ?? []) {
       const name = hit.slice(1, -1)
-      if (!KNOWN.includes(name)) return `unknown placeholder ${hit}`
-      if (!ALLOWED[kind].includes(name)) return `${hit} is not allowed here`
-      if (ALONE.includes(name) && v !== hit) return `${hit} must be the whole value`
+      // The reason is shown in the pane: a placeholder it names is cleaned and cut, as a key is.
+      if (!KNOWN.includes(name)) return `unknown placeholder ${keyText(hit)}`
+      if (!ALLOWED[kind].includes(name)) return `${keyText(hit)} is not allowed here`
+      if (ALONE.includes(name) && v !== hit) return `${keyText(hit)} must be the whole value`
     }
 
     return null

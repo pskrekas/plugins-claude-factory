@@ -271,3 +271,10 @@ test('each call holds the placeholders it needs', async () => {
   expect('ok' in parseMcpTracker(with_({ read: { ...GOOD.read, args: { q: 'key = {id}' } } }))).toBe(true)
   expect('ok' in parseMcpTracker(with_({ list: { ...GOOD.list, args: {} }, me: { tool: 'who_am_i', name: 'name' } }))).toBe(true)
 })
+
+// A placeholder that a reason echoes is cleaned and cut, as a key is.
+test('a long placeholder named in a reason is cut', async () => {
+  const hit = '{' + 'a'.repeat(5000) + '}'
+  const no = reason(with_({ comment: { tool: 'add_comment', args: { task_id: '{id}', text: '{text}', a: hit } } }))
+  expect([no.startsWith('comment.args: unknown placeholder {aaa'), no.length <= 120]).toEqual([true, true])
+})
