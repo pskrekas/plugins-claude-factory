@@ -25,8 +25,10 @@ read-only command.
 - G2. No tool is called before the person approved it. Every call that the settings
   can make is a line the person reads in the pane, whole, and approves with
   `/factory approve`.
-- G3. The line, the panel and the commands do not change: they use the `Tracker`
-  contract (`factory/adapters/tracker.ts`), and the new adapter is one more behind it.
+- G3. The line and its commands do not change: they use the `Tracker` contract
+  (`factory/adapters/tracker.ts`), and the new adapter is one more behind it. Two
+  small changes are accepted: `scan` carries a plain note (6.7), and the pane's list
+  of lines to approve shows a long line whole (6.6).
 - G4. Proven on a real engine and a real MCP tracker before the phase is called done
   (section 9).
 - G5. A person can try a mapping without a write: `/factory tracker` runs the reading
@@ -59,7 +61,10 @@ read-only command.
 - A4. The settings hold a program: no expression, no condition, no loop. They hold
   names, fixed values, six placeholders and dotted field names.
 - A5. A factory agent calls the tracker's server itself.
-- A6. The public repo names the owner's own tracker, in code, tests or documents.
+- A6. Text from the tracker, or a line of a settings file that is not approved,
+  reaches the session's model through a command's answer. (Today's rule: an
+  answer holds counts and cut error texts; `core/brief.ts`, `hooks/refresh.ts`.)
+- A7. The public repo names the owner's own tracker, in code, tests or documents.
 
 ## 5. Constraints
 
@@ -145,7 +150,7 @@ it is, after it puts values in for these six placeholders:
 |---|---|---|
 | `{mark}` | The mark. | Alone, or inside a longer text. |
 | `{id}` | The item's id. | Alone, or inside a longer text. |
-| `{text}` | A comment's text. | Alone only. `comment` and the steps of `states`. |
+| `{text}` | A comment's text. | Alone only. `comment` only. |
 | `{url}` | The pull request's address. | Alone only. `linkPr`. |
 | `{labels}` | The item's new list of labels. | Alone only. `states.labels` (6.5). |
 | `{state}` | `in-progress`, `needs-human`, `done` or `rejected`. | Alone, or inside a longer text. Steps of `states`. |
@@ -160,21 +165,30 @@ it is, after it puts values in for these six placeholders:
   id that the person types (`/factory run PROJ-12`) passes the same rule.
 - A placeholder is never read in a key, in `tool` or in `server`. An unknown
   `{name}` in a value is an error of the settings.
-- A step of `states` that uses `{text}` gets the same text the line gives to its
-  comment for that move, or an empty text when there is none. (My call. It lets a
-  tracker whose state change takes a reason get one.)
+- A step of `states` takes no `{text}`: `setState` has no text in the contract, and
+  the contract does not change for it. (My call. A tracker whose state change needs
+  a reason is not served in this phase.)
+- `{id}` is always sent as text. A tool that wants a number for an id is not served
+  in this phase; the reference says so.
 
 ### 6.4 Reading an answer
 
-- The answer's data is `structuredContent` when it is an object. Otherwise it is the
+- For an action that reads fields (`list`, `claimed`, `read`, `comments`, `me`): the
+  answer's data is `structuredContent` when it is an object. Otherwise it is the
   first `text` block of `content`, read as JSON. Otherwise the call failed ("the
   answer is not JSON"). An answer over 1 MB failed.
+- For an action that reads no field (`comment`, a step of `states`, `linkPr`):
+  `isError` alone decides. Many servers answer a write with a plain sentence. A
+  server that answers `isError: false` with an error in its text is not served: the
+  reference says so.
 - `isError: true` is a failure. Its reason is the first line of the first text
   block, cleaned and cut, as the other adapters do with a command's error text.
 - A field name is dotted (`fields.summary`): one to six parts, each
   `[A-Za-z0-9_]+`. No index, no wildcard. A part that meets a list, or a missing
-  part, gives "not there". `rows` (and a comments list) must end at a list.
-- A row with no id or no title is no item. An item whose `title` is not text is no
+  part, gives "not there". `rows` (and a comments list) must end at a list. Without
+  `rows`, the answer itself must be the list.
+- An id is a text, or a whole number that JSON holds exactly (it is read as its
+  digits). A row with no id or no title is no item. An item whose `title` is not text is no
   item. Text fields are cut to the limits the other adapters use. A value that is
   not text where text is expected is "not there", never `String(value)`.
 - `labels` must be a list of texts (or a list of objects with a `name` text: my
@@ -234,10 +248,13 @@ that is not approved:
 - No call of the adapter runs while one of its lines is not approved: not a write,
   not a read, not the panel's queue. (`adaptersOf` gives no tracker, with the reason
   that phase 3 gives for a place that is not approved.)
-- A line must be readable whole before it can be approved. If the pane cuts a long
-  line, the text that `/factory approve` shows must be the full one. The builder
-  checks how the pane and the command show a 300-character line today, and fixes
-  what cuts it.
+- A line must be readable whole **in the pane** before it can be approved: the pane
+  wraps a long line and never cuts it, and a list that is longer than the pane can
+  be read to its end (folded, paged or scrolled: the builder's choice). The answer
+  of `/factory approve` still holds a count and never a line (A6). The builder
+  checks how the pane shows fifteen 300-character lines today, and fixes what
+  cuts or hides one. `/factory approve` allows nothing while a line was not on
+  screen whole (today's "shown" rule, kept).
 - Limits, so that a line stays readable: `args` of one action is at most 1,000
   characters as JSON, four levels deep; no control character anywhere (the rule of
   a command); `server` and `tool` match `^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$`.
@@ -264,6 +281,7 @@ that is not approved:
 | `hooks/adapters.ts` | Chooses the adapter; refuses while a line is not approved. |
 | `core/settings.ts` | `TrackerKind` is `github | azure-boards | mcp`; `commandsOf` adds the lines. |
 | `hooks/commands.ts` | `/factory tracker` (section 8). |
+| The pane's approval list | Shows each line whole (6.6). |
 | The fence and the agents | A rule test: no factory agent type lists an MCP tool of a tracker's server or an `mcpServers` entry, and the fence refuses `mcp__*` tools that are not the plugin's own for a factory agent. If today's fence already does this, the test only pins it. |
 
 Names are the builder's. The split between a pure part and a thin adapter is not:
@@ -275,11 +293,13 @@ For any tracker kind (it uses the contract). It never writes.
 
 - It runs `scan()` and `me()`, and `read` of the first item of the queue (or of the
   id the person gives: `/factory tracker PROJ-12`), with comments.
-- It prints, cleaned and cut: how many items are in the queue and how many are
-  claimed; the first three ids and titles; who "me" is; for the item, its title, the
-  first 200 characters of its text, its author, its state, its labels, whether it
-  carries the mark, how many comments and the author of each.
-- For each action that failed, the reason.
+- Its answer goes to the session's model, so it holds no text from the tracker
+  (A6). It prints: how many items are in the queue and how many are claimed; the
+  first three ids (an id passed the id rule); whether "me" was read; and for the
+  item, each field as `found (N characters)` or `not there` (title, text, author,
+  state, address), how many labels, whether it carries the mark, how many comments,
+  and how many of them are the author's or the runner's.
+- For each action that failed, the reason, cut as an error text is today.
 - With lines that are not approved, it says so and calls nothing.
 
 ## 9. Proof
@@ -307,7 +327,11 @@ here), on one test item that was cancelled at the end. What it showed:
 
 ### 9.2 The engine check (the plan's first task)
 
-A throwaway mod, run in a real session, answers these. The result goes in
+A throwaway mod, run in a real session, answers these. The builder runs it. On the
+owner's own tracker it calls reading tools only; a write there is only ever on a
+test item in the tracker's test project (the owner's word of 2026-11-13: "do the
+test"). No other connected server is called, except to learn its name (point 5,
+from the engine's list, with no call). The result goes in
 `docs/notes/r3-check.md`. If the first point fails, the work stops and goes back to
 the owner.
 
@@ -325,9 +349,13 @@ the owner.
 
 ### 9.3 At the end
 
-`/factory tracker` on the real tracker with the owner's own settings (kept outside
-the repo). A hand-check section in `docs/notes/r1-check.md` for a full run of the
-line on it. Jira and Asana are **not** run by anyone in this phase.
+The builder writes the owner's settings for the real tracker in a scratch
+repository outside this one (its path goes to the owner, not into the repo), and
+runs `/factory tracker` there: reads only. The phase is done when the engine check,
+the five actions by hand (9.1) and that `/factory tracker` run are recorded in
+`docs/notes/r3-check.md`. A full run of the line on the real tracker is a
+hand-check section in `docs/notes/r1-check.md` for the owner, as in every phase.
+Jira and Asana are **not** run by anyone in this phase.
 
 ## 10. Documents
 
@@ -362,8 +390,6 @@ line on it. Jira and Asana are **not** run by anyone in this phase.
   within the hook's budget).
 - How `scan` carries its note, and how `toolOf` in `hooks/commands.ts` names an MCP
   tracker in a failure text.
-- Whether the approval lines of an MCP tracker are shown in the pane in full or
-  folded, as long as the person can read each whole before approving.
 
 ## 12. Not in this phase
 
