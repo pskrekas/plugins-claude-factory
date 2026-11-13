@@ -149,7 +149,7 @@ test('the container is approved as its own line, also the choice to run on this 
 })
 
 test('a tracker place that the settings name, and not the remote, is a line to approve', async () => {
-  const tracker = (kind: 'github' | 'azure-boards', project: string | null) => ({ kind, mark: 'factory', project })
+  const tracker = (kind: 'github' | 'azure-boards', project: string | null) => ({ kind, mark: 'factory', project, mcp: null })
   expect(trackerLine(tracker('azure-boards', 'acme/Shop'))).toBe('[tracker] azure-boards acme/Shop')
   expect(trackerLine(tracker('github', 'a/b'))).toBe('[tracker] github a/b')
   // A project of the remote's own organization, or no project, is the remote's place: nothing to approve.
@@ -158,4 +158,38 @@ test('a tracker place that the settings name, and not the remote, is a line to a
   expect(trackerLine(tracker('azure-boards', 'acme/Shop\n[gate] rm -rf /'))).toBe(null)
   const { settings } = parseSettings('{"tracker": {"kind": "azure-boards", "project": "acme/Shop"}, "gate": {"fast": [["npm", "test"]]}}')
   expect(commandsOf(settings)).toEqual(['[gate] npm test', '[tracker] azure-boards acme/Shop'])
+})
+
+test('an mcp tracker: its calls are lines to approve, after the gate lines', async () => {
+  const mcp = {
+    kind: 'mcp',
+    server: 'tasks',
+    url: 'https://tracker.example.com/tasks/{id}',
+    list: { tool: 'find_tasks', args: { label: '{mark}' }, rows: 'tasks', id: 'id', title: 'title' },
+    read: { tool: 'get_task', args: { task_id: '{id}' }, title: 'title', text: 'description' },
+    comment: { tool: 'add_comment', args: { task_id: '{id}', text: '{text}' } },
+    states: { done: [{ tool: 'set_step', args: { task_id: '{id}', step: 'done' } }] },
+  }
+  const { settings, error } = parseSettings(JSON.stringify({ tracker: mcp, gate: { fast: [['npm', 'test']] } }))
+  expect(error).toBe(null)
+  expect(settings.tracker?.kind).toBe('mcp')
+  expect(settings.tracker?.mcp?.server).toBe('tasks')
+  const lines = commandsOf(settings)
+  expect(lines[0]).toBe('[gate] npm test')
+  expect(lines.length).toBe(6)
+  expect(lines.slice(1).every(line => line.startsWith('[tracker] mcp tasks · '))).toBe(true)
+  expect(trackerLine(settings.tracker)).toBe(null)
+
+  const bad = parseSettings(JSON.stringify({ tracker: { ...mcp, server: 'factory' } }))
+  expect(bad.settings.tracker).toBe(null)
+  expect(bad.error).toBe('tracker: server: is the plugin itself')
+  expect(parseSettings('{"tracker": {"kind": "github"}}').settings.tracker?.mcp).toBe(null)
+})
+
+test('a tracker kind that names one product is sent to kind mcp', async () => {
+  for (const kind of ['jira', 'asana']) {
+    const { settings, error } = parseSettings(JSON.stringify({ tracker: { kind } }))
+    expect(settings.tracker).toBe(null)
+    expect(error).toBe('tracker: use kind mcp: see docs/trackers')
+  }
 })

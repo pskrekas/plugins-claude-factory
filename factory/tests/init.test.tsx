@@ -15,7 +15,7 @@ test('a GitHub repo with npm scripts', async () => {
   })
   const { settings, error } = parseSettings(draft)
   expect(error).toBe(null)
-  expect(settings.tracker).toEqual({ kind: 'github', mark: 'factory', project: null })
+  expect(settings.tracker).toEqual({ kind: 'github', mark: 'factory', project: null, mcp: null })
   expect(settings.gate).toEqual({
     // The gate runs in a clean copy of the commit, so the install comes first.
     fast: [['npm', 'install'], ['npm', 'run', 'lint'], ['npm', 'test']],
@@ -43,7 +43,7 @@ test('a Python repo with another remote', async () => {
 test('an Azure DevOps repo gets Azure Boards as its tracker, with the project of the remote', async () => {
   const { settings, error } = parseSettings(draftSettings({ ...facts, remote: 'https://dev.azure.com/acme/My%20Shop/_git/web', hasPyproject: true }))
   expect(error).toBe(null)
-  expect(settings.tracker).toEqual({ kind: 'azure-boards', mark: 'factory', project: 'My Shop' })
+  expect(settings.tracker).toEqual({ kind: 'azure-boards', mark: 'factory', project: 'My Shop', mcp: null })
   // A remote that only looks like one gets no tracker.
   expect(parseSettings(draftSettings({ ...facts, remote: 'https://dev.azure.com/acme/x' })).settings.tracker).toBe(null)
 })
