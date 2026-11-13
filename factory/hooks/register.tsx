@@ -22,7 +22,7 @@ import { whereText } from './jobs'
 import { advance, watch } from './line'
 import { startPlan, startRun } from './start'
 import { loadSettings } from './readers/settings'
-import { approve, refresh, refreshAgents } from './refresh'
+import { approve, refresh, refreshAgents, refreshJobs } from './refresh'
 import { PANE, TITLE } from './state'
 
 // Change the tag when PanelModel's fields change: it declines what an earlier
@@ -274,8 +274,12 @@ export const register: Register = (on, options) => {
     if (options.openOnStart === true) {
       void $.ui.open({ id: PANE, title: TITLE }).then(() => refresh(ready))
     }
+    // The watch, then the job rows: a job that moved shows within this time.
     $.clock.every(WATCH_MS, () => {
-      void watch(ready).catch(() => undefined)
+      void watch(ready)
+        .catch(() => undefined)
+        .then(() => refreshJobs(ready))
+        .catch(() => undefined)
     })
     // Slow reads run once a minute, and only while the pane is on screen.
     $.clock.every(REFRESH_MS, () => {
@@ -360,6 +364,8 @@ export const register: Register = (on, options) => {
     if (ready !== null) {
       await advance(ready, a => checkedSpawn(ready, input => $.agent.spawn(input), a)).catch(() => undefined)
       if (e.agentId !== undefined) void refreshAgents(ready).catch(() => undefined)
+      // A job may have moved to its next station just now: the line on screen follows at once.
+      void refreshJobs(ready).catch(() => undefined)
     }
 
     return done
@@ -412,14 +418,21 @@ export const register: Register = (on, options) => {
       // hook that is still running starts it.
       const spawn: Spawn = a => checkedSpawn(ready, input => $.agent.spawn(input), a)
       const rest = id === '' ? '' : arg.slice(arg.indexOf(id) + id.length).trim()
-      if (word === 'run') return { text: await startRun(ready, spawn, id === '' ? null : id, { hasAgentTypes }) }
-      if (word === 'plan') return { text: await startPlan(ready, spawn, { hasAgentTypes }) }
-      if (word === 'stop') return { text: await stopLine(io) }
+      // What the command changed (a job that started, stopped or went on) shows at once.
+      const shown = async (text: Promise<string> | string) => {
+        const answer = await text
+        void refreshJobs(ready).catch(() => undefined)
+
+        return { text: answer }
+      }
+      if (word === 'run') return shown(startRun(ready, spawn, id === '' ? null : id, { hasAgentTypes }))
+      if (word === 'plan') return shown(startPlan(ready, spawn, { hasAgentTypes }))
+      if (word === 'stop') return shown(stopLine(io))
       if (word === 'answer') {
-        return { text: id === '' ? 'Say which job: /factory answer <id> [text]' : await answerJob(io, id, rest, spawn) }
+        return id === '' ? { text: 'Say which job: /factory answer <id> [text]' } : shown(answerJob(io, id, rest, spawn))
       }
 
-      return { text: id === '' ? 'A reason is needed: /factory reject <id> <reason>' : await rejectJob(io, id, rest) }
+      return id === '' ? { text: 'A reason is needed: /factory reject <id> <reason>' } : shown(rejectJob(io, id, rest))
     }
 
     return {

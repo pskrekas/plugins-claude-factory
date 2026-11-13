@@ -7,7 +7,8 @@ import { agentRows } from '../core/work'
 import type { Settings } from '../core/settings'
 import type { Io } from './io'
 import { checksReader } from './readers/checks'
-import { factoryReader } from './readers/factory'
+import { readJobs } from './jobs'
+import { factoryReader, jobsView } from './readers/factory'
 import { progressReader } from './readers/progress'
 import { loadSettings } from './readers/settings'
 import { taskReader } from './readers/task'
@@ -87,6 +88,38 @@ export async function refreshAgents(io: Io): Promise<void> {
   if (!(await io.isPaneDrawn())) return
   const [agents, now] = await Promise.all([io.agents(), io.now()])
   await io.updateModel(model => ({ ...model, agents: agentRows(agents, model.agents, now) }))
+}
+
+// The ids of the jobs at the last read of the job rows, for each session's
+// Io. When they change (a job started, or one was removed) the queue changed
+// too, and only the tracker knows it.
+const seenJobs = new WeakMap<Io, string>()
+
+// The job rows alone, from the job files of this machine: done when a job
+// moves and on the watch timer, so that the line on screen is not a minute
+// old. It asks no tracker and runs no command. A new set of jobs makes one
+// full read; with no job at all there is nothing that moves.
+export async function refreshJobs(io: Io): Promise<void> {
+  if (!(await io.isPaneDrawn())) return
+  const loaded = await loadSettings(io)
+  const read = await readJobs(io, loaded.root)
+  const key = [loaded.root, ...read.jobs.map(job => job.id).sort()].join('\n')
+  const prev = await io.getModel()
+  const before = seenJobs.get(io)
+  seenJobs.set(io, key)
+  // A full read: the set of jobs changed since the last look, the repo
+  // changed, or there are jobs and the section was never read.
+  const isNewSet = before !== undefined && before !== key
+  if (isNewSet || prev.root !== loaded.root || (prev.factory === null && read.jobs.length > 0)) {
+    await refresh(io, { loaded })
+
+    return
+  }
+  // With no job nothing moves: the minute's read keeps the rest.
+  if (prev.factory === null || read.jobs.length === 0) return
+  const factory = await jobsView(io, loaded.root, loaded.settings.factory, read, prev.factory, await io.now())
+  const model = await io.updateModel(current => ({ ...current, factory }))
+  io.status(statusText(model))
 }
 
 const count = (lines: string[]) => `${lines.length} command${lines.length === 1 ? '' : 's'}`

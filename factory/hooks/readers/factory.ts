@@ -9,7 +9,9 @@ import { countsFor } from '../../core/line'
 import type { FactoryView, JobView } from '../../core/model'
 import { toolNote } from '../../core/task'
 import { adaptersOf } from '../adapters'
+import type { Io } from '../io'
 import { isStopped, lockInfo, readJobs } from '../jobs'
+import type { Jobs } from '../jobs'
 import type { Reader } from '../refresh'
 
 const MAX_JOBS = 20
@@ -128,9 +130,20 @@ export const factoryReader: Reader = {
         if (listed.items === null && chosen.kind === 'mcp') note ??= listed.note ?? null
       }
     }
-    const lock = await lockInfo(io, ctx.root, ctx.now)
-    const line = { lock: lock.state, holder: lock.holder, isStopped: await isStopped(io, ctx.root), claimed }
-
-    return { factory: viewOf(jobs, ctx.settings.factory, queue, note, ctx.now, line) }
+    return { factory: viewOf(jobs, ctx.settings.factory, queue, note, ctx.now, await lineOf(io, ctx.root, ctx.now, claimed)) }
   },
+}
+
+// Who runs the line and whether it is stopped, from the files of this machine.
+async function lineOf(io: Io, root: string, now: number, claimed: string[]): Promise<LineInfo> {
+  const lock = await lockInfo(io, root, now)
+
+  return { lock: lock.state, holder: lock.holder, isStopped: await isStopped(io, root), claimed }
+}
+
+// The FACTORY section from the job files alone: no tracker is asked. The
+// queue, the claimed items and a tracker's note stay as the last full read
+// left them (`last`).
+export async function jobsView(io: Io, root: string, f: FactorySettings, read: Jobs, last: FactoryView, now: number): Promise<FactoryView | null> {
+  return viewOf(read.jobs, f, last.queue, read.note ?? last.note, now, await lineOf(io, root, now, last.claimed))
 }
