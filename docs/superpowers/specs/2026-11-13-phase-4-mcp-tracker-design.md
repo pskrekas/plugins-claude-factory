@@ -263,7 +263,9 @@ The mark has its own line, `[tracker] mcp tasks · mark: factory`, because the m
   screen whole (today's "shown" rule, kept).
 - Limits, so that a line stays readable: `args` of one action is at most 1,000
   characters as JSON, four levels deep; no control character anywhere (the rule of
-  a command); `server` and `tool` match `^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$`.
+  a command); `server` and `tool` match `^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$`; a
+  field name is at most 200 characters in all (a longer one is refused, and is "not
+  there" when read).
 - The server may not be the plugin's own (`factory`, or a name that the engine gives
   the plugin's tools): the settings must not reach `mcp__factory__sh`.
 

@@ -99,7 +99,7 @@ A settings file that says `"kind": "jira"` or `"kind": "asana"` is refused with 
 - **The data.** It is the answer's `structuredContent` when that is an object. Otherwise it is the first text block, read as JSON. Otherwise the call failed (`<tool>: the answer is not JSON`). A text answer over 1 MB failed.
 - **A write** (`comment`, a step of `states`, `linkPr`) passed when the server did not say `isError: true`. Many servers answer a write with a plain sentence, so the text is not read.
 - **A failure.** `isError: true` is a failure. Its reason is the first line of the first text block, as `<tool>: <reason>`, at most 200 characters.
-- **A field name** is dotted (`fields.summary`): one to six parts of letters, digits and `_`. No index and no wildcard. A part may not be `__proto__`, `constructor` or `prototype`. A part that meets a list, or a missing part, gives "not there".
+- **A field name** is dotted (`fields.summary`): one to six parts of letters, digits and `_`, at most 200 characters in all. No index and no wildcard. A part may not be `__proto__`, `constructor` or `prototype`. A part that meets a list, or a missing part, gives "not there".
 - **Rows.** `rows` must end at a list (`<tool>: the answer holds no list of rows`). Without `rows`, the answer itself must be the list.
 - **An id** is a text, or a whole number that JSON holds exactly (it is read as its digits).
 - **An item.** A row with no id, or with no title, is no item. A value that is not text where text is expected is "not there".

@@ -206,6 +206,12 @@ test('an item with a half-set comment trio is not read', () => {
   expect(itemOf(data(), { ...READ, comments: null, commentAuthor: null, commentText: null }, 'A-1', null)?.item.comments).toEqual([])
 })
 
+test('at: a name over 200 characters is not there', () => {
+  const long = 'a'.repeat(201)
+  expect(at({ [long]: 1 }, long)).toBe(undefined)
+  expect(at({ ['a'.repeat(200)]: 1 }, 'a'.repeat(200))).toBe(1)
+})
+
 test('at checks its own path', () => {
   const x = { a: { b: 1 }, 'a-b': 1, '': 1 }
   for (const p of ['a-b', 'a..b', '', 'a.b.c.d.e.f.g', 'a.__proto__']) expect(at(x, p)).toBe(undefined)

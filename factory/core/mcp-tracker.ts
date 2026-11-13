@@ -45,6 +45,8 @@ const STATES: readonly TrackerState[] = ['in-progress', 'needs-human', 'done', '
 // No space or separator at the end: `factory ` must not be a name of its own.
 const NAME = /^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,98}[A-Za-z0-9])?$/
 const FIELD = /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+){0,5}$/
+// A field name is part of an approval line, so it has a length limit.
+const MAX_FIELD = 200
 const UNSAFE_PART = ['__proto__', 'constructor', 'prototype']
 const PLACEHOLDER = /\{[a-z]+\}/g
 const MAX_ARGS = 1000
@@ -102,6 +104,7 @@ function nameOf(path: string, v: unknown): Parsed<string> {
 
 function fieldOf(path: string, v: unknown): Parsed<string> {
   if (typeof v !== 'string' || !FIELD.test(v)) return no(path, 'needs a field name of 1 to 6 parts of letters, digits and _, joined by dots')
+  if (v.length > MAX_FIELD) return no(path, `a field name is at most ${MAX_FIELD} characters`)
   if (v.split('.').some(part => UNSAFE_PART.includes(part))) return no(path, 'a part of a field name is not allowed')
 
   return { ok: v }
@@ -569,7 +572,7 @@ export function dataOf(result: McpResult): unknown {
 
 // A dotted name, own properties of plain objects only; undefined = not there.
 export function at(data: unknown, path: string): unknown {
-  if (!FIELD.test(path) || path.split('.').some(p => UNSAFE_PART.includes(p))) return undefined
+  if (path.length > MAX_FIELD || !FIELD.test(path) || path.split('.').some(p => UNSAFE_PART.includes(p))) return undefined
   let cur: unknown = data
   for (const part of path.split('.')) {
     if (UNSAFE_PART.includes(part) || !isPlain(cur) || !Object.hasOwn(cur, part)) return undefined

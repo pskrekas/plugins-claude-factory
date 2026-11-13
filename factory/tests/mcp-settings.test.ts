@@ -239,3 +239,13 @@ test('a key named in a reason is cut to 40 characters and holds no control chara
     expect(no.includes('\u001b')).toBe(false)
   }
 })
+
+// A field name is part of an approval line: it has a length limit.
+test('a field name is at most 200 characters in all', async () => {
+  const long = 'a'.repeat(201)
+  expect(reason(with_({ list: { ...GOOD.list, rows: long } }))).toContain('list.rows')
+  expect(reason(with_({ list: { ...GOOD.list, rows: 'a'.repeat(100_000) } })).length).toBeLessThan(160)
+  expect(reason(with_({ read: { ...GOOD.read, title: `${'b'.repeat(100)}.${'c'.repeat(100)}` } }))).toContain('read.title')
+  const ok = parseMcpTracker(with_({ list: { ...GOOD.list, rows: `${'a'.repeat(99)}.${'b'.repeat(100)}` } })) as { ok: McpTracker }
+  expect(ok.ok.list.rows?.length).toBe(200)
+})
