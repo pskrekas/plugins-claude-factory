@@ -311,3 +311,71 @@ The line:
 What to write down for the plugin's author: the tracker's tool names and the settings
 you used (not in this repo), the text of any failure, how long a call took, and whether
 a step marked `optional` was needed.
+
+## The first real runs of the line (2026-11-13)
+
+The owner ran the line for real, twice, in a real repository on Azure DevOps Repos,
+with an MCP tracker (`tracker.kind: "mcp"`). The base branch was a test branch (the
+main branch plus the settings file), so the pull request did not go into the main
+branch. The gate was one compile command, in a `python:3.12-slim` container with no
+network. The limits: one slot, two rounds, sixty minutes for a job, `maxRisk` low.
+
+### Run 1: Intake refused the item
+
+- The item was a real one whose work was already built on another branch. Intake
+  read the item and its author's comment, and refused it in about 50 seconds, with a
+  correct reason.
+- The line set the state `rejected` and wrote its comment. The settings mapped
+  `rejected` to the tracker's cancel. So a real item was cancelled, and on that
+  tracker only a person can open a cancelled item again. The person did.
+- What changed after it: the settings now map `rejected` to "to do", and
+  `docs/trackers/mcp.md` warns about this choice.
+
+### Run 2: one item, from the queue to a ready pull request
+
+A small new item (one new script). Two minutes and seventeen seconds, one round, no
+question for the person.
+
+| Station | Result |
+| --- | --- |
+| Intake | accepted, risk low |
+| Spec | written |
+| Build | one new file. The builder's commands ran in a container. The plugin made the commit |
+| Gate | passed (2 s). The plugin pushed the job's branch and opened a draft pull request |
+| Review | the code reviewer passed, with three small notes |
+| Approve | READY. The full gate passed, and the plugin marked the pull request ready |
+
+On the tracker: the item went to "in progress", and it got the two comments ("The
+factory started on this.", then the one with the pull request's address) and the
+link to the pull request.
+
+### What these runs proved
+
+- Azure DevOps Repos, for real: the push of `factory/<job>`, `az repos pr create`
+  as a draft, the update to ready, and the pane's read of the pull request of the
+  checked-out branch.
+- The MCP tracker, for real: the queue, the mark, the read of an item with its
+  comments, the state moves, the comments and the pull request link.
+- The container: a builder's command and both gates.
+- A plan (`/factory plan`) on a real item: Intake's verdict, and nothing written.
+
+### What they found
+
+- On that machine `az` did its work and then never ended, because it was sending
+  usage data. Every call would have run into its time limit. The plugin now tells
+  `az` to send none (`AZURE_CORE_COLLECT_TELEMETRY=no`).
+- The pane's job rows were up to a minute old while a job moved every ten to forty
+  seconds. The job rows now have a read of their own (after each end of a turn, and
+  every 15 seconds).
+- Nobody ran the script that the builder wrote: the image has no `yaml` package and
+  no network. The reviewer judged it by reading. A gate that only compiles proves
+  little; a real gate needs an image with the repository's packages.
+- When the job was ready, the tracker kept the item "in progress": the move to "in
+  review" is optional in the settings, and the tracker refused it by a rule of its own.
+
+### Not run yet
+
+Azure Boards as a tracker; a pull request thread; the abandon of a rejected item's
+pull request; a gate that fails and sends the job back to Build; a reviewer that asks
+for changes; a question for the person and `/factory answer`; a limit that stops a
+job; the GitHub path with a real job.

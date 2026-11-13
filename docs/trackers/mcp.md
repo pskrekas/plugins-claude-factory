@@ -115,6 +115,8 @@ A call that leaves out a placeholder it must hold is refused, with the key and t
 
 The line sets four states: `in-progress`, `needs-human`, `done` and `rejected`. `states` has one of two forms.
 
+**Choose `rejected` with care.** Intake can refuse any item, also a good one (its work may be done elsewhere already, or it may need a person's decision first). The line then sets `rejected`. If you map `rejected` to a move that closes or cancels the item, a refusal closes a real item, and on some trackers only a person can open it again. This happened in the first real run. A safer choice is a move that a person can undo, such as back to "to do", or no entry at all: the item then keeps its state and gets the line's comment. The example above uses `cancel_task` only to show a second tool.
+
 **Calls.** One entry for each state: a list of one to four steps, run in order. A step that fails stops the move, and the move failed. A step with `"optional": true` may fail: the next step runs, and the move did not fail. A state with no entry calls nothing. A step takes no `{text}`: a tracker whose move needs a reason is not served.
 
 **Labels.** For a tracker where a state is a label, and the labels are written as the whole list:
