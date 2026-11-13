@@ -3,7 +3,8 @@
 // everything here fails closed: what is not understood is refused with a short reason that names the
 // key, and every call becomes one whole line that the approval store compares as text.
 
-import type { TrackerState } from '../adapters/tracker'
+import type { Listed, TrackerItem, TrackerState } from '../adapters/tracker'
+import { clean } from './rows'
 import { CONTROL_CHAR, isObject } from './rules'
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
@@ -233,7 +234,7 @@ function readOf(v: unknown): Parsed<ReadSpec> {
   return { ok: { ...call.ok, ...spec } as ReadSpec }
 }
 
-function commentsOf(v: unknown): Parsed<CommentsSpec> {
+function commentsSpecOf(v: unknown): Parsed<CommentsSpec> {
   const call = callOf('comments', v, COMMENTS_KEYS, 'comments')
   if (isErr(call)) return call
   const o = v as Record<string, unknown>
@@ -338,7 +339,7 @@ export function parseMcpTracker(v: Record<string, unknown>): { ok: McpTracker } 
   if (isErr(read)) return read
   let comments: CommentsSpec | null = null
   if (v.comments !== undefined) {
-    const c = commentsOf(v.comments)
+    const c = commentsSpecOf(v.comments)
     if (isErr(c)) return c
     comments = c.ok
   }
@@ -406,4 +407,263 @@ export function mcpLines(spec: McpTracker, mark: string): string[] {
   lines.push(`${head}mark: ${mark}`)
 
   return lines
+}
+
+// ---- Filling a call and reading an answer -------------------------------------------------------------
+
+export type McpResult =
+  | { content: { type: string; text?: string }[]; isError: boolean; structuredContent?: unknown }
+  | { failed: 'timeout' | 'no-server' | 'other'; why: string }
+export type Fill = { mark: string; id?: string; text?: string; url?: string; labels?: string[]; state?: TrackerState }
+
+const ITEM_ID = /^[A-Za-z0-9][A-Za-z0-9_.#-]{0,63}$/
+const HTTPS = /^https:\/\/\S+$/
+const MAX_ANSWER = 1_048_576
+const MAX_URL_VALUE = 2000
+const MAX_ROWS = 200
+const MAX_COMMENTS = 50
+const MAX_COMMENT = 5000
+const MAX_TEXT = 20_000
+const MAX_TITLE = 300
+const MAX_AUTHOR = 200
+const MAX_ERROR = 200
+const MAX_FILL_DEPTH = 10
+
+export const isItemId = (id: string): boolean => ITEM_ID.test(id)
+
+const isHttps = (v: string): boolean => v.length <= MAX_URL_VALUE && HTTPS.test(v)
+
+// The value of an alone placeholder, or undefined when there is none or it breaks its rule.
+function aloneValue(name: string, v: Fill): Json | undefined {
+  switch (name) {
+    case 'mark': return v.mark
+    case 'id': return v.id !== undefined && isItemId(v.id) ? v.id : undefined
+    case 'text': return typeof v.text === 'string' ? v.text : undefined
+    case 'url': return typeof v.url === 'string' && isHttps(v.url) ? v.url : undefined
+    case 'labels': return Array.isArray(v.labels) && v.labels.every(l => typeof l === 'string') ? [...v.labels] : undefined
+    case 'state': return v.state
+    default: return undefined
+  }
+}
+
+function fillValue(value: Json, v: Fill, depth: number): Json | undefined {
+  if (depth > MAX_FILL_DEPTH) return undefined
+  if (typeof value === 'string') {
+    const whole = /^\{([a-z]+)\}$/.exec(value)
+    if (whole && KNOWN.includes(whole[1]!)) return aloneValue(whole[1]!, v)
+    let failed = false
+    // One pass over the original text: what is put in is never read again.
+    const out = value.replace(PLACEHOLDER, hit => {
+      const name = hit.slice(1, -1)
+      if (name !== 'mark' && name !== 'id' && name !== 'state') {
+        // An alone-only placeholder inside a text, or a name the plugin does not know.
+        if (KNOWN.includes(name)) failed = true
+
+        return hit
+      }
+      const got = aloneValue(name, v)
+      if (typeof got !== 'string') {
+        failed = true
+
+        return hit
+      }
+
+      return got
+    })
+
+    return failed ? undefined : out
+  }
+  if (Array.isArray(value)) {
+    const out: Json[] = []
+    for (const item of value) {
+      const f = fillValue(item, v, depth + 1)
+      if (f === undefined) return undefined
+      out.push(f)
+    }
+
+    return out
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries: [string, Json][] = []
+    for (const [key, item] of Object.entries(value)) {
+      const f = fillValue(item, v, depth + 1)
+      if (f === undefined) return undefined
+      entries.push([key, f])
+    }
+
+    return Object.fromEntries(entries)
+  }
+
+  return value
+}
+
+// The arguments to send, or null when a value it needs is missing or breaks its rule. A new value; `args` is not changed.
+export function fill(args: { [key: string]: Json }, values: Fill): { [key: string]: Json } | null {
+  const out = fillValue(args, values, 1)
+
+  return out === undefined ? null : (out as { [key: string]: Json })
+}
+
+const cut = (text: string, max: number): string => (text.length > max ? text.slice(0, max) : text)
+
+// Why the call failed, as one clean line of at most 200 characters; null when it did not.
+export function errorOf(tool: string, result: McpResult): string | null {
+  let reason: string
+  if ('failed' in result) reason = clean(String(result.why)).trim()
+  else if (!result.isError) return null
+  else {
+    const block = result.content?.find(c => c?.type === 'text')
+    const lines = typeof block?.text === 'string' ? block.text.split(/\r\n|\r|\n/) : []
+    reason = ''
+    for (const line of lines) {
+      const c = clean(line).trim()
+      if (c !== '') {
+        reason = c
+        break
+      }
+    }
+  }
+  if (reason === '') reason = 'failed'
+
+  return cut(`${tool}: ${reason}`, MAX_ERROR)
+}
+
+const isPlain = (v: unknown): v is Record<string, unknown> => {
+  if (!isObject(v)) return false
+  const proto = Object.getPrototypeOf(v)
+
+  return proto === Object.prototype || proto === null
+}
+
+// The answer's data for an action that reads fields; undefined when there is none.
+export function dataOf(result: McpResult): unknown {
+  if ('failed' in result || result.isError) return undefined
+  if (isPlain(result.structuredContent)) return result.structuredContent
+  const block = result.content?.find(c => c?.type === 'text')
+  if (typeof block?.text !== 'string' || block.text.length > MAX_ANSWER) return undefined
+  try {
+    const data: unknown = JSON.parse(block.text)
+
+    return data === null ? undefined : data
+  } catch {
+    return undefined
+  }
+}
+
+// A dotted name, own properties of plain objects only; undefined = not there.
+export function at(data: unknown, path: string): unknown {
+  if (path === '') return undefined
+  let cur: unknown = data
+  for (const part of path.split('.')) {
+    if (UNSAFE_PART.includes(part) || !isPlain(cur) || !Object.hasOwn(cur, part)) return undefined
+    cur = cur[part]
+  }
+
+  return cur
+}
+
+const textAt = (data: unknown, path: string | null): string | undefined => {
+  if (path === null) return undefined
+  const v = at(data, path)
+
+  return typeof v === 'string' ? v : undefined
+}
+
+// An id is text, or a whole number that JSON holds exactly (read as its digits).
+function idAt(data: unknown, path: string): string | undefined {
+  const v = at(data, path)
+  const id = typeof v === 'string' ? v : typeof v === 'number' && Number.isSafeInteger(v) ? String(v) : undefined
+
+  return id !== undefined && isItemId(id) ? id : undefined
+}
+
+const listAt = (data: unknown, rows: string | null): unknown[] | null => {
+  const v = rows === null ? data : at(data, rows)
+
+  return Array.isArray(v) ? v : null
+}
+
+export function listedOf(data: unknown, spec: ListSpec): Listed[] | null {
+  const rows = listAt(data, spec.rows)
+  if (rows === null) return null
+  const out: Listed[] = []
+  for (const row of rows.slice(0, MAX_ROWS)) {
+    const id = idAt(row, spec.id)
+    const title = textAt(row, spec.title)
+    if (id === undefined || title === undefined || title === '') continue
+    out.push({ id, title: cut(title, MAX_TITLE), state: (textAt(row, spec.state) ?? '').toLowerCase() })
+  }
+
+  return out
+}
+
+export function commentsOf(data: unknown, rows: string | null, author: string, text: string): { author: string; text: string }[] | null {
+  const list = listAt(data, rows)
+  if (list === null) return null
+  const out: { author: string; text: string }[] = []
+  for (const row of list) {
+    const a = textAt(row, author)
+    const t = textAt(row, text)
+    if (a === undefined || a === '' || t === undefined || t === '') continue
+    out.push({ author: cut(a.toLowerCase(), MAX_AUTHOR), text: cut(t, MAX_COMMENT) })
+    if (out.length === MAX_COMMENTS) break
+  }
+
+  return out
+}
+
+function labelsAt(data: unknown, path: string | null): string[] | null {
+  if (path === null) return null
+  const v = at(data, path)
+  if (!Array.isArray(v)) return null
+  const out: string[] = []
+  for (const l of v) {
+    if (typeof l === 'string') out.push(l)
+    else {
+      const name = textAt(l, 'name')
+      if (name !== undefined) out.push(name)
+    }
+  }
+
+  return out
+}
+
+export function itemOf(
+  data: unknown,
+  spec: ReadSpec,
+  id: string,
+  urlTemplate: string | null,
+): { item: TrackerItem; labels: string[] | null } | null {
+  const title = textAt(data, spec.title)
+  if (title === undefined || title === '') return null
+  let comments: TrackerItem['comments'] = []
+  if (spec.comments !== null && spec.commentAuthor !== null && spec.commentText !== null) {
+    const c = commentsOf(data, spec.comments, spec.commentAuthor, spec.commentText)
+    if (c === null) return null
+    comments = c
+  }
+  const own = textAt(data, spec.url)
+  const url = own !== undefined && isHttps(own) ? own : urlTemplate !== null ? urlTemplate.replace('{id}', () => encodeURIComponent(id)) : ''
+
+  return {
+    item: {
+      id,
+      title: cut(title, MAX_TITLE),
+      state: (textAt(data, spec.state) ?? '').toLowerCase(),
+      text: cut(textAt(data, spec.text) ?? '', MAX_TEXT),
+      author: cut((textAt(data, spec.author) ?? '').toLowerCase(), MAX_AUTHOR),
+      url,
+      comments,
+    },
+    labels: labelsAt(data, spec.labels),
+  }
+}
+
+// The labels with the four state labels taken away and the one of `state` added last.
+export function labelsAfter(labels: string[], mark: string, state: TrackerState, names: Record<TrackerState, string> | null): string[] {
+  const nameOf_ = (s: TrackerState): string => names?.[s] ?? `${mark}:${s}`
+  const state_ = new Set(STATES.map(s => nameOf_(s).toLowerCase()))
+  const next = nameOf_(state)
+
+  return [...labels.filter(l => !state_.has(l.toLowerCase())), next]
 }
