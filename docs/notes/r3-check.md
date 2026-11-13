@@ -1,6 +1,7 @@
 # R3 check: a tracker's MCP tools, called from the plugin
 
-Checked on 2026-11-13 with Claude Code 2.1.323 (the mod API types of 2.1.322), headless
+Checked on 2026-11-13 with Claude Code 2.1.323 (the mod API types of 2.1.322: the
+types that come with the tool are one patch older than the program that ran), headless
 (`claude -p`, the fast model), with a throw-away mod and an MCP tracker of the owner's
 (an HTTP server the person added; `tasks` in the examples below). On the tracker only
 reading tools were called. No other connected server was called. It follows
@@ -23,7 +24,7 @@ timer (both set in `session.start`) made the same reading call once each.
 | 3c. A server that `claude mcp list` shows as "Needs authentication"? | **Rejects**, the same text: `… no connected MCP tool "no_such_tool" on a server named "<server>"`. Such a server lists no tools in the session, so every name is unknown there. (Only a made-up tool name was tried on it.) |
 | 3d. A tool name that does not exist, on the tracker? | **Rejects**, the same text: `<plugin>: $.mcp.call: no connected MCP tool "no_such_tool" on a server named "tasks"`. The engine checks the name against the session's tool list before anything goes to the server. |
 | 3e. A known tool with a wrong argument (`limit: "many"`)? | **Resolves** with `isError: true` and one text block, the server's own sentence: `Error executing tool list_tasks: 1 validation error for list_tasksArguments` / `limit` / `Input should be a valid integer, unable to parse string as an integer [type=int_parsing, input_value='many', input_type=str]` / a link to the validation library's page. |
-| 4. How long does a call take? | 78 to 102 ms for an answer from the tracker (five calls); 0 to 3 ms for a rejection. A hook has 10 s (and more while a `$` call is in flight, `r2b-check.md`). |
+| 4. How long does a call take? | 78 to 102 ms for an answer from the tracker (six calls); 0 to 3 ms for a rejection. A hook has 10 s (and more while a `$` call is in flight, `r2b-check.md`). |
 | 5. The server's name as the call takes it? | The person's own server: the name `claude mcp list` shows (`tasks`), the same as in its tools' names (`mcp__tasks__list_tasks`); a `-` in it stays. A claude.ai connector: listed as `claude.ai <Name>`, its tools as `mcp__claude_ai_<Name>__…`; the types say the call takes either spelling (not called: no other server was). A plugin's server: `plugin:<plugin>:<server>`, its tools `mcp__plugin_<plugin>_<server>__…`. A tool a plugin registers with `$.tool.register`: the server is the plugin's name (`factory`). |
 | 6. Does `$.mcp.call('factory', 'sh', { command: 'true' })` reach the plugin's own tool? | **Yes.** With the factory loaded beside the mod, the server `factory` reached the factory's own `tool.call` hook, which refused it (no `agentId`, so not a builder), and the call **rejected**: `<plugin>: $.mcp.call(factory, sh) refused: This tool is for the builder of the factory line.` The names `plugin:factory:factory` and `cc-plugin-factory` reject as unknown (`no connected MCP tool "sh" on a server named …`). |
 
@@ -72,6 +73,38 @@ item that was cancelled at the end (design 9.1). What it showed:
   error.
 - A link to a pull request on a host the tracker does not follow is saved as a
   plain link, with no error.
+
+## The adapter against the recorded answers
+
+On 2026-11-13 the owner's real settings for the tracker were parsed by the plugin's
+own parser, and the adapter was run against the answers the real tracker gave when the
+five actions were done by hand that day: a list, an item with its author, and a comment.
+The settings parsed. They give 11 lines of calls plus the line of the mark. The adapter
+read the queue row, and the item's title, text, author, state, address and comment.
+`hasMark` answered true for a label of the item. The adapter also sent the expected calls
+for in-progress, a comment, a pull request link and rejected. This ran as a throw-away
+test that was deleted and never committed. It used no live session and called no tool.
+So it proves the parser and the adapter against the real answers, and it proves nothing
+about a live session or the approval.
+
+## Still owed by a person
+
+The live run of `/factory tracker` on the real tracker is open. An approval is a person's
+own act at the prompt, so a headless run cannot give it, and nobody may write the approval
+store for the person. To do:
+
+1. Open a scratch repository outside this one, with the owner's settings in
+   `.claude/factory.json`, and load the plugin from this branch:
+   `claude --plugin-dir <this repo>/factory`.
+2. `/factory`. Read each line of the pane, to the last one.
+3. `/factory approve`.
+4. `/factory tracker`, then `/factory tracker <id of a test item>`. The calls only read.
+5. Write the answer's lines here, with every id replaced by `PROJ-n`, and say what
+   differed from what the adapter expected. Fix what differed, with a test.
+
+Answer of `/factory tracker`: (not recorded yet)
+
+Answer of `/factory tracker <id>`: (not recorded yet)
 
 ## Not checked
 
