@@ -2,9 +2,10 @@
 
 Plan: `docs/superpowers/plans/2026-11-13-phase-4-mcp-tracker.md`. Design:
 `docs/superpowers/specs/2026-11-13-phase-4-mcp-tracker-design.md`. Built on branch
-`phase-4-mcp-tracker` (on top of `phase-3-azure-devops`), 2026-11-13. 557 tests. A
+`phase-4-mcp-tracker` (on top of `phase-3-azure-devops`), 2026-11-13. 573 tests. A
 reviewer read each task, and an automated security review read the commits as they
-came. The final review of the whole branch is not part of this note.
+came. The final review of the whole branch found what its fix wave changed: see "The
+final review's fix wave" below.
 
 ## The decision that shaped the work
 
@@ -25,8 +26,8 @@ where the answer's fields are. Jira and Asana are example pages (`docs/trackers/
   sent the expected calls. No live session was used.
 - **The live `/factory tracker` run is owed.** An approval is a person's own act, so a
   headless run cannot give it. Goal G4 of the design (proven on a real engine and a real
-  MCP tracker) is met for the engine check, the five actions by hand and the recorded
-  answers, and is open for the live run. The steps are in `docs/notes/r3-check.md`
+  MCP tracker) is partly met: the engine check, the five actions by hand and the
+  recorded answers are done, and the live run is open. The steps are in `docs/notes/r3-check.md`
   ("Still owed by a person") and `docs/notes/r1-check.md` ("An MCP tracker, by hand").
   Until it is done, phase 4 is not proven.
 
@@ -71,9 +72,49 @@ Each says what it costs if it is wrong.
 10. **Task 7 is split.** The approval of a real session is a person's act, so the
     controller made the proof without a live session and left the live run to the owner.
     Cost: G4 waits for the owner.
-11. **No plan review by the owner.** The owner said "ok" to "say OK and I write the plan
-    and build it". The design they approved binds the plan. Cost: a plan the owner did not
-    read.
+11. **No plan review by the owner.** The owner agreed that the plan be written and built
+    without coming back to them first. The design they approved binds the plan. Cost: a
+    plan the owner did not read.
+
+## The final review's fix wave
+
+The final review of the whole branch found these; each was fixed with a test first.
+
+12. **An item id is at most 40 characters** (`^[A-Za-z0-9][A-Za-z0-9_.#-]{0,39}$`). The
+    line keeps 40 characters of an id, so a longer one was listed and read whole, then
+    its comment, state and link went to the cut prefix: another item, if the prefix is
+    one. Cost: a tracker with longer ids is not served.
+13. **Labels that cannot be read are not written over.** One entry that is neither text
+    nor an object with a `name` makes the labels unknown: the labels form sets no state,
+    and the item does not carry the mark. Before, the entry was skipped, and the write of
+    the whole list dropped it. Cost: such an item cannot be moved by the labels form.
+14. **Fixed sentences where a command's answer would hold text of a settings file.** A
+    place that the settings name and that is not approved: `The tracker's place is
+    named by the settings file, not by the remote. Read its [tracker] line in the pane,
+    then /factory approve.` A tracker that the parser refused: `The tracker in the
+    settings file was refused. The pane's settings line says why.` The pane's
+    `settings:` row is wrapped, never cut, and a key that a reason names is cleaned and
+    cut to 40 characters. Cost: the reason is read in the pane, not in the chat.
+15. **A field name is at most 200 characters in all.** The rule bounded the parts, not
+    their length, so one name could make an approval line of any length. Cost: none
+    that a real tracker meets.
+16. **The contract gains one optional method, `why`:** the reason of the adapter's last
+    failed reading call, as `scan().note` is. Only the MCP adapter gives one, in fixed
+    words or a tool's own cut error line; `/factory tracker` prints it after `not read`
+    and `Me: not known`. A pure `itemProblem` tells a missing title from a missing list
+    of comments. Cost: a third change to the contract that G3 kept small.
+17. **Each call must hold the placeholders it needs.** `read`, `comments`, `comment`,
+    every step, `states.labels` and `linkPr` must hold `{id}`; `comment` `{text}`,
+    `linkPr` `{url}`, `states.labels` `{labels}`. A call without them would act on no
+    item, or on every item. Cost: a tracker whose tool takes the id in a way the
+    settings cannot write is not served.
+18. **The example's tool names changed** (`show_task`, `move_task` with a `to` argument,
+    `attach_link`), so that the imagined tracker shares no tool name with the tracker the
+    check ran on. History was not rewritten. Cost: none.
+19. **Smaller fixes.** An address from an answer is printable ASCII only; the authors in an
+    agent's `item.md` are quoted as the title is; the panel's note and the sentence under
+    the lines to approve are wrapped, never cut; `/factory run` and `/factory plan` name
+    `mcp` among the tracker kinds; the registered command names `tracker`.
 
 ## Known gaps
 
@@ -101,15 +142,17 @@ Each says what it costs if it is wrong.
 
 Found by the reviews and left for later. Each was true at the last review of its task.
 
-- `core/mcp-tracker.ts` is about 680 lines (parser, filler, reader). A split is for a
-  later phase to weigh.
+- `core/mcp-tracker.ts` is about 720 lines (parser, filler, reader). Its split is the
+  first commit of the next phase.
+- `isPlain` is written twice (the core file and the adapter).
+- `/factory tracker #7` and `/factory run #7` take a leading `#` differently.
+- A call past its time limit may still complete on the server.
+- The fence does not name `ListMcpResourcesTool` and `ReadMcpResourceTool`, and the spawn
+  window's list does not either; the agent type's own tool list holds them out.
 - Step reasons in a parse refusal repeat the path (`states.done: states.done[0].args: …`).
 - A `server` that is not text gets the reason `is needed`.
-- `comment` need not use `{text}`; the reference says it does.
 - No cap on the count or the length of `{labels}` in a fill, and `{state}` is not checked
   against the four states. Both come from the adapter.
-- With no tracker in the settings, `/factory run` and `/factory plan` still say
-  "(github or azure-boards)".
 - `setState` has a guard that throws `not an item id`; the design's wording is that the
   item could not be read. Nothing is called either way.
 - Two tests (`tests/mcp-tracker.test.ts`) assert `.rejects.toThrow()` with no message.
@@ -117,12 +160,10 @@ Found by the reviews and left for later. Each was true at the last review of its
 - `resultOf` and `rejectedOf` live in the adapter; a small file of their own would split
   them.
 - `me` is lower-cased and cut but not passed through `clean` (it fails closed).
-- No test puts a long, multi-line `isError` text through `/factory tracker` and counts
-  its `Queue:` lines; no test counts the `read` calls; the GitHub-world test of
-  `/factory tracker` reads no item.
+- No test counts the `read` calls of `/factory tracker`.
 - A tool's error text (200 characters at most, cleaned) from the tracker's server reaches
-  the answer in `Queue: not read (…)`. The design's ruling allows it; the final review
-  should weigh it against A6.
+  the answer of `/factory tracker` (`Queue: not read (…)`, `not read (…)`). The final
+  review weighed it against A6 and kept it.
 - Tools that are not `mcp__*` and are outside a role's list (`WebFetch`, `NotebookEdit`,
   `Agent`) still get no answer from the fence and rely on the agent type's own list. The
   spawn window's `FENCED_TOOLS` does not hold `mcp__*`. No engine-level `tool.check` test
