@@ -2,7 +2,7 @@
 // under each, the loops back to Build, one row of cells per job, the jobs that
 // wait for the person, the queue and the day's totals. Pure.
 import type { FactoryView, JobStage, JobView } from './model'
-import { clean, cutTo, displayWidth, fit, padTo } from './rows'
+import { clean, cutTo, displayWidth, fit, padTo, wrap } from './rows'
 import type { Row, Tone } from './rows'
 
 export const STATIONS: readonly string[] = [
@@ -303,7 +303,8 @@ export function factoryRows(view: FactoryView, columns: number): Row[] {
       plain(`TODAY  ${today.done} done · ${today.minutes} m · ${money(today.costUsd)}${score}`, '', 'dim', 'plain', columns),
     )
   }
-  if (view.note !== null) rows.push(plain(view.note, '', 'dim', 'plain', columns))
+  // The note says how to fix what went wrong: wrapped, never cut, as a line to approve.
+  if (view.note !== null) rows.push(...wrap(clean(view.note), columns).map(piece => plain(piece, '', 'dim', 'plain', columns)))
 
   return rows
 }
