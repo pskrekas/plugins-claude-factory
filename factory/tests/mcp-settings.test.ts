@@ -23,16 +23,16 @@ test('the example of the design parses', async () => {
   expect(ok.states).toEqual({
     as: 'calls',
     steps: {
-      'in-progress': [{ tool: 'set_step', args: { task_id: '{id}', step: 'doing' }, optional: false }],
-      'needs-human': [{ tool: 'set_step', args: { task_id: '{id}', step: 'review' }, optional: true }],
-      done: [{ tool: 'set_step', args: { task_id: '{id}', step: 'done' }, optional: false }],
+      'in-progress': [{ tool: 'move_task', args: { task_id: '{id}', to: 'started' }, optional: false }],
+      'needs-human': [{ tool: 'move_task', args: { task_id: '{id}', to: 'waiting' }, optional: true }],
+      done: [{ tool: 'move_task', args: { task_id: '{id}', to: 'closed' }, optional: false }],
       rejected: [{ tool: 'cancel_task', args: { task_id: '{id}' }, optional: false }],
     },
   })
   expect(ok.me).toEqual({ tool: 'who_am_i', args: {}, name: 'name' })
   expect(ok.read.commentAuthor).toBe('by')
   expect(ok.comments).toBe(null)
-  expect(ok.linkPr).toEqual({ tool: 'link_code', args: { task_id: '{id}', ref: '{url}' } })
+  expect(ok.linkPr).toEqual({ tool: 'attach_link', args: { task_id: '{id}', ref: '{url}' } })
 })
 
 test('the keys that are optional may be left out', async () => {
@@ -65,7 +65,7 @@ test('the labels form of states', async () => {
   expect(reason(with_({ states: { labels: { ...labels, names: three } } }))).toContain('states.labels.names')
   expect(reason(with_({ states: { labels: { ...labels, names: { ...names, done: 'a\nb' } } } }))).toContain('states.labels.names')
   expect(reason(with_({ states: { labels } , read: { ...GOOD.read, labels: undefined } }))).toContain('read.labels')
-  expect(reason(with_({ states: { labels, done: [step('done')] } }))).toContain('states')
+  expect(reason(with_({ states: { labels, done: [step('closed')] } }))).toContain('states')
 })
 
 test('what is refused, each with a reason that names the key', async () => {
@@ -159,8 +159,8 @@ test('the lines: one for each call, whole, in a fixed form', async () => {
   const ok = good()
   const lines = mcpLines(ok, 'factory')
   expect(lines).toContain('[tracker] mcp tasks · list: find_tasks {"label":"{mark}","states":["open"]} → rows=tasks id=id title=title state=state')
-  expect(lines).toContain('[tracker] mcp tasks · state in-progress 1/1: set_step {"step":"doing","task_id":"{id}"}')
-  expect(lines).toContain('[tracker] mcp tasks · state needs-human 1/1 (optional): set_step {"step":"review","task_id":"{id}"}')
+  expect(lines).toContain('[tracker] mcp tasks · state in-progress 1/1: move_task {"task_id":"{id}","to":"started"}')
+  expect(lines).toContain('[tracker] mcp tasks · state needs-human 1/1 (optional): move_task {"task_id":"{id}","to":"waiting"}')
   expect(lines).toContain('[tracker] mcp tasks · url: https://tracker.example.com/tasks/{id}')
   expect(lines).toContain('[tracker] mcp tasks · me: who_am_i {} → name=name')
   expect(lines.length).toBe(12)
@@ -177,7 +177,7 @@ test('the lines: one for each call, whole, in a fixed form', async () => {
     { ...ok, server: 'other' },
     { ...ok, url: 'https://tracker.example.com/t/{id}' },
     { ...ok, read: { ...ok.read, text: 'body' } },
-    { ...ok, states: { as: 'calls' as const, steps: { ...(ok.states as { steps: object }).steps, 'needs-human': [{ tool: 'set_step', args: { task_id: '{id}', step: 'review' }, optional: false }] } } },
+    { ...ok, states: { as: 'calls' as const, steps: { ...(ok.states as { steps: object }).steps, 'needs-human': [{ tool: 'move_task', args: { task_id: '{id}', to: 'waiting' }, optional: false }] } } },
   ]
   expect(mcpLines(ok, 'factory OR labels is not EMPTY')).not.toEqual(lines)
   expect(mcpLines(ok, 'other').filter(l => !lines.includes(l))).toEqual(['[tracker] mcp tasks · mark: other'])
@@ -199,8 +199,8 @@ test('the lines of the other forms', async () => {
   const steps = { 'in-progress': [step('a'), step('b')] }
   const two = (parseMcpTracker(with_({ states: steps })) as { ok: McpTracker }).ok
   expect(mcpLines(two, 'factory').filter(l => l.includes('state in-progress'))).toEqual([
-    '[tracker] mcp tasks · state in-progress 1/2: set_step {"step":"a","task_id":"{id}"}',
-    '[tracker] mcp tasks · state in-progress 2/2: set_step {"step":"b","task_id":"{id}"}',
+    '[tracker] mcp tasks · state in-progress 1/2: move_task {"task_id":"{id}","to":"a"}',
+    '[tracker] mcp tasks · state in-progress 2/2: move_task {"task_id":"{id}","to":"b"}',
   ])
 })
 

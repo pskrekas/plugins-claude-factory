@@ -26,11 +26,11 @@ type Answer = McpResult | ((args: { [key: string]: Json }) => McpResult)
 function server(table: Record<string, Answer> = {}) {
   const calls: [string, { [key: string]: Json }][] = []
   const answers: Record<string, Answer> = {
-    find_tasks: args => json({ tasks: JSON.stringify(args.states) === '["open"]' ? [{ id: 'PROJ-12', title: 'Add dark mode', state: 'Open' }] : [{ id: 'PROJ-13', title: 'Fonts', state: 'Doing' }] }),
-    get_task: json(TASK),
+    find_tasks: args => json({ tasks: JSON.stringify(args.states) === '["open"]' ? [{ id: 'PROJ-12', title: 'Add dark mode', state: 'Open' }] : [{ id: 'PROJ-13', title: 'Fonts', state: 'Started' }] }),
+    show_task: json(TASK),
     add_comment: text('Saved.'),
-    set_step: json({}),
-    link_code: text('Linked.'),
+    move_task: json({}),
+    attach_link: text('Linked.'),
     who_am_i: json({ name: 'Runner' }),
     ...table,
   }
@@ -51,13 +51,13 @@ test('the five actions call the tools of the settings, with the values in place'
   expect(t.kind).toBe('mcp')
   expect(await t.scan()).toEqual({
     items: [{ id: 'PROJ-12', title: 'Add dark mode', state: 'open' }],
-    claimed: [{ id: 'PROJ-13', title: 'Fonts', state: 'doing' }],
+    claimed: [{ id: 'PROJ-13', title: 'Fonts', state: 'started' }],
     result: null,
     note: null,
   })
   expect(s.calls).toEqual([
     ['find_tasks', { label: 'factory', states: ['open'] }],
-    ['find_tasks', { label: 'factory', states: ['doing'] }],
+    ['find_tasks', { label: 'factory', states: ['started'] }],
   ])
   s.calls.length = 0
   expect(await t.read('PROJ-12')).toEqual({
@@ -73,10 +73,10 @@ test('the five actions call the tools of the settings, with the values in place'
   await t.linkPr('PROJ-12', PR)
   await t.setState('PROJ-12', 'in-progress')
   expect(s.calls).toEqual([
-    ['get_task', { task_id: 'PROJ-12' }],
+    ['show_task', { task_id: 'PROJ-12' }],
     ['add_comment', { task_id: 'PROJ-12', text: 'The factory started on this.' }],
-    ['link_code', { task_id: 'PROJ-12', ref: PR }],
-    ['set_step', { task_id: 'PROJ-12', step: 'doing' }],
+    ['attach_link', { task_id: 'PROJ-12', ref: PR }],
+    ['move_task', { task_id: 'PROJ-12', to: 'started' }],
   ])
   // The person who runs the line is asked once.
   s.calls.length = 0
@@ -86,14 +86,14 @@ test('the five actions call the tools of the settings, with the values in place'
 })
 
 test('an optional step that fails does not fail the move; another one does', async () => {
-  const s = server({ set_step: args => (args.step === 'doing' ? json({}) : text('Tick every point first.', true)) })
-  const spec = specOf({ states: { 'needs-human': [step('review', { optional: true }), step('doing')], done: [step('done'), step('doing')] } })
+  const s = server({ move_task: args => (args.to === 'started' ? json({}) : text('Tick every point first.', true)) })
+  const spec = specOf({ states: { 'needs-human': [step('waiting', { optional: true }), step('started')], done: [step('closed'), step('started')] } })
   const t = mcpTracker(s.call, spec, 'factory', [])
   await t.setState('PROJ-12', 'needs-human')
-  expect(s.calls.map(([, args]) => args.step)).toEqual(['review', 'doing'])
+  expect(s.calls.map(([, args]) => args.to)).toEqual(['waiting', 'started'])
   s.calls.length = 0
-  await expect(t.setState('PROJ-12', 'done')).rejects.toThrow('set_step: Tick every point first.')
-  expect(s.calls.map(([, args]) => args.step)).toEqual(['done'])
+  await expect(t.setState('PROJ-12', 'done')).rejects.toThrow('move_task: Tick every point first.')
+  expect(s.calls.map(([, args]) => args.to)).toEqual(['closed'])
   // A state with no entry calls nothing.
   s.calls.length = 0
   await t.setState('PROJ-12', 'rejected')
@@ -103,18 +103,18 @@ test('an optional step that fails does not fail the move; another one does', asy
 const LABELS = { labels: { tool: 'edit_item', args: { key: '{id}', fields: { labels: '{labels}' } } } }
 
 test('states as labels: read, then write the whole list', async () => {
-  const s = server({ get_task: json({ ...TASK, labels: ['bug', 'factory', 'Factory:In-Progress'] }), edit_item: json({}) })
+  const s = server({ show_task: json({ ...TASK, labels: ['bug', 'factory', 'Factory:In-Progress'] }), edit_item: json({}) })
   const t = mcpTracker(s.call, specOf({ states: LABELS, comments: { tool: 'list_comments', args: { task_id: '{id}' }, rows: 'items', author: 'by', text: 'text' } }), 'factory', [])
   await t.setState('PROJ-12', 'done')
   // The labels are read with no comment: one call.
   expect(s.calls).toEqual([
-    ['get_task', { task_id: 'PROJ-12' }],
+    ['show_task', { task_id: 'PROJ-12' }],
     ['edit_item', { key: 'PROJ-12', fields: { labels: ['bug', 'factory', 'factory:done'] } }],
   ])
   // An item that cannot be read is not written.
-  const broken = server({ get_task: text('No such task.', true), edit_item: json({}) })
-  await expect(mcpTracker(broken.call, specOf({ states: LABELS }), 'factory', []).setState('PROJ-12', 'done')).rejects.toThrow('get_task: the item could not be read')
-  expect(broken.calls.map(([tool]) => tool)).toEqual(['get_task'])
+  const broken = server({ show_task: text('No such task.', true), edit_item: json({}) })
+  await expect(mcpTracker(broken.call, specOf({ states: LABELS }), 'factory', []).setState('PROJ-12', 'done')).rejects.toThrow('show_task: the item could not be read')
+  expect(broken.calls.map(([tool]) => tool)).toEqual(['show_task'])
   // A write that the server refuses fails the move.
   const refused = server({ edit_item: text('No rights.', true) })
   await expect(mcpTracker(refused.call, specOf({ states: LABELS }), 'factory', []).setState('PROJ-12', 'done')).rejects.toThrow('edit_item: No rights.')
@@ -175,12 +175,12 @@ test('the server did not answer: the note says how to connect it', async () => {
 })
 
 test('hasMark: by the labels, in any case; without labels, by the list', async () => {
-  const marked = server({ get_task: json({ ...TASK, labels: ['Bug', { name: 'FACTORY' }] }) })
+  const marked = server({ show_task: json({ ...TASK, labels: ['Bug', { name: 'FACTORY' }] }) })
   expect(await mcpTracker(marked.call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(true)
-  expect(marked.calls.map(([tool]) => tool)).toEqual(['get_task'])
-  expect(await mcpTracker(server({ get_task: json({ ...TASK, labels: ['bug'] }) }).call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(false)
-  expect(await mcpTracker(server({ get_task: json({ ...TASK, labels: 'factory' }) }).call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(false)
-  expect(await mcpTracker(server({ get_task: text('x', true) }).call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(false)
+  expect(marked.calls.map(([tool]) => tool)).toEqual(['show_task'])
+  expect(await mcpTracker(server({ show_task: json({ ...TASK, labels: ['bug'] }) }).call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(false)
+  expect(await mcpTracker(server({ show_task: json({ ...TASK, labels: 'factory' }) }).call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(false)
+  expect(await mcpTracker(server({ show_task: text('x', true) }).call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(false)
   // No labels in the read: the item must be a row of the list or of the claimed.
   const read = { ...GOOD.read, labels: undefined }
   const s = server()
@@ -206,11 +206,11 @@ test('an id that breaks the rule calls nothing', async () => {
 test("with a comments call, the read's own comment keys are set aside; comments that cannot be read leave no item", async () => {
   const comments = { tool: 'list_comments', args: { task_id: '{id}' }, rows: 'items', author: 'by', text: 'text' }
   const { comments: _, ...bare } = TASK
-  const s = server({ get_task: json(bare), list_comments: json({ items: [{ by: 'Author', text: 'From the author' }, { by: 3, text: 'x' }] }) })
+  const s = server({ show_task: json(bare), list_comments: json({ items: [{ by: 'Author', text: 'From the author' }, { by: 3, text: 'x' }] }) })
   const t = mcpTracker(s.call, specOf({ comments }), 'factory', [])
   expect((await t.read('PROJ-12'))?.comments).toEqual([{ author: 'author', text: 'From the author' }])
   expect(s.calls).toEqual([
-    ['get_task', { task_id: 'PROJ-12' }],
+    ['show_task', { task_id: 'PROJ-12' }],
     ['list_comments', { task_id: 'PROJ-12' }],
   ])
   // Read alone: one call, no comment.
@@ -218,11 +218,11 @@ test("with a comments call, the read's own comment keys are set aside; comments 
   expect((await t.read('PROJ-12', false))?.comments).toEqual([])
   expect(s.calls.length).toBe(1)
   for (const answer of [text('down', true), json({ other: [] }), text('not json')]) {
-    expect(await mcpTracker(server({ get_task: json(bare), list_comments: answer }).call, specOf({ comments }), 'factory', []).read('PROJ-12')).toBe(null)
+    expect(await mcpTracker(server({ show_task: json(bare), list_comments: answer }).call, specOf({ comments }), 'factory', []).read('PROJ-12')).toBe(null)
   }
   // Without a comments call, an item whose comments are not in the answer is not read.
-  expect(await mcpTracker(server({ get_task: json(bare) }).call, SPEC, 'factory', []).read('PROJ-12')).toBe(null)
-  expect((await mcpTracker(server({ get_task: json(bare) }).call, SPEC, 'factory', []).read('PROJ-12', false))?.title).toBe('Add dark mode')
+  expect(await mcpTracker(server({ show_task: json(bare) }).call, SPEC, 'factory', []).read('PROJ-12')).toBe(null)
+  expect((await mcpTracker(server({ show_task: json(bare) }).call, SPEC, 'factory', []).read('PROJ-12', false))?.title).toBe('Add dark mode')
 })
 
 test('me: none without the call; a failure is asked once too', async () => {
@@ -275,7 +275,7 @@ test('the panel reads the queue through the engine, never at session start', asy
   expect(await paneText($, 80)).toContain('QUEUE  1 item with the mark')
   expect(world.mcpCalls).toEqual([
     ['tasks', 'find_tasks', { label: 'factory', states: ['open'] }],
-    ['tasks', 'find_tasks', { label: 'factory', states: ['doing'] }],
+    ['tasks', 'find_tasks', { label: 'factory', states: ['started'] }],
   ])
 })
 

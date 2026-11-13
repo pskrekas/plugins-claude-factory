@@ -1081,14 +1081,14 @@ function mcpWorld(opts: Parameters<typeof lineWorld>[0] = {}, approved = true) {
   const text = (v: unknown) => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }], isError: false })
   w.io.mcpAnswer = (_, tool, args) => {
     if (tool === 'find_tasks') return text({ tasks: JSON.stringify(args.states) === '["open"]' ? [{ id: 'PROJ-12', title: 'Item PROJ-12', state: 'Open' }] : [] })
-    if (tool === 'get_task') {
+    if (tool === 'show_task') {
       const comments = [{ by: 'Author', text: 'From the author' }, { by: 'Stranger', text: 'From a stranger' }, { by: 'Runner', text: 'From the runner' }]
 
       return text({ title: `Item ${String(args.task_id)}`, description: 'Do it', made_by: 'Author', state: 'Open', labels: ['factory'], comments })
     }
     if (tool === 'who_am_i') return text({ name: 'Runner' })
 
-    return ['set_step', 'add_comment', 'link_code', 'cancel_task'].includes(tool) ? text('Saved.') : undefined
+    return ['move_task', 'add_comment', 'attach_link', 'cancel_task'].includes(tool) ? text('Saved.') : undefined
   }
 
   return w
@@ -1139,12 +1139,12 @@ test('with an MCP tracker one item goes from the queue to a ready pull request',
   expect(
     inOrder(mcpOf(w), [
       'tasks find_tasks {"label":"factory","states":["open"]}',
-      'tasks get_task {"task_id":"PROJ-12"}',
+      'tasks show_task {"task_id":"PROJ-12"}',
       'tasks who_am_i {}',
-      'tasks set_step {"task_id":"PROJ-12","step":"doing"}',
+      'tasks move_task {"task_id":"PROJ-12","to":"started"}',
       'tasks add_comment {"task_id":"PROJ-12","text":"The factory started on this."}',
-      'tasks link_code {"task_id":"PROJ-12","ref":"https://github.com/a/b/pull/7"}',
-      'tasks set_step {"task_id":"PROJ-12","step":"review"}',
+      'tasks attach_link {"task_id":"PROJ-12","ref":"https://github.com/a/b/pull/7"}',
+      'tasks move_task {"task_id":"PROJ-12","to":"waiting"}',
       'tasks add_comment {"task_id":"PROJ-12","text":"The factory finished this.',
     ]),
   ).toBe('ok')
@@ -1158,7 +1158,7 @@ test('with an MCP tracker one item goes from the queue to a ready pull request',
   w.io.time += 301_000
   await watch(w.io)
   expect((await jobOf(w, 'PROJ-12'))?.stage).toBe('done')
-  expect(mcpOf(w).at(-1)).toBe('tasks set_step {"task_id":"PROJ-12","step":"done"}')
+  expect(mcpOf(w).at(-1)).toBe('tasks move_task {"task_id":"PROJ-12","to":"closed"}')
 })
 
 test('the panel says when the MCP server did not answer, and /factory run does not start', async () => {

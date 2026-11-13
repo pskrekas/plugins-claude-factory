@@ -342,8 +342,8 @@ function trackerWorld(opts: { tasks?: unknown[]; approved?: boolean; tracker?: u
   const text = (v: unknown) => ({ content: [{ type: 'text', text: JSON.stringify(v) }], isError: false })
   const tasks = opts.tasks ?? [{ id: 'PROJ-12', title: 'Zebrafish title', state: 'Axolotl State' }, { id: 'PROJ-14', title: 'x', state: 's' }, { id: 'PROJ-15', title: 'x', state: 's' }, { id: 'PROJ-16', title: 'x', state: 's' }]
   io.mcpAnswer = (_, tool, args) => {
-    if (tool === 'find_tasks') return text({ tasks: JSON.stringify(args.states) === '["open"]' ? tasks : [{ id: 'PROJ-99', title: 'c', state: 'doing' }] })
-    if (tool === 'get_task') {
+    if (tool === 'find_tasks') return text({ tasks: JSON.stringify(args.states) === '["open"]' ? tasks : [{ id: 'PROJ-99', title: 'c', state: 'started' }] })
+    if (tool === 'show_task') {
       if (args.task_id === 'PROJ-404') return { failed: 'no-server', why: 'gone' }
       const comments = [{ by: 'Wombat Author', text: 'Narwhal comment 1' }, { by: 'Stranger', text: 'Narwhal comment 2' }, { by: 'Pangolin Runner', text: 'Narwhal comment 3' }, { by: 'Stranger', text: 'Narwhal comment 4' }]
 
@@ -378,7 +378,7 @@ test('/factory tracker says what it understood and holds no text of the tracker'
   for (const word of SECRETS) expect([word, answer.includes(word) || one.includes(word)]).toEqual([word, false])
   expect(one.length <= 1200).toBe(true)
   // It only reads.
-  expect([...new Set(io.mcpCalls.map(call => call[1]))].sort()).toEqual(['find_tasks', 'get_task', 'who_am_i'])
+  expect([...new Set(io.mcpCalls.map(call => call[1]))].sort()).toEqual(['find_tasks', 'show_task', 'who_am_i'])
 })
 
 test('/factory tracker on a GitHub world says kind github', async () => {

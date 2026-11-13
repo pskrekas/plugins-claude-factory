@@ -99,11 +99,11 @@ An example for an imagined tracker. Every name in it is the tracker's own.
     },
     "claimed": {
       "tool": "find_tasks",
-      "args": { "label": "{mark}", "states": ["doing"] },
+      "args": { "label": "{mark}", "states": ["started"] },
       "rows": "tasks", "id": "id", "title": "title", "state": "state"
     },
     "read": {
-      "tool": "get_task",
+      "tool": "show_task",
       "args": { "task_id": "{id}" },
       "title": "title", "text": "description", "author": "made_by",
       "state": "state", "labels": "labels",
@@ -111,12 +111,12 @@ An example for an imagined tracker. Every name in it is the tracker's own.
     },
     "comment": { "tool": "add_comment", "args": { "task_id": "{id}", "text": "{text}" } },
     "states": {
-      "in-progress": [{ "tool": "set_step", "args": { "task_id": "{id}", "step": "doing" } }],
-      "needs-human": [{ "tool": "set_step", "args": { "task_id": "{id}", "step": "review" }, "optional": true }],
-      "done": [{ "tool": "set_step", "args": { "task_id": "{id}", "step": "done" } }],
+      "in-progress": [{ "tool": "move_task", "args": { "task_id": "{id}", "to": "started" } }],
+      "needs-human": [{ "tool": "move_task", "args": { "task_id": "{id}", "to": "waiting" }, "optional": true }],
+      "done": [{ "tool": "move_task", "args": { "task_id": "{id}", "to": "closed" } }],
       "rejected": [{ "tool": "cancel_task", "args": { "task_id": "{id}" } }]
     },
-    "linkPr": { "tool": "link_code", "args": { "task_id": "{id}", "ref": "{url}" } },
+    "linkPr": { "tool": "attach_link", "args": { "task_id": "{id}", "ref": "{url}" } },
     "me": { "tool": "who_am_i", "args": {}, "name": "name" }
   }
 }
@@ -240,7 +240,7 @@ that is not approved:
 
 ```text
 [tracker] mcp tasks · list: find_tasks {"label":"{mark}","states":["open"]} → rows=tasks id=id title=title state=state
-[tracker] mcp tasks · state in-progress 1/1: set_step {"step":"doing","task_id":"{id}"}
+[tracker] mcp tasks · state in-progress 1/1: move_task {"task_id":"{id}","to":"started"}
 [tracker] mcp tasks · url: https://tracker.example.com/tasks/{id}
 ```
 

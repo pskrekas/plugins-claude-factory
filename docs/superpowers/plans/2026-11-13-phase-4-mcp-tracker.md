@@ -108,7 +108,7 @@ test('the example of the design parses', () => {
   const { ok } = parseMcpTracker(GOOD) as { ok: McpTracker }
   expect(ok.server).toBe('tasks')
   expect(ok.list).toEqual({ tool: 'find_tasks', args: { label: '{mark}', states: ['open'] }, rows: 'tasks', id: 'id', title: 'title', state: 'state' })
-  expect(ok.states).toEqual({ as: 'calls', steps: { 'in-progress': [{ tool: 'set_step', args: { task_id: '{id}', step: 'doing' }, optional: false }], 'needs-human': [{ tool: 'set_step', args: { task_id: '{id}', step: 'review' }, optional: true }], done: [/* … */], rejected: [/* … */] } })
+  expect(ok.states).toEqual({ as: 'calls', steps: { 'in-progress': [{ tool: 'move_task', args: { task_id: '{id}', to: 'started' }, optional: false }], 'needs-human': [{ tool: 'move_task', args: { task_id: '{id}', to: 'waiting' }, optional: true }], done: [/* … */], rejected: [/* … */] } })
   expect(ok.me).toEqual({ tool: 'who_am_i', args: {}, name: 'name' })
 })
 test('the labels form of states', () => {
@@ -131,8 +131,8 @@ test('what is refused, each with a reason', () => {
 test('the lines: one for each call, whole, in a fixed form', () => {
   const lines = mcpLines(ok)
   expect(lines).toContain('[tracker] mcp tasks · list: find_tasks {"label":"{mark}","states":["open"]} → rows=tasks id=id title=title state=state')
-  expect(lines).toContain('[tracker] mcp tasks · state in-progress 1/1: set_step {"step":"doing","task_id":"{id}"}')
-  expect(lines).toContain('[tracker] mcp tasks · state needs-human 1/1 (optional): set_step {"step":"review","task_id":"{id}"}')
+  expect(lines).toContain('[tracker] mcp tasks · state in-progress 1/1: move_task {"task_id":"{id}","to":"started"}')
+  expect(lines).toContain('[tracker] mcp tasks · state needs-human 1/1 (optional): move_task {"task_id":"{id}","to":"waiting"}')
   expect(lines).toContain('[tracker] mcp tasks · url: https://tracker.example.com/tasks/{id}')
   expect(lines.length).toBe(11) // list, claimed, read, comment, 4 states, linkPr, me, url
   // any change gives another line: for each of { a tool, an argument's value, an argument's key order (same line!), a field name, the server, optional }:
@@ -204,8 +204,8 @@ test('the data of an answer', () => {
 })
 test('a write is judged by isError alone', () => {
   expect(errorOf('add_comment', { content: [{ type: 'text', text: 'Done.' }], isError: false })).toBe(null)
-  expect(errorOf('set_step', { content: [{ type: 'text', text: 'Tick every point first.\nmore\u001b[2J' }], isError: true })).toBe('set_step: Tick every point first.')
-  expect(errorOf('set_step', { content: [], isError: true })).toBe('set_step: failed')
+  expect(errorOf('move_task', { content: [{ type: 'text', text: 'Tick every point first.\nmore\u001b[2J' }], isError: true })).toBe('move_task: Tick every point first.')
+  expect(errorOf('move_task', { content: [], isError: true })).toBe('move_task: failed')
   expect(errorOf('x', { failed: 'timeout', why: 'no answer in time' })).toBe('x: no answer in time')
   expect(errorOf('x', { content: [{ type: 'text', text: 'e'.repeat(500) }], isError: true })?.length).toBe(200)
 })
@@ -286,15 +286,15 @@ Every call goes through `fill`; a null from `fill` throws `<tool>: not sent (a v
 
 ```ts
 test('the five actions call the tools of the settings, with the values in place', async () => {
-  // scan → find_tasks {label:'factory',states:['open']} and find_tasks {…['doing']}; items and claimed as parsed
-  // read('PROJ-12') → get_task {task_id:'PROJ-12'}; comment → add_comment {task_id, text}; linkPr → link_code {task_id, ref:url}
-  // setState('PROJ-12','in-progress') → set_step {task_id, step:'doing'}
+  // scan → find_tasks {label:'factory',states:['open']} and find_tasks {…['started']}; items and claimed as parsed
+  // read('PROJ-12') → show_task {task_id:'PROJ-12'}; comment → add_comment {task_id, text}; linkPr → attach_link {task_id, ref:url}
+  // setState('PROJ-12','in-progress') → move_task {task_id, to:'started'}
 })
 test('an optional step that fails does not fail the move; another one does', async () => {
-  // needs-human: set_step answers isError 'Tick every point first.' → setState resolves
-  // done: set_step answers isError → rejects with 'set_step: …'; and a second step of that state is not called
+  // needs-human: move_task answers isError 'Tick every point first.' → setState resolves
+  // done: move_task answers isError → rejects with 'move_task: …'; and a second step of that state is not called
 })
-test('states as labels: read, then write the whole list', async () => { /* calls in order: get_task, edit_item {key, fields:{labels:['bug','factory','factory:done']}}; read fails → throws, no write */ })
+test('states as labels: read, then write the whole list', async () => { /* calls in order: show_task, edit_item {key, fields:{labels:['bug','factory','factory:done']}}; read fails → throws, no write */ })
 test('a write that answers a plain sentence passed', async () => { /* comment resolves when add_comment answers text 'Saved.' */ })
 test('with no linkPr the address is a comment; a bad address is refused before any call', async () => {})
 test('a forbidden word stops the comment before any call', async () => {})
@@ -315,7 +315,7 @@ test('an MCP tracker is asked nothing while one of its lines is not approved', a
   // store gains mcpLines(GOOD) → refresh shows queue 1; then the settings change one argument (states ['open','new']) → mcpCalls gains nothing more, queue null again
 })
 test('with an MCP tracker one item goes from the queue to a ready pull request', async () => {
-  // as the Azure DevOps test of this file: the calls in order hold set_step doing, add_comment, link_code, and no gh issue / az boards call
+  // as the Azure DevOps test of this file: the calls in order hold move_task started, add_comment, attach_link, and no gh issue / az boards call
 })
 test('the panel says when the MCP server did not answer, and /factory run does not start', async () => {})
 ```
@@ -348,7 +348,7 @@ PROJ-12: carries the mark: yes · 4 comments (2 of the author or the runner)
 - The contract does not change for this: `hasMark(id)` gives the mark, and the count of labels of spec 8 is left out (the contract has no labels).
 - It is not one of the "only a person" commands: it reads only.
 
-- [ ] **Step 1: Write the failing tests** in `commands.test.tsx`: the answer above for an MCP world (asserting each line, and that the answer holds neither the title, the text, an author's name nor a comment's text of the fake item); the same command on a GitHub world (kind `github`); the five refusals; `/factory tracker PROJ-14` reads that item; no write tool is called (`mcpCalls` holds only `find_tasks`, `get_task`, `who_am_i`).
+- [ ] **Step 1: Write the failing tests** in `commands.test.tsx`: the answer above for an MCP world (asserting each line, and that the answer holds neither the title, the text, an author's name nor a comment's text of the fake item); the same command on a GitHub world (kind `github`); the five refusals; `/factory tracker PROJ-14` reads that item; no write tool is called (`mcpCalls` holds only `find_tasks`, `show_task`, `who_am_i`).
 - [ ] **Step 2: Run.** Expected: fail.
 - [ ] **Step 3: Implement** `trackerCheck` and the command word; add `/factory tracker [id]` to the help text.
 - [ ] **Step 4: Run** all tests. Expected: 0 fail.

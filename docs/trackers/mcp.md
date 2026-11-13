@@ -29,11 +29,11 @@ For an imagined tracker. Every name in it is the tracker's own, not the plugin's
     },
     "claimed": {
       "tool": "find_tasks",
-      "args": { "label": "{mark}", "states": ["doing"] },
+      "args": { "label": "{mark}", "states": ["started"] },
       "rows": "tasks", "id": "id", "title": "title", "state": "state"
     },
     "read": {
-      "tool": "get_task",
+      "tool": "show_task",
       "args": { "task_id": "{id}" },
       "title": "title", "text": "description", "author": "made_by",
       "state": "state", "labels": "labels",
@@ -41,18 +41,18 @@ For an imagined tracker. Every name in it is the tracker's own, not the plugin's
     },
     "comment": { "tool": "add_comment", "args": { "task_id": "{id}", "text": "{text}" } },
     "states": {
-      "in-progress": [{ "tool": "set_step", "args": { "task_id": "{id}", "step": "doing" } }],
-      "needs-human": [{ "tool": "set_step", "args": { "task_id": "{id}", "step": "review" }, "optional": true }],
-      "done": [{ "tool": "set_step", "args": { "task_id": "{id}", "step": "done" } }],
+      "in-progress": [{ "tool": "move_task", "args": { "task_id": "{id}", "to": "started" } }],
+      "needs-human": [{ "tool": "move_task", "args": { "task_id": "{id}", "to": "waiting" }, "optional": true }],
+      "done": [{ "tool": "move_task", "args": { "task_id": "{id}", "to": "closed" } }],
       "rejected": [{ "tool": "cancel_task", "args": { "task_id": "{id}" } }]
     },
-    "linkPr": { "tool": "link_code", "args": { "task_id": "{id}", "ref": "{url}" } },
+    "linkPr": { "tool": "attach_link", "args": { "task_id": "{id}", "ref": "{url}" } },
     "me": { "tool": "who_am_i", "args": {}, "name": "name" }
   }
 }
 ```
 
-The queue is the open tasks with the label `factory`. The line reads a task with `get_task`, writes a comment with `add_comment`, and moves the task through its steps with `set_step`. The pull request is linked with `link_code`.
+The queue is the open tasks with the label `factory`. The line reads a task with `show_task`, writes a comment with `add_comment`, and moves the task through its steps with `move_task`. The pull request is linked with `attach_link`.
 
 ## The keys
 
@@ -137,14 +137,14 @@ In the labels form, your `list` call must leave out the items that carry a state
 
 ```text
 [tracker] mcp tasks · list: find_tasks {"label":"{mark}","states":["open"]} → rows=tasks id=id title=title state=state
-[tracker] mcp tasks · claimed: find_tasks {"label":"{mark}","states":["doing"]} → rows=tasks id=id title=title state=state
-[tracker] mcp tasks · read: get_task {"task_id":"{id}"} → title=title text=description author=made_by state=state labels=labels comments=comments commentAuthor=by commentText=text
+[tracker] mcp tasks · claimed: find_tasks {"label":"{mark}","states":["started"]} → rows=tasks id=id title=title state=state
+[tracker] mcp tasks · read: show_task {"task_id":"{id}"} → title=title text=description author=made_by state=state labels=labels comments=comments commentAuthor=by commentText=text
 [tracker] mcp tasks · comment: add_comment {"task_id":"{id}","text":"{text}"}
-[tracker] mcp tasks · state in-progress 1/1: set_step {"step":"doing","task_id":"{id}"}
-[tracker] mcp tasks · state needs-human 1/1 (optional): set_step {"step":"review","task_id":"{id}"}
-[tracker] mcp tasks · state done 1/1: set_step {"step":"done","task_id":"{id}"}
+[tracker] mcp tasks · state in-progress 1/1: move_task {"task_id":"{id}","to":"started"}
+[tracker] mcp tasks · state needs-human 1/1 (optional): move_task {"task_id":"{id}","to":"waiting"}
+[tracker] mcp tasks · state done 1/1: move_task {"task_id":"{id}","to":"closed"}
 [tracker] mcp tasks · state rejected 1/1: cancel_task {"task_id":"{id}"}
-[tracker] mcp tasks · linkPr: link_code {"ref":"{url}","task_id":"{id}"}
+[tracker] mcp tasks · linkPr: attach_link {"ref":"{url}","task_id":"{id}"}
 [tracker] mcp tasks · me: who_am_i {} → name=name
 [tracker] mcp tasks · url: https://tracker.example.com/tasks/{id}
 [tracker] mcp tasks · mark: factory

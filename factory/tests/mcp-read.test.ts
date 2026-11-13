@@ -80,10 +80,10 @@ test('the data of an answer', () => {
 
 test('a write is judged by isError alone', () => {
   expect(errorOf('add_comment', text('Done.'))).toBe(null)
-  expect(errorOf('set_step', text('Tick every point first.\nmore\u001b[2J', true))).toBe('set_step: Tick every point first.')
-  expect(errorOf('set_step', text('\n\nsecond\nthird', true))).toBe('set_step: second')
-  expect(errorOf('set_step', { content: [], isError: true })).toBe('set_step: failed')
-  expect(errorOf('set_step', text('', true))).toBe('set_step: failed')
+  expect(errorOf('move_task', text('Tick every point first.\nmore\u001b[2J', true))).toBe('move_task: Tick every point first.')
+  expect(errorOf('move_task', text('\n\nsecond\nthird', true))).toBe('move_task: second')
+  expect(errorOf('move_task', { content: [], isError: true })).toBe('move_task: failed')
+  expect(errorOf('move_task', text('', true))).toBe('move_task: failed')
   expect(errorOf('x', { failed: 'timeout', why: 'no answer in time' })).toBe('x: no answer in time')
   expect(errorOf('x', text('e'.repeat(500), true))?.length).toBe(200)
   expect(errorOf('x', { failed: 'other', why: 'e'.repeat(500) })?.length).toBe(200)
