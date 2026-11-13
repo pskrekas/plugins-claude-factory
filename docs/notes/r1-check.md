@@ -272,11 +272,13 @@ Before:
 Read only:
 
 - [ ] `/factory tracker`: `Tracker: mcp`, the size of the queue and up to three ids.
-      With no item marked yet: `Queue: 0 items. Nothing to read. Is the mark right?`
-- [ ] Put the mark on one test item. `/factory tracker`: `Queue: 1 item (<id>)`.
-- [ ] `/factory tracker <id>`: `title found`, `text found`, `author found`, and
-      `carries the mark: yes`. `address found` when the settings have `url`. With `me`
-      set: `Me: read.`
+      With no item marked yet: `Queue: 0 items. Nothing to read. Is the mark right?`,
+      and no item line.
+- [ ] Put the mark on one test item. `/factory tracker`: `Queue: 1 item (<id>)`, then
+      two lines for that item (the first of the queue): `title found`, `text found`,
+      `author found`, and `carries the mark: yes`. `address found` when the settings
+      have `url`. With `me` set: `Me: read.`
+- [ ] `/factory tracker <id>` with the test item's id: the same two item lines.
 - [ ] The answer of `/factory tracker` holds no title, no author and no text of the
       item: only counts, ids, `found` and `not there`.
 - [ ] Change one argument of one call in the settings. The pane shows that line as

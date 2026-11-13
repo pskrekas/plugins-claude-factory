@@ -2,7 +2,7 @@
 
 Not tested. Nobody ran this mapping against Asana.
 
-This page says what Asana's MCP server can and cannot do for the factory. It is written from Asana's documents ("MCP tools reference", developers.asana.com) as they were on 2026-11-04. The documents name the tools, and only some of their arguments. The rest is in the server's own tool list, which you see in `/mcp` once you are connected.
+This page says what Asana's MCP server can and cannot do for the factory. It is written from Asana's developer pages (developers.asana.com). The sign-in facts are from "Integrating with Asana's MCP server" (updated 2026-10-08) and "Using Asana's MCP server". The tools are from "MCP tools reference" (updated 2026-11-04). The documents name the tools, and only some of their arguments. The rest is in the server's own tool list, which you see in `/mcp` once you are connected.
 
 The reference for every key is [mcp.md](mcp.md).
 
@@ -40,7 +40,7 @@ No documented tool adds or removes a tag, moves a task to a section by its name,
 
 This is not a working file: fill the names from the server's own tool list.
 
-Every value in angle brackets is a name to fill. `<from /mcp>` is a name that only the server's tool list (or one of its answers) gives. The plugin refuses this file until each one is filled, because `<` is not allowed in a field name. An argument name left as `<from /mcp>` would pass the plugin's rules, and then every call would fail on the server.
+Every value in angle brackets is a name to fill. `<from /mcp>` is a name that Asana's documents do not give: only the server's tool list (or one of its answers) gives it. The names that the documents give are filled in (`completed_since`, `include_comments`, `task_id` of `get_task_stories`, `text` of `add_comment`). The plugin refuses this file until each one is filled, because `<` is not allowed in a field name. An argument name left as `<from /mcp>` would pass the plugin's rules, and then every call would fail on the server.
 
 ```json
 {
@@ -60,7 +60,7 @@ Every value in angle brackets is a name to fill. `<from /mcp>` is a name that on
     },
     "comments": {
       "tool": "get_task_stories",
-      "args": { "<from /mcp: the task argument>": "{id}" },
+      "args": { "task_id": "{id}" },
       "rows": "<from /mcp>", "author": "<from /mcp>", "text": "<from /mcp>"
     },
     "comment": {
@@ -78,7 +78,7 @@ Every value in angle brackets is a name to fill. `<from /mcp>` is a name that on
 
 Notes on the mapping:
 
-- **The tag.** The mapping assumes that `get_tasks` wants the tag's id, not its name. Find the id with `search_objects` and write it in `args`. If the tool takes a name, write `"{mark}"` there instead. The mark then does not stand in the call, but it still must be the tag's name: the plugin looks for the mark among the task's tags (`read.labels`) to know that a task carries it. A tag is read by its `name` when the answer gives tags as objects.
+- **The tag.** The mapping assumes that `get_tasks` wants the tag's id, not its name. Find the id with `search_objects` and write it in `args`. With a tag id there, the mark does not stand in the call, but the mark must still be the tag's name (the approval's `mark` line shows it): the plugin looks for the mark among the task's tags (`read.labels`) to know that a task carries it. A tag is read by its `name` when the answer gives tags as objects. If the tool takes the tag's name instead, write `"{mark}"` there.
 - **The server** is named `asana` here. Use the name `/mcp` shows.
 - **The comments.** `get_task_stories` gives the task's history too. A history entry with an author and a text reads as a comment of that person. To read only the comments, leave out `comments`, set `include_comments` to `true` (or leave it out), and give `read` the three comment keys instead.
 - **The address.** There is no `url` key, so a task has no address in the pane. Add `url` with the address of a task in your workspace, with `{id}` in it, or `read.url` with a field of `get_task`'s answer that holds it.

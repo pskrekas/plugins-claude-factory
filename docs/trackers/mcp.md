@@ -96,7 +96,7 @@ A settings file that says `"kind": "jira"` or `"kind": "asana"` is refused with 
 
 ## How an answer is read
 
-- **The data.** It is the answer's `structuredContent` when that is an object. Otherwise it is the first text block, read as JSON. Otherwise the call failed (`<tool>: the answer is not JSON`). An answer over 1 MB failed.
+- **The data.** It is the answer's `structuredContent` when that is an object. Otherwise it is the first text block, read as JSON. Otherwise the call failed (`<tool>: the answer is not JSON`). A text answer over 1 MB failed.
 - **A write** (`comment`, a step of `states`, `linkPr`) passed when the server did not say `isError: true`. Many servers answer a write with a plain sentence, so the text is not read.
 - **A failure.** `isError: true` is a failure. Its reason is the first line of the first text block, as `<tool>: <reason>`, at most 200 characters.
 - **A field name** is dotted (`fields.summary`): one to six parts of letters, digits and `_`. No index and no wildcard. A part may not be `__proto__`, `constructor` or `prototype`. A part that meets a list, or a missing part, gives "not there".
@@ -105,7 +105,7 @@ A settings file that says `"kind": "jira"` or `"kind": "asana"` is refused with 
 - **An item.** A row with no id, or with no title, is no item. A value that is not text where text is expected is "not there".
 - **Labels** are a list of texts, or a list of objects with a `name` text.
 - **Comments.** A comment with no author or no text is skipped. Authors are compared with no regard to case.
-- **Limits.** A queue is the first 200 rows of the answer. A title is cut to 300 characters, a text to 20,000, an author to 200. At most 50 comments are read, each cut to 5,000 characters.
+- **Limits.** A queue is the first 200 rows of the answer. A title is cut to 300 characters, a text to 20,000, an author to 200. The comments read are the first 50 of the answer, in the answer's order, each cut to 5,000 characters. When a tracker gives the oldest comment first, an item with more than 50 comments loses its newest ones: use the separate `comments` call, with the tool's own order or limit argument when it has one.
 - **It fails closed.** A queue that cannot be read is no queue: the panel shows the reason and `/factory run` does not start. A claimed list that cannot be read is empty, and the queue stays as it is. An item that cannot be read, or whose comments cannot be read, is not started: its author may have answered a question there.
 
 ## The four states
@@ -158,18 +158,19 @@ The JSON in a line is compact, with its keys sorted. A character of an argument 
 
 ## `/factory tracker`
 
-`/factory tracker` reads the tracker and says what the plugin understood. It never writes. `/factory tracker PROJ-12` also reads that item, with its comments. Use it after each change of the settings.
+`/factory tracker` reads the tracker and says what the plugin understood. It never writes. It reads the queue, `me`, and the first item of the queue whose id passes the id rule, with its comments, then whether it carries the mark. `/factory tracker PROJ-12` reads that item instead. With an empty queue, or a queue that could not be read, a plain `/factory tracker` reads no item. Use it after each change of the settings.
 
 Its answer goes to the chat, so it holds no text of the tracker: no title, no author, no state, no address. It prints counts, ids, and for each field `found` or `not there`:
 
 ```text
 Tracker: mcp
-Queue: 3 items (PROJ-12, PROJ-14, PROJ-15). Claimed: 1.
+Queue: 4 items (PROJ-12, PROJ-14, PROJ-15). Claimed: 1.
 Me: read.
-PROJ-12: title found (14 characters) · text found (120 characters) · author found · state found · address found
-PROJ-12: carries the mark: yes · 2 comments (1 of the author or the runner)
+PROJ-12: title found (15 characters) · text found (18 characters) · author found · state found · address found
+PROJ-12: carries the mark: yes · 4 comments (2 of the author or the runner)
 ```
 
+- The queue line names at most three ids. The two item lines are for the first item of the queue, or for the id you gave.
 - `Queue: 0 items. Nothing to read. Is the mark right?` A label filter that names no known label often answers an empty list, not an error.
 - `Queue: not read (<reason>)`: the reason of the failed call.
 - `Me: not known.`: no `me` in the settings, or its field was not there.

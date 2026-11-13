@@ -85,7 +85,7 @@ The tools it calls:
 
 ## How it works
 
-- **The queue** is a JQL search: the issues of `PROJ` with the label `factory`, with none of the four state labels, and not done. `{mark}` stands inside the JQL text four times. That is allowed, because the mark holds no quote.
+- **The queue** is a JQL search: the issues of `PROJ` with the label `factory`, with none of the four state labels, and not done. `{mark}` stands inside the JQL text five times in `list` and twice in `claimed`. That is allowed, because the mark holds no quote.
 - **The states are labels**: `factory:in-progress`, `factory:needs-human`, `factory:done` and `factory:rejected`. The plugin reads the issue's labels, takes the old state label away, adds the new one, and writes the whole list with `editJiraIssue`. Your other labels stay. It never moves an issue in its workflow: a finished job only gets the label `factory:done`.
 - **Claimed** is the issues with both `factory` and `factory:in-progress`.
 - **The pull request is a comment.** The server has no tool for a remote link, so there is no `linkPr`. The plugin writes the pull request's address as a comment.
@@ -109,5 +109,6 @@ The tools it calls:
    ```
 
 3. **The fields of `atlassianUserInfo`, for `me`.** It takes no argument. Ask Claude in the chat to call it, and find the field that holds your name as Jira shows it in an issue's reporter. Then add `"me": { "tool": "atlassianUserInfo", "args": {}, "name": "<that field>" }`. A display name can belong to two people. If the answer holds your account id, use it, and read the authors by their account id too (`fields.reporter.accountId`, `author.accountId`).
-4. **That `/factory tracker` reads an issue.** Put the label `factory` on a test issue and run `/factory tracker PROJ-12` (its key). Look for `title found` and `text found`, the number of comments, and `carries the mark: yes`. `text not there` on an issue with a description means the description did not come as text: check `responseContentFormat`. `0 comments` on an issue with comments means the same for a comment's `body`.
-5. **The size of the queue.** The search answers as many issues as the server gives by default, and the plugin reads at most 200. The tool also takes `maxResults`.
+4. **That `/factory tracker` reads an issue.** Put the label `factory` on a test issue and run `/factory tracker` (it reads the first issue of the queue), or `/factory tracker PROJ-12` (its key). Look for `title found` and `text found`, the number of comments, and `carries the mark: yes`. `text not there` on an issue with a description means the description did not come as text: check `responseContentFormat`. `0 comments` on an issue with comments means the same for a comment's `body`.
+5. **Many comments.** In Jira's REST shape, `fields.comment.comments` gives the oldest comment first, and the plugin reads the first 50 of the answer. On an issue with more than 50 comments the newest ones are lost, so an answer of the author there would not reach an agent. If that matters, read the comments with a separate `comments` call whose tool takes an order or a limit.
+6. **The size of the queue.** The search answers as many issues as the server gives by default, and the plugin reads at most 200. The tool also takes `maxResults`.

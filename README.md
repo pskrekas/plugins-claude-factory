@@ -60,7 +60,7 @@ The status line shows the task id, the first progress percent, the checks and a 
 | `/factory close` | closes it |
 | `/factory init` | looks at the repo and writes a first `.claude/factory.json`; it never overwrites one |
 | `/factory where` | says where the factory keeps its state for this repository |
-| `/factory tracker [id]` | reads the tracker and says what the plugin understood: the size of the queue and, for an item, which fields were found. It writes nothing, and its answer holds no text of the tracker |
+| `/factory tracker [id]` | reads the tracker and says what the plugin understood: the size of the queue and, for the first item of the queue (or the item you name), which fields were found. It writes nothing, and its answer holds no text of the tracker |
 | `/factory approve` | opens the pane and allows the commands it shows (see below). Only your own Enter at the prompt counts |
 | `/factory plan` | the dry run: Intake judges each item of the queue (ten at most). It builds nothing, opens no pull request and writes nothing to the tracker. The pane shows what Intake said |
 | `/factory run [id]` | runs the line: one pass over the queue as it is now (or over one item that carries the mark), and the jobs that are already there. It ends when every job is ready, waits for you, or is refused, or when a limit of the day or a full disk holds it |
