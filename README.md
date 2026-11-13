@@ -169,7 +169,7 @@ The **FACTORY** section of the pane shows:
 ```
 
 - the stations, with the number of jobs at each one, and the two loops back to Build (lit while a job is on them);
-- under each station's name, the model of its agent (`factory.models` in the settings chooses a tier for each role: `strongest` is `opus`, `strong` is `sonnet`, `fast` is `haiku`). The gate has no model: it is the plugin's own code. In a narrow pane this is one row, `opus I · sonnet S B R A`;
+- under each station's name, the model of its agent (see "The models"). The gate has no model: it is the plugin's own code. In a narrow pane this is one row, `opus I · sonnet S B R A`;
 - the job rows follow a job as it moves: they are read again from the job files after every end of a turn and every 15 seconds, without a call to the tracker. The rest of the pane is read once a minute;
 - one row per running job: a cell for each station (`done`, `now`, `fail`, `changes`), then what runs now (`builder runs · 4 m`), its round, who sent it back, its time and its cost;
 - **NEEDS YOU**: the jobs that wait for a person (a question, or a pull request to merge), and the items the tracker says are in progress that have no job on this machine (a lost state folder, or another machine runs them);
@@ -188,6 +188,25 @@ To see the section with no run, copy the three sample jobs into the state folder
 mkdir -p "<the folder /factory where printed>/jobs"
 cp -R docs/examples/factory-jobs/* "<the folder /factory where printed>/jobs/"
 ```
+
+### The models
+
+Each station's agent has a model. The defaults: Intake has the strongest one, because it decides whether an item is safe to take; Spec, Build, Review and Approve have the strong one.
+
+| Role | Default | Model |
+| --- | --- | --- |
+| `intake` | `strongest` | `opus` |
+| `spec`, `builder`, `reviewer`, `approver` | `strong` | `sonnet` |
+
+`factory.models` in the settings file changes a role. Give a tier (`strongest` is `opus`, `strong` is `sonnet`, `fast` is `haiku`), or name the model: `opus`, `sonnet`, `haiku`, a full model id that starts with `claude-`, or `inherit` (the model of your session). A role you leave out keeps its default.
+
+```json
+"factory": { "models": { "builder": "opus", "reviewer": "fast" } }
+```
+
+- The agents get their models when a session starts. After a change, start a new session. The pane shows the models that this session's agents use.
+- A model that Claude Code does not know cannot be registered: `/factory run` then says that the agent types are not registered.
+- A stronger model costs more. Put its price in `factory.prices` under its model id, or the pane says `cost unknown`.
 
 ### The gate
 
@@ -267,7 +286,7 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 | `checks` | `run` with `want`: ok when the output equals `want`. `run` alone: ok on exit 0. `minFreeGb`: ok when the disk has that much free. At most 20. |
 | `ports` | a name and a port on this machine. At most 20. |
 | `owed` | a markdown file; its open checkboxes are counted. |
-| `factory` | how the line runs: `slots` (2), `maxRounds` (3), `maxRisk` (`low`), `costLimitUsd` and `timeLimitMin` (`{ job, day }`), `minFreeDiskGb` (15), `stationTimeoutMin` (30), `prices`, `protectedPaths`, `forbiddenCommands`, `forbiddenCommentWords`, `models` (a tier for each role: `strongest`, `strong`, `fast`), `reviewers`. One refused value refuses the whole `factory` key. |
+| `factory` | how the line runs: `slots` (2), `maxRounds` (3), `maxRisk` (`low`), `costLimitUsd` and `timeLimitMin` (`{ job, day }`), `minFreeDiskGb` (15), `stationTimeoutMin` (30), `prices`, `protectedPaths`, `forbiddenCommands`, `forbiddenCommentWords`, `models` (for each role `intake`, `spec`, `builder`, `reviewer`, `approver`: a tier, `strongest`, `strong` or `fast`, or the model itself, `opus`, `sonnet`, `haiku`, a full model id that starts with `claude-`, or `inherit` for the session's own model; see "The models"), `reviewers`. One refused value refuses the whole `factory` key. |
 | `factory.container` | where the builder's and the gate's commands run: `{ "image", "network": "on" or "none", "memory": "4g", "cpus": 2 }`, or `false` for this machine. Read from the base branch. See "The container". The factory will not run without it. |
 
 ## What it can reach

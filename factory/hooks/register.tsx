@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import { rejectedOf, resultOf } from '../adapters/mcp-tracker'
-import { AGENT_TYPES, SHELL_TOOL, agentSpecs } from '../core/agents'
+import { AGENT_TYPES, SHELL_TOOL, agentSpecs, modelsOf } from '../core/agents'
 import { briefOf } from '../core/brief'
 import { safePath } from '../core/checks'
 import { rowsOf } from '../core/layout'
@@ -22,6 +22,7 @@ import { whereText } from './jobs'
 import { advance, watch } from './line'
 import { startPlan, startRun } from './start'
 import { loadSettings } from './readers/settings'
+import { sessionModels } from './readers/factory'
 import { approve, refresh, refreshAgents, refreshJobs } from './refresh'
 import { PANE, TITLE } from './state'
 
@@ -238,6 +239,7 @@ export const register: Register = (on, options) => {
         $.ui.log(`factory: the agent type ${spec.name} could not be registered`)
       })
     }
+    if (hasAgentTypes) sessionModels.set(ready, modelsOf(settings.factory))
 
     // The builder's shell (design 8.3): a tool of the plugin. Its hook below
     // runs each command inside the job's container.

@@ -1,8 +1,8 @@
 // The factory line for the pane: the jobs on disk and the size of the queue.
 // It runs `gh` or `az` (or calls the tracker's approved MCP tools) and reads the state folder: no command from the settings file.
 // A place that the settings file names is asked only when approved (`adaptersOf`).
-import { MODEL_OF } from '../../core/agents'
-import type { FactorySettings } from '../../core/factory-settings'
+import { modelsOf } from '../../core/agents'
+import type { FactorySettings, Role } from '../../core/factory-settings'
 import { isActive, isWaiting } from '../../core/job'
 import type { Job } from '../../core/job'
 import { todayOf } from '../../core/limits'
@@ -105,7 +105,7 @@ export function viewOf(
     isStopped: line.isStopped,
     claimed,
     plan,
-    models: { intake: MODEL_OF[f.models.intake], spec: MODEL_OF[f.models.spec], builder: MODEL_OF[f.models.builder], reviewer: MODEL_OF[f.models.reviewer], approver: MODEL_OF[f.models.approver] },
+    models: modelsOf(f),
   }
 }
 
@@ -132,7 +132,11 @@ export const factoryReader: Reader = {
         if (listed.items === null && chosen.kind === 'mcp') note ??= listed.note ?? null
       }
     }
-    return { factory: viewOf(jobs, ctx.settings.factory, queue, note, ctx.now, { ...(await lineOf(io, ctx.root, ctx.now)), claimed }) }
+    const view = viewOf(jobs, ctx.settings.factory, queue, note, ctx.now, { ...(await lineOf(io, ctx.root, ctx.now)), claimed })
+    // The agents of this session have the models they were registered with at its start.
+    const models = sessionModels.get(io)
+
+    return { factory: view === null || models === undefined ? view : { ...view, models } }
   },
 }
 
@@ -148,5 +152,12 @@ export async function lineOf(io: Io, root: string, now: number): Promise<Omit<Li
 // left them (`last`). Pure, so that it can be applied to the model as it is
 // at the moment of the write.
 export function jobsView(read: Jobs, f: FactorySettings, last: FactoryView, line: Omit<LineInfo, 'claimed'>, now: number): FactoryView | null {
-  return viewOf(read.jobs, f, last.queue, read.note ?? last.note, now, { ...line, claimed: last.claimed })
+  const view = viewOf(read.jobs, f, last.queue, read.note ?? last.note, now, { ...line, claimed: last.claimed })
+
+  return view === null ? null : { ...view, models: last.models ?? view.models }
 }
+
+// The models the agent types of a session were registered with (at its start):
+// a change of `factory.models` in the settings file takes effect in a new session,
+// and the pane shows what the agents really use.
+export const sessionModels = new WeakMap<Io, Record<Role, string>>()

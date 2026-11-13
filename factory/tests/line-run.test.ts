@@ -13,6 +13,7 @@ import { dropFact } from '../hooks/inbox'
 import { answerJob, rejectJob, trackerCheck } from '../hooks/commands'
 import { isStopped, lockInfo, readJobs, setStop, takeLock, writeJob } from '../hooks/jobs'
 import { advance, watch } from '../hooks/line'
+import { sessionModels } from '../hooks/readers/factory'
 import { refresh, refreshJobs } from '../hooks/refresh'
 import { readRun, writeRun } from '../hooks/run'
 import { startPlan, startRun } from '../hooks/start'
@@ -1074,8 +1075,11 @@ test('the job rows ask the tracker once for a new set of jobs, and never in a lo
 test('the panel knows the model of each station, from the settings', async () => {
   const w = lineWorld({ jobs: [at('12', ['spec'])] })
   expect((await refresh(w.io)).factory?.models).toEqual({ intake: 'opus', spec: 'sonnet', builder: 'sonnet', reviewer: 'sonnet', approver: 'sonnet' })
-  const other = lineWorld({ jobs: [at('12', ['spec'])], settings: { factory: { models: { intake: 'strong', builder: 'fast' } } } })
-  expect((await refresh(other.io)).factory?.models).toEqual({ intake: 'sonnet', spec: 'sonnet', builder: 'haiku', reviewer: 'sonnet', approver: 'sonnet' })
+  const other = lineWorld({ jobs: [at('12', ['spec'])], settings: { factory: { models: { intake: 'strong', builder: 'fast', reviewer: 'claude-example-1-2' } } } })
+  expect((await refresh(other.io)).factory?.models).toEqual({ intake: 'sonnet', spec: 'sonnet', builder: 'haiku', reviewer: 'claude-example-1-2', approver: 'sonnet' })
+  // The agent types take their models when the session starts. The pane shows those, not what the file says since.
+  sessionModels.set(other.io, { intake: 'opus', spec: 'sonnet', builder: 'sonnet', reviewer: 'sonnet', approver: 'sonnet' })
+  expect((await refresh(other.io)).factory?.models?.builder).toBe('sonnet')
 })
 
 test('with the pane not on screen the job rows are not read', async () => {

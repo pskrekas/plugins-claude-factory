@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { HOST_BUILDER, PROMPTS } from '../agents/prompts'
-import { MODEL_OF, OUT_FILE, SHELL_TOOL, agentSpecs, briefOf, isFocus, toolsOf, typeOf } from '../core/agents'
+import { MODEL_OF, OUT_FILE, SHELL_TOOL, agentSpecs, briefOf, isFocus, toolsOf, typeOf, modelOf, modelsOf } from '../core/agents'
 import { FACTORY_DEFAULTS as F, ROLES } from '../core/factory-settings'
 
 const READ_ONLY = ['Read', 'Glob', 'Grep', 'Write']
@@ -27,6 +27,12 @@ test('a tier becomes a model in one place', async () => {
   const model = (role: string, f = F) => agentSpecs(f).find(spec => spec.name === role)?.model
   expect([model('intake'), model('builder'), model('reviewer')]).toEqual(['opus', 'sonnet', 'sonnet'])
   expect(model('intake', { ...F, models: { ...F.models, intake: 'fast' } })).toBe('haiku')
+  // A role may also name its model: an alias, or a full id. A name that is no tier is the model itself.
+  expect(model('builder', { ...F, models: { ...F.models, builder: 'opus' } })).toBe('opus')
+  expect(model('reviewer', { ...F, models: { ...F.models, reviewer: 'claude-example-1-2' } })).toBe('claude-example-1-2')
+  expect(modelOf('strongest')).toBe('opus')
+  expect(modelOf('constructor')).toBe('constructor')
+  expect(modelsOf(F)).toEqual({ intake: 'opus', spec: 'sonnet', builder: 'sonnet', reviewer: 'sonnet', approver: 'sonnet' })
 })
 
 const WORDS: Record<string, string[]> = {

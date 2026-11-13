@@ -89,11 +89,15 @@ const countTone = (count: number, station: number): Tone =>
 type Models = NonNullable<FactoryView['models']>
 // Where each station's name starts in LINE: Intake, Spec, Build, Gate, Review, Approve.
 const NAME_AT = [10, 20, 28, 37, 45, 55]
+// How many characters a model's name may take under its station, so that it ends before the next name starts.
+const NAME_ROOM = [8, 6, 7, 6, 8, 8]
+// A full model id is shown without its `claude-` start.
+const shortModel = (model: string) => clean(model).replace(/^claude-/, '')
 // The model of each station under its name. The gate is the plugin's code.
 function modelsWide(models: Models): string {
   const words = [models.intake, models.spec, models.builder, 'code', models.reviewer, models.approver]
 
-  return words.reduce((line, word, i) => line.padEnd(NAME_AT[i] ?? line.length + 1) + clean(word).slice(0, 7), '').trimEnd()
+  return words.reduce((line, word, i) => line.padEnd(NAME_AT[i] ?? line.length + 1) + shortModel(word).slice(0, NAME_ROOM[i] ?? 6), '').trimEnd()
 }
 // The short form: each model once, with the first letters of its stations.
 function modelsShort(models: Models): string {
@@ -102,7 +106,7 @@ function modelsShort(models: Models): string {
     by.set(model, [...(by.get(model) ?? []), letter])
   }
 
-  return [...by].map(([model, letters]) => `${clean(model).slice(0, 7)} ${letters.join(' ')}`).join(' · ')
+  return [...by].map(([model, letters]) => `${shortModel(model).slice(0, 16)} ${letters.join(' ')}`).join(' · ')
 }
 
 export function lineRows(view: FactoryView, columns: number): Row[] {

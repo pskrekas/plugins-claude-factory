@@ -52,6 +52,10 @@ test('the wide line: stations, counts under them, the loops', async () => {
   expect(rows[2]?.cells?.at(-1)).toEqual({ text: '       2', tone: 'bad' })
   // PROJ-13 is back at Build from the gate: the gate's loop is lit, the reviewers' is not.
   expect(rows.slice(3).map(row => row.tone)).toEqual(['warn', 'warn', 'dim'])
+  // A full model id is shown without its `claude-` start, cut so that it stays under its station.
+  const long = { ...VIEW, models: { ...VIEW.models!, intake: 'claude-example-1-2', reviewer: 'inherit' } }
+  expect(textOf(lineRows(long, 80)[1]!)).toBe('          example-  sonnet  sonnet   code    inherit   sonnet')
+  expect(textOf(lineRows(long, 40)[1]!)).toBe('example-1-2 I · sonnet S B A · inherit R')
   // A view from before this row existed (no `models`) draws the line without it.
   const { models: _, ...old } = VIEW
   expect(lineRows(old as typeof VIEW, 80).length).toBe(5)
