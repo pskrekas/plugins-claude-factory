@@ -41,8 +41,10 @@ export type McpTracker = {
 type Parsed<T> = { ok: T } | { no: string }
 
 const STATES: readonly TrackerState[] = ['in-progress', 'needs-human', 'done', 'rejected']
-const NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$/
+// No space or separator at the end: `factory ` must not be a name of its own.
+const NAME = /^[A-Za-z0-9](?:[A-Za-z0-9 ._-]{0,98}[A-Za-z0-9])?$/
 const FIELD = /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+){0,5}$/
+const UNSAFE_PART = ['__proto__', 'constructor', 'prototype']
 const PLACEHOLDER = /\{[a-z]+\}/g
 const MAX_ARGS = 1000
 const MAX_DEPTH = 4
@@ -80,8 +82,10 @@ const isErr = <T>(r: Parsed<T>): r is { no: string } => 'no' in r
 // Why `name` is no server, or null.
 function serverProblem(name: string): string | null {
   // The plugin's own tools are reachable as a server too: the settings must never reach them.
-  const flat = name.toLowerCase().replace(/[\s_.:-]+/g, ':')
-  if (flat === 'factory' || flat.startsWith('plugin:factory')) return 'is the plugin itself'
+  // Letters and digits only, lower case: `Factory.`, `f.a.c.t.o.r.y` and `plugin:factory:x` all strip to the
+  // plugin's own name. `factory-tasks` strips to `factorytasks`, which is not `factory`, so it is allowed.
+  const flat = name.toLowerCase().replace(/[^a-z0-9]/g, '')
+  if (flat === 'factory' || flat.startsWith('pluginfactory')) return 'is the plugin itself'
 
   return null
 }
@@ -94,6 +98,7 @@ function nameOf(path: string, v: unknown): Parsed<string> {
 
 function fieldOf(path: string, v: unknown): Parsed<string> {
   if (typeof v !== 'string' || !FIELD.test(v)) return no(path, 'needs a field name of 1 to 6 parts of letters, digits and _, joined by dots')
+  if (v.split('.').some(part => UNSAFE_PART.includes(part))) return no(path, 'a part of a field name is not allowed')
 
   return { ok: v }
 }
@@ -366,7 +371,7 @@ const pairs = (fields: [string, string | null][]): string =>
 
 // Every call of the tracker as one line a person approves: the whole call in a fixed form, so any change
 // (the server, a tool, an argument, a field name, `optional`, the `url`) is another line.
-export function mcpLines(spec: McpTracker): string[] {
+export function mcpLines(spec: McpTracker, mark: string): string[] {
   const head = `[tracker] mcp ${spec.server} · `
   const call = (label: string, c: McpCall, fields: [string, string | null][] = []): string => {
     const more = pairs(fields)
@@ -397,6 +402,8 @@ export function mcpLines(spec: McpTracker): string[] {
   if (spec.linkPr) lines.push(call('linkPr', spec.linkPr))
   if (spec.me) lines.push(call('me', spec.me, [['name', spec.me.name]]))
   if (spec.url !== null) lines.push(`${head}url: ${spec.url}`)
+  // The mark is put into the approved calls, so a change of it must be a line to approve too.
+  lines.push(`${head}mark: ${mark}`)
 
   return lines
 }

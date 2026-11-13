@@ -244,6 +244,8 @@ that is not approved:
 [tracker] mcp tasks · url: https://tracker.example.com/tasks/{id}
 ```
 
+The mark has its own line, `[tracker] mcp tasks · mark: factory`, because the mark is put into the approved calls.
+
 - The JSON in a line is compact, with sorted keys. The exact form is the builder's.
 - No call of the adapter runs while one of its lines is not approved: not a write,
   not a read, not the panel's queue. (`adaptersOf` gives no tracker, with the reason

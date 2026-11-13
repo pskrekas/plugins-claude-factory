@@ -373,7 +373,7 @@ export function commandsOf(settings: Settings): string[] {
 
   const container = containerLine(settings.factory.container)
   const place = trackerLine(settings.tracker)
-  const calls = settings.tracker?.mcp ? mcpLines(settings.tracker.mcp) : []
+  const calls = settings.tracker?.mcp ? mcpLines(settings.tracker.mcp, settings.tracker.mark) : []
 
   return [...[...checks].sort(), ...[...gate].sort(), ...(container === null ? [] : [container]), ...(place === null ? [] : [place]), ...calls]
 }

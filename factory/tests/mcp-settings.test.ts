@@ -4,38 +4,7 @@ import { mcpLines, parseMcpTracker } from '../core/mcp-tracker'
 import type { McpTracker } from '../core/mcp-tracker'
 import { CONTROL_CHAR } from '../core/rules'
 
-const rows = { rows: 'tasks', id: 'id', title: 'title', state: 'state' }
-const step = (name: string, extra: Record<string, unknown> = {}) => ({ tool: 'set_step', args: { task_id: '{id}', step: name }, ...extra })
-
-const GOOD = {
-  kind: 'mcp',
-  mark: 'factory',
-  server: 'tasks',
-  url: 'https://tracker.example.com/tasks/{id}',
-  list: { tool: 'find_tasks', args: { label: '{mark}', states: ['open'] }, ...rows },
-  claimed: { tool: 'find_tasks', args: { label: '{mark}', states: ['doing'] }, ...rows },
-  read: {
-    tool: 'get_task',
-    args: { task_id: '{id}' },
-    title: 'title',
-    text: 'description',
-    author: 'made_by',
-    state: 'state',
-    labels: 'labels',
-    comments: 'comments',
-    commentAuthor: 'by',
-    commentText: 'text',
-  },
-  comment: { tool: 'add_comment', args: { task_id: '{id}', text: '{text}' } },
-  states: {
-    'in-progress': [step('doing')],
-    'needs-human': [step('review', { optional: true })],
-    done: [step('done')],
-    rejected: [{ tool: 'cancel_task', args: { task_id: '{id}' } }],
-  },
-  linkPr: { tool: 'link_code', args: { task_id: '{id}', ref: '{url}' } },
-  me: { tool: 'who_am_i', args: {}, name: 'name' },
-}
+import { GOOD, step } from './mcp-good'
 
 const with_ = (change: Record<string, unknown>): Record<string, unknown> => ({ ...GOOD, ...change })
 const reason = (v: Record<string, unknown>): string => {
@@ -107,6 +76,17 @@ test('what is refused, each with a reason that names the key', async () => {
     [with_({ server: 'plugin:factory:x' }), 'server'],
     [with_({ server: 'PLUGIN:Factory' }), 'server'],
     [with_({ server: 'a\nb' }), 'server'],
+    [with_({ server: 'factory ' }), 'server'],
+    [with_({ server: 'Factory.' }), 'server'],
+    [with_({ server: 'factory-' }), 'server'],
+    [with_({ server: 'factory_' }), 'server'],
+    [with_({ server: 'FACTORY' }), 'server'],
+    [with_({ server: 'f.a.c.t.o.r.y' }), 'server'],
+    [with_({ server: 'Plugin_Factory' }), 'server'],
+    [with_({ list: { ...GOOD.list, tool: 'find_tasks ' } }), 'list.tool'],
+    [with_({ list: { ...GOOD.list, id: 'a.__proto__' } }), 'list.id'],
+    [with_({ list: { ...GOOD.list, id: 'constructor' } }), 'list.id'],
+    [with_({ read: { ...GOOD.read, text: 'a.prototype.b' } }), 'read.text'],
     [with_({ server: 'a'.repeat(101) }), 'server'],
     [with_({ server: '-a' }), 'server'],
     [with_({ list: { ...GOOD.list, tool: 'a\u0007b' } }), 'list.tool'],
@@ -177,18 +157,19 @@ test('placeholders where they may stand', async () => {
 
 test('the lines: one for each call, whole, in a fixed form', async () => {
   const ok = good()
-  const lines = mcpLines(ok)
+  const lines = mcpLines(ok, 'factory')
   expect(lines).toContain('[tracker] mcp tasks · list: find_tasks {"label":"{mark}","states":["open"]} → rows=tasks id=id title=title state=state')
   expect(lines).toContain('[tracker] mcp tasks · state in-progress 1/1: set_step {"step":"doing","task_id":"{id}"}')
   expect(lines).toContain('[tracker] mcp tasks · state needs-human 1/1 (optional): set_step {"step":"review","task_id":"{id}"}')
   expect(lines).toContain('[tracker] mcp tasks · url: https://tracker.example.com/tasks/{id}')
   expect(lines).toContain('[tracker] mcp tasks · me: who_am_i {} → name=name')
-  expect(lines.length).toBe(11)
-  expect(new Set(lines).size).toBe(11)
+  expect(lines.length).toBe(12)
+  expect(new Set(lines).size).toBe(12)
+  expect(lines).toContain('[tracker] mcp tasks · mark: factory')
   expect(lines.every(line => !CONTROL_CHAR.test(line))).toBe(true)
 
   // A key's order is not a change; every other change gives another line.
-  expect(mcpLines({ ...ok, list: { ...ok.list, args: { states: ['open'], label: '{mark}' } } })).toEqual(lines)
+  expect(mcpLines({ ...ok, list: { ...ok.list, args: { states: ['open'], label: '{mark}' } } }, 'factory')).toEqual(lines)
   const other = [
     { ...ok, list: { ...ok.list, id: 'key' } },
     { ...ok, list: { ...ok.list, tool: 'other' } },
@@ -198,7 +179,9 @@ test('the lines: one for each call, whole, in a fixed form', async () => {
     { ...ok, read: { ...ok.read, text: 'body' } },
     { ...ok, states: { as: 'calls' as const, steps: { ...(ok.states as { steps: object }).steps, 'needs-human': [{ tool: 'set_step', args: { task_id: '{id}', step: 'review' }, optional: false }] } } },
   ]
-  for (const changed of other) expect(mcpLines(changed as McpTracker)).not.toEqual(lines)
+  expect(mcpLines(ok, 'factory OR labels is not EMPTY')).not.toEqual(lines)
+  expect(mcpLines(ok, 'other').filter(l => !lines.includes(l))).toEqual(['[tracker] mcp tasks · mark: other'])
+  for (const changed of other) expect(mcpLines(changed as McpTracker, 'factory')).not.toEqual(lines)
 })
 
 test('the lines of the other forms', async () => {
@@ -206,24 +189,28 @@ test('the lines of the other forms', async () => {
   const names = { 'in-progress': 'f-doing', 'needs-human': 'f-help', done: 'f-done', rejected: 'f-no' }
   const plain = (parseMcpTracker(with_({ states: { labels } })) as { ok: McpTracker }).ok
   const named = (parseMcpTracker(with_({ states: { labels: { ...labels, names } } })) as { ok: McpTracker }).ok
-  expect(mcpLines(plain)).toContain('[tracker] mcp tasks · states as labels: edit_item {"fields":{"labels":"{labels}"},"key":"{id}"}')
-  expect(mcpLines(named)).toContain('[tracker] mcp tasks · states as labels: edit_item {"fields":{"labels":"{labels}"},"key":"{id}"} → in-progress=f-doing needs-human=f-help done=f-done rejected=f-no')
-  expect(mcpLines(plain).length).toBe(8)
+  expect(mcpLines(plain, 'factory')).toContain('[tracker] mcp tasks · states as labels: edit_item {"fields":{"labels":"{labels}"},"key":"{id}"}')
+  expect(mcpLines(named, 'factory')).toContain('[tracker] mcp tasks · states as labels: edit_item {"fields":{"labels":"{labels}"},"key":"{id}"} → in-progress=f-doing needs-human=f-help done=f-done rejected=f-no')
+  expect(mcpLines(plain, 'factory').length).toBe(9)
 
   const second = (parseMcpTracker(with_({ comments: { tool: 'c', args: { id: '{id}' }, rows: 'items', author: 'by', text: 'body' } })) as { ok: McpTracker }).ok
-  expect(mcpLines(second)).toContain('[tracker] mcp tasks · comments: c {"id":"{id}"} → rows=items author=by text=body')
+  expect(mcpLines(second, 'factory')).toContain('[tracker] mcp tasks · comments: c {"id":"{id}"} → rows=items author=by text=body')
 
   const steps = { 'in-progress': [step('a'), step('b')] }
   const two = (parseMcpTracker(with_({ states: steps })) as { ok: McpTracker }).ok
-  expect(mcpLines(two).filter(l => l.includes('state in-progress'))).toEqual([
+  expect(mcpLines(two, 'factory').filter(l => l.includes('state in-progress'))).toEqual([
     '[tracker] mcp tasks · state in-progress 1/2: set_step {"step":"a","task_id":"{id}"}',
     '[tracker] mcp tasks · state in-progress 2/2: set_step {"step":"b","task_id":"{id}"}',
   ])
 })
 
 test('a character that hides in a line is shown as an escape', async () => {
-  const hidden = (parseMcpTracker(with_({ comment: { tool: 'add', args: { text: '{text}', note: 'a‮b c' } } })) as { ok: McpTracker }).ok
-  const line = mcpLines(hidden).find(l => l.includes('· comment:')) ?? ''
+  const hidden = (parseMcpTracker(with_({ comment: { tool: 'add', args: { text: '{text}', note: 'a\u202eb\u2028c' } } })) as { ok: McpTracker }).ok
+  const line = mcpLines(hidden, 'factory').find(l => l.includes('· comment:')) ?? ''
   expect(line).toContain('a\\u202eb\\u2028c')
   expect(/[^\x20-\x7e]/.test(line.replace('·', ''))).toBe(false)
+})
+
+test('a server that is close to the plugin itself is refused, a different one is not', async () => {
+  for (const server of ['tasks', 'factory-tasks']) expect('ok' in parseMcpTracker(with_({ server }))).toBe(true)
 })

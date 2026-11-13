@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { FACTORY_DEFAULTS, containerLine } from '../core/factory-settings'
+import { GOOD } from './mcp-good'
 import { DEFAULTS, commandsOf, parseSettings, trackerLine } from '../core/settings'
 
 test('no factory key gives the defaults', async () => {
@@ -161,26 +162,20 @@ test('a tracker place that the settings name, and not the remote, is a line to a
 })
 
 test('an mcp tracker: its calls are lines to approve, after the gate lines', async () => {
-  const mcp = {
-    kind: 'mcp',
-    server: 'tasks',
-    url: 'https://tracker.example.com/tasks/{id}',
-    list: { tool: 'find_tasks', args: { label: '{mark}' }, rows: 'tasks', id: 'id', title: 'title' },
-    read: { tool: 'get_task', args: { task_id: '{id}' }, title: 'title', text: 'description' },
-    comment: { tool: 'add_comment', args: { task_id: '{id}', text: '{text}' } },
-    states: { done: [{ tool: 'set_step', args: { task_id: '{id}', step: 'done' } }] },
-  }
-  const { settings, error } = parseSettings(JSON.stringify({ tracker: mcp, gate: { fast: [['npm', 'test']] } }))
+  const { settings, error } = parseSettings(JSON.stringify({ tracker: GOOD, gate: { fast: [['npm', 'test']] } }))
   expect(error).toBe(null)
   expect(settings.tracker?.kind).toBe('mcp')
   expect(settings.tracker?.mcp?.server).toBe('tasks')
   const lines = commandsOf(settings)
   expect(lines[0]).toBe('[gate] npm test')
-  expect(lines.length).toBe(6)
+  expect(lines.length).toBe(13)
   expect(lines.slice(1).every(line => line.startsWith('[tracker] mcp tasks · '))).toBe(true)
+  expect(lines).toContain('[tracker] mcp tasks · mark: factory')
   expect(trackerLine(settings.tracker)).toBe(null)
+  const marked = parseSettings(JSON.stringify({ tracker: { ...GOOD, mark: 'factory OR x' } })).settings
+  expect(commandsOf(marked)).not.toEqual(commandsOf(parseSettings(JSON.stringify({ tracker: GOOD })).settings))
 
-  const bad = parseSettings(JSON.stringify({ tracker: { ...mcp, server: 'factory' } }))
+  const bad = parseSettings(JSON.stringify({ tracker: { ...GOOD, server: 'factory' } }))
   expect(bad.settings.tracker).toBe(null)
   expect(bad.error).toBe('tracker: server: is the plugin itself')
   expect(parseSettings('{"tracker": {"kind": "github"}}').settings.tracker?.mcp).toBe(null)
