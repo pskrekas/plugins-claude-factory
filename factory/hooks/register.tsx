@@ -15,7 +15,7 @@ import { stateBaseOf } from '../core/state-path'
 import { ancestorsOf, confirmedTop } from '../core/top'
 import { checkedSpawn, isOwnReport, onFileCall, onShell, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
 import type { Io } from './io'
-import { answerJob, rejectJob, stopLine } from './commands'
+import { answerJob, rejectJob, stopLine, trackerCheck } from './commands'
 import { init } from './init'
 import type { Spawn } from './agent-events'
 import { whereText } from './jobs'
@@ -36,6 +36,7 @@ const REFRESH_MS = 60_000
 // The timer that keeps the line's lock alive and sees an agent that is gone. It starts no agent.
 const WATCH_MS = 15_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
+const word0 = (arg: string): string => arg.split(/\s+/)[0] ?? ''
 const GIT_TOP_MS = 5_000
 const ONLY_A_PERSON_CAN = 'Only a person can do this. Type the command at the prompt.'
 const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
@@ -396,6 +397,12 @@ export const register: Register = (on, options) => {
     if (arg === 'init') return { text: await init(io) }
     if (arg === 'where') return { text: await whereText(io, await io.root()) }
 
+    if (word0(arg) === 'tracker') {
+      const [, given = ''] = arg.split(/\s+/)
+
+      return { text: await trackerCheck(io, given === '' ? null : given) }
+    }
+
     // The commands that change the line or a job: the person's own act, like approve.
     const [word = '', id = ''] = arg.split(/\s+/)
     if (word === 'stop' || word === 'answer' || word === 'reject' || word === 'run' || word === 'plan') {
@@ -416,7 +423,7 @@ export const register: Register = (on, options) => {
     }
 
     return {
-      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory plan, /factory run [id], /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
+      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory tracker [id], /factory plan, /factory run [id], /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
     }
   })
 

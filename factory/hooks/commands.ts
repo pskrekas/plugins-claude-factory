@@ -6,6 +6,7 @@ import type { FactorySettings } from '../core/factory-settings'
 import { grant, isFinished, move, reject, resume } from '../core/job'
 import type { Job } from '../core/job'
 import { limitOf } from '../core/limits'
+import { isItemId } from '../core/mcp-tracker'
 import { clean } from '../core/rows'
 import type { Spawn } from './agent-events'
 import { context } from './context'
@@ -264,4 +265,52 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
       (left.length === 0 ? '' : ` Not cleaned up: ${left.join('; ')}.`)
     )
   })
+}
+
+// /factory tracker [id]: reads the tracker and says what the mapping understood.
+// The answer goes to the session's model, so it holds no text of the tracker:
+// only counts, lengths, fixed words, ids that pass the id rule, and a failure reason.
+const TRACKER_ANSWER_MAX = 1_200
+const attempt = async <T>(work: () => Promise<T>): Promise<T | null> => work().catch(() => null)
+
+export async function trackerCheck(io: Io, id: string | null): Promise<string> {
+  const ctx = await context(io)
+  const tracker = ctx.tracker
+  if (tracker === null) return clean(ctx.trackerNote ?? 'No tracker in the settings.')
+  if (id !== null && !isItemId(id)) return 'Not an id.'
+  const lines: string[] = [`Tracker: ${tracker.kind}`]
+  const listed = await attempt(() => tracker.scan())
+  if (listed === null) lines.push('Queue: not read (the tracker could not be read).')
+  else if (listed.items === null) lines.push(`Queue: not read (${clean(scanFailure(tracker.kind, listed)).slice(0, 200)})`)
+  else if (listed.items.length === 0 && id === null) lines.push('Queue: 0 items. Nothing to read. Is the mark right?')
+  else {
+    const shown = listed.items.slice(0, 3).map(item => item.id).filter(isItemId)
+    lines.push(`Queue: ${listed.items.length} item${listed.items.length === 1 ? '' : 's'}${shown.length > 0 ? ` (${shown.join(', ')})` : ''}. Claimed: ${listed.claimed.length}.`)
+  }
+  const me = await attempt(() => tracker.me())
+  lines.push(me === null || me === '' ? 'Me: not known.' : 'Me: read.')
+  if (id !== null) {
+    const item = await attempt(() => tracker.read(id, true))
+    if (item === null) lines.push(`${id}: not read.`)
+    else {
+      const has = await attempt(() => tracker.hasMark(id))
+      const found = (value: string, word: string) => (value === '' ? `${word} not there` : `${word} found`)
+      lines.push(
+        `${id}: ${[
+          item.title === '' ? 'title not there' : `title found (${item.title.length} characters)`,
+          item.text === '' ? 'text not there' : `text found (${item.text.length} characters)`,
+          found(item.author, 'author'),
+          found(item.state, 'state'),
+          found(item.url, 'address'),
+        ].join(' · ')}`,
+      )
+      // The comments an agent would read: the item's author's and the runner's.
+      const trusted = [item.author, me].filter((name): name is string => typeof name === 'string' && name !== '')
+      const own = item.comments.filter(comment => trusted.includes(comment.author)).length
+      const mark = has === null ? 'not known' : has ? 'yes' : 'no'
+      lines.push(`${id}: carries the mark: ${mark} · ${item.comments.length} comment${item.comments.length === 1 ? '' : 's'} (${own} of the author or the runner)`)
+    }
+  }
+
+  return lines.map(line => clean(line)).join('\n').slice(0, TRACKER_ANSWER_MAX)
 }
