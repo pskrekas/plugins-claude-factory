@@ -24,11 +24,12 @@ export type Run = (argv: string[], stdin?: string) => Promise<RunResult>
 export type Listed = Pick<TrackerItem, 'id' | 'title' | 'state'>
 
 export interface Tracker {
-  kind: 'github' | 'azure-boards'
+  kind: 'github' | 'azure-boards' | 'mcp'
   // The queue (`items`: marked, open, not taken by the line) and the items
   // the tracker says are in progress (`claimed`). `items` is null when the
   // list could not be read; `result` is the command's result, for a note.
-  scan(): Promise<{ items: Listed[] | null; claimed: Listed[]; result: RunResult | null }>
+  // `note` is the adapter's own reason, for a tracker that runs no command.
+  scan(): Promise<{ items: Listed[] | null; claimed: Listed[]; result: RunResult | null; note?: string | null }>
   // The queue; empty when it could not be read.
   list(mark: string): Promise<Listed[]>
   // True when the item carries the mark. Only a marked item runs.
@@ -40,4 +41,8 @@ export interface Tracker {
   comment(id: string, markdown: string): Promise<void>
   setState(id: string, state: TrackerState): Promise<void>
   linkPr(id: string, url: string): Promise<void>
+  // The reason of the adapter's last reading call that failed, or null. Fixed
+  // words or a tool's own error line, cut: never text of an item. Only a
+  // tracker that runs no command gives one (as `scan().note`).
+  why?: () => string | null
 }

@@ -10,13 +10,17 @@ import type { Job, Stage } from '../core/job'
 import { stateFolderOf } from '../core/state-path'
 import type { Spawn } from '../hooks/agent-events'
 import { dropFact } from '../hooks/inbox'
-import { answerJob, rejectJob } from '../hooks/commands'
+import { answerJob, rejectJob, trackerCheck } from '../hooks/commands'
 import { isStopped, lockInfo, readJobs, setStop, takeLock } from '../hooks/jobs'
 import { advance, watch } from '../hooks/line'
 import { refresh } from '../hooks/refresh'
 import { readRun, writeRun } from '../hooks/run'
 import { startPlan, startRun } from '../hooks/start'
+import { NO_SERVER } from '../adapters/mcp-tracker'
+import { mcpLines, parseMcpTracker } from '../core/mcp-tracker'
+import type { McpTracker } from '../core/mcp-tracker'
 import { fakeIo } from './kit'
+import { GOOD } from './mcp-good'
 
 const NOW = 1_700_000_000_000
 const DIR = '/state/' + stateFolderOf('/r/.git')
@@ -615,7 +619,7 @@ const READY = { hasAgentTypes: true }
 
 test('/factory run: what it needs before it starts', async () => {
   const noTracker = lineWorld({ settings: { tracker: undefined } })
-  expect(await startRun(noTracker.io, noTracker.spawn, null, READY)).toBe('/factory run needs a tracker in the settings (github or azure-boards).')
+  expect(await startRun(noTracker.io, noTracker.spawn, null, READY)).toBe('/factory run needs a tracker in the settings (github, azure-boards or mcp).')
   const noGate = lineWorld()
   noGate.io.store.set(storeKey('/r/.git'), [])
   expect(await startRun(noGate.io, noGate.spawn, null, READY)).toBe('No gate, no factory: gate commands are not approved. Approve them with /factory approve.')
@@ -794,7 +798,7 @@ test('a risk above the limit is told in the plan; a second plan replaces the fir
 
 test('/factory plan needs a tracker and the agent types', async () => {
   const noTracker = lineWorld({ settings: { tracker: undefined } })
-  expect(await startPlan(noTracker.io, noTracker.spawn, READY)).toBe('/factory plan needs a tracker in the settings (github or azure-boards).')
+  expect(await startPlan(noTracker.io, noTracker.spawn, READY)).toBe('/factory plan needs a tracker in the settings (github, azure-boards or mcp).')
   const noTypes = lineWorld()
   expect(await startPlan(noTypes.io, noTypes.spawn, { hasAgentTypes: false })).toBe('The agent types of the line are not registered. Start a new session.')
 })
@@ -1046,7 +1050,11 @@ test('/factory run on Azure DevOps: what it needs', async () => {
   for (const settings of [{ tracker: { kind: 'azure-boards', project: 'acme/Shop' } }, { tracker: { kind: 'github', project: 'a/b' } }]) {
     const quiet = lineWorld({ remote: settings.tracker.kind === 'github' ? AZ.remote : undefined, settings })
     quiet.io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE])
-    expect(await startRun(quiet.io, quiet.spawn, null, READY)).toBe(`The tracker's place (${settings.tracker.project}) is named by the settings file, not by the remote. Approve it with /factory approve.`)
+    // A fixed sentence: the answer reaches the model, and the settings file is not approved yet.
+    const place = "The tracker's place is named by the settings file, not by the remote. Read its [tracker] line in the pane, then /factory approve."
+    expect(await startRun(quiet.io, quiet.spawn, null, READY)).toBe(place)
+    expect(await startPlan(quiet.io, quiet.spawn, READY)).toBe(place)
+    expect(await trackerCheck(quiet.io, null)).toBe(place)
     expect(quiet.io.ran.some(line => line.startsWith('az ') || line.startsWith('gh '))).toBe(false)
   }
   // Azure Boards with a remote that names no organization, and no project in the settings that does.
@@ -1065,4 +1073,141 @@ test('/factory run on Azure DevOps: what it needs', async () => {
   unmarked.state.azTags = 'bug'
   expect(await startRun(unmarked.io, unmarked.spawn, '12', READY)).toBe('12 does not carry the mark "factory". Only a marked item runs.')
   for (const w of [lost, nowhere, noAz, unmarked]) expect([w.started, await readRun(w.io, '/r'), (await lockInfo(w.io, '/r', NOW)).state]).toEqual([[], null, 'free'])
+})
+
+// A tracker behind an MCP server (the shared example): one task in the queue, none claimed.
+const MCP = { settings: { tracker: GOOD } }
+const MCP_LINES = mcpLines((parseMcpTracker(GOOD) as { ok: McpTracker }).ok, 'factory')
+const NOT_APPROVED = "The MCP tracker's calls are not approved. Read them in the pane, then /factory approve."
+function mcpWorld(opts: Parameters<typeof lineWorld>[0] = {}, approved = true) {
+  const w = lineWorld({ ...MCP, ...opts })
+  if (approved) w.io.store.set(storeKey('/r/.git'), [...((w.io.store.get(storeKey('/r/.git')) as string[]) ?? []), ...MCP_LINES])
+  const text = (v: unknown) => ({ content: [{ type: 'text', text: typeof v === 'string' ? v : JSON.stringify(v) }], isError: false })
+  w.io.mcpAnswer = (_, tool, args) => {
+    if (tool === 'find_tasks') return text({ tasks: JSON.stringify(args.states) === '["open"]' ? [{ id: 'PROJ-12', title: 'Item PROJ-12', state: 'Open' }] : [] })
+    if (tool === 'show_task') {
+      const comments = [{ by: 'Author', text: 'From the author' }, { by: 'Stranger', text: 'From a stranger' }, { by: 'Runner', text: 'From the runner' }]
+
+      return text({ title: `Item ${String(args.task_id)}`, description: 'Do it', made_by: 'Author', state: 'Open', labels: ['factory'], comments })
+    }
+    if (tool === 'who_am_i') return text({ name: 'Runner' })
+
+    return ['move_task', 'add_comment', 'attach_link', 'cancel_task'].includes(tool) ? text('Saved.') : undefined
+  }
+
+  return w
+}
+const mcpOf = (w: World) => w.io.mcpCalls.map(([server, tool, args]) => `${server} ${tool} ${JSON.stringify(args)}`)
+
+test('an MCP tracker is asked nothing while one of its lines is not approved', async () => {
+  const quiet = mcpWorld({}, false)
+  expect(await startRun(quiet.io, quiet.spawn, null, READY)).toBe(NOT_APPROVED)
+  expect(await startPlan(quiet.io, quiet.spawn, READY)).toBe(NOT_APPROVED)
+  expect((await refresh(quiet.io)).factory?.queue ?? null).toBe(null)
+  // One line short is not approved.
+  quiet.io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE, ...MCP_LINES.slice(0, -1)])
+  expect((await refresh(quiet.io)).factory?.queue ?? null).toBe(null)
+  expect(quiet.io.mcpCalls).toEqual([])
+  // Every line: the queue is read.
+  quiet.io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE, ...MCP_LINES])
+  expect((await refresh(quiet.io)).factory?.queue).toBe(1)
+  const asked = quiet.io.mcpCalls.length
+  expect(asked).toBe(2)
+  // The settings change one argument: that call is a new line, and nothing is asked.
+  const changed = { ...GOOD, list: { ...GOOD.list, args: { label: '{mark}', states: ['open', 'new'] } } }
+  quiet.io.files['/r/.claude/factory.json'] = JSON.stringify({ ...JSON.parse(quiet.io.files['/r/.claude/factory.json'] ?? '{}'), tracker: changed })
+  expect((await refresh(quiet.io)).factory?.queue ?? null).toBe(null)
+  expect(await startRun(quiet.io, quiet.spawn, null, READY)).toBe(NOT_APPROVED)
+  expect(quiet.io.mcpCalls.length).toBe(asked)
+  expect([quiet.started, await readRun(quiet.io, '/r')]).toEqual([[], null])
+})
+
+test('with an MCP tracker one item goes from the queue to a ready pull request', async () => {
+  const w = mcpWorld()
+  expect(await startRun(w.io, w.spawn, null, READY)).toBe('The line runs: 1 item in the queue, 0 jobs go on. /factory stop stops it.')
+  const id = (await jobOf(w, 'PROJ-12'))?.id ?? ''
+  // The item's file holds its text, and only the comments of its author and of the person who runs the line.
+  const itemFile = w.io.files[`${DIR}/jobs/${id}/files/item.md`] ?? ''
+  expect([itemFile.includes('> Do it'), itemFile.includes('From the author'), itemFile.includes('From the runner'), itemFile.includes('From a stranger')]).toEqual([true, true, true, false])
+  await ends(w, 'intake', 'ACCEPT risk=low surfaces=none')
+  await ends(w, 'spec', 'DONE')
+  w.state.isDirty = true
+  await ends(w, 'builder', 'DONE')
+  expect([(await jobOf(w, 'PROJ-12'))?.stage, (await jobOf(w, 'PROJ-12'))?.pr]).toEqual(['review', { number: 7, url: 'https://github.com/a/b/pull/7' }])
+  await ends(w, 'reviewer', 'OK', 'code')
+  w.state.heads = [SHA1]
+  w.state.head = SHA2
+  await ends(w, 'approver', 'READY')
+  const job = await jobOf(w, 'PROJ-12')
+  expect([job?.stage, job?.itemUrl]).toEqual(['ready', 'https://tracker.example.com/tasks/PROJ-12'])
+  expect(
+    inOrder(mcpOf(w), [
+      'tasks find_tasks {"label":"factory","states":["open"]}',
+      'tasks show_task {"task_id":"PROJ-12"}',
+      'tasks who_am_i {}',
+      'tasks move_task {"task_id":"PROJ-12","to":"started"}',
+      'tasks add_comment {"task_id":"PROJ-12","text":"The factory started on this."}',
+      'tasks attach_link {"task_id":"PROJ-12","ref":"https://github.com/a/b/pull/7"}',
+      'tasks move_task {"task_id":"PROJ-12","to":"waiting"}',
+      'tasks add_comment {"task_id":"PROJ-12","text":"The factory finished this.',
+    ]),
+  ).toBe('ok')
+  // Every call went to the one server; no gh issue and no az call ran.
+  expect(w.io.mcpCalls.every(([server]) => server === 'tasks')).toBe(true)
+  expect(w.io.ran.some(line => line.startsWith('gh issue') || line.startsWith('az '))).toBe(false)
+  expect(inOrder(lines(w), ['gh pr create'])).toBe('ok')
+
+  // The person merges: the job is done, and the item says so.
+  w.state.isMerged = true
+  w.io.time += 301_000
+  await watch(w.io)
+  expect((await jobOf(w, 'PROJ-12'))?.stage).toBe('done')
+  expect(mcpOf(w).at(-1)).toBe('tasks move_task {"task_id":"PROJ-12","to":"closed"}')
+})
+
+test('a tracker that the settings name and the parser refused: run and plan say so, with no text of the file', async () => {
+  const refused = "The tracker in the settings file was refused. The pane's settings line says why."
+  const w = lineWorld({ settings: { tracker: { kind: 'mcp', server: 'Zebrafish', list: { tool: 'Quokka' } } } })
+  expect(await startRun(w.io, w.spawn, null, READY)).toBe(refused)
+  expect(await startPlan(w.io, w.spawn, READY)).toBe(refused)
+  expect(await trackerCheck(w.io, 'PROJ-12')).toBe(refused)
+  expect([w.started, await readRun(w.io, '/r'), w.io.mcpCalls]).toEqual([[], null, []])
+})
+
+test('an id of 40 characters goes through the whole line, the same in every call', async () => {
+  const long = 'PROJ-' + '1'.repeat(35)
+  expect(long.length).toBe(40)
+  const w = mcpWorld()
+  const answer = w.io.mcpAnswer
+  w.io.mcpAnswer = (server, tool, args) =>
+    tool === 'find_tasks' && JSON.stringify(args.states) === '["open"]'
+      ? { content: [{ type: 'text', text: JSON.stringify({ tasks: [{ id: long, title: 'Long', state: 'Open' }] }) }], isError: false }
+      : answer?.(server, tool, args)
+  expect(await startRun(w.io, w.spawn, null, READY)).toBe('The line runs: 1 item in the queue, 0 jobs go on. /factory stop stops it.')
+  await ends(w, 'intake', 'ACCEPT risk=low surfaces=none')
+  await ends(w, 'spec', 'DONE')
+  w.state.isDirty = true
+  await ends(w, 'builder', 'DONE')
+  await ends(w, 'reviewer', 'OK', 'code')
+  w.state.heads = [SHA1]
+  w.state.head = SHA2
+  await ends(w, 'approver', 'READY')
+  w.state.isMerged = true
+  w.io.time += 301_000
+  await watch(w.io)
+  expect((await jobOf(w, long))?.stage).toBe('done')
+  const sent = w.io.mcpCalls.filter(([, , args]) => 'task_id' in args)
+  expect(new Set(sent.map(([, tool]) => tool))).toEqual(new Set(['show_task', 'move_task', 'add_comment', 'attach_link']))
+  expect(sent.every(([, , args]) => args.task_id === long)).toBe(true)
+})
+
+test('the panel says when the MCP server did not answer, and /factory run does not start', async () => {
+  const w = mcpWorld()
+  w.io.mcpAnswer = null
+  const view = (await refresh(w.io)).factory
+  expect([view?.queue, view?.note]).toEqual([null, NO_SERVER('tasks')])
+  expect(await startRun(w.io, w.spawn, null, READY)).toBe(`The line did not start (the tracker could not be read: ${NO_SERVER('tasks')}). Nothing runs.`)
+  expect([w.started, await readRun(w.io, '/r'), (await lockInfo(w.io, '/r', NOW)).state]).toEqual([[], null, 'free'])
+  // A reject of an item the tracker claims says the same reason.
+  expect(await rejectJob(w.io, 'PROJ-12', 'Not now.')).toBe(`PROJ-12 was not rejected: read the tracker failed (${NO_SERVER('tasks')}). Run the command again.`)
 })

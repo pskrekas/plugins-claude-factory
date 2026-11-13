@@ -1,11 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
+import { rejectedOf, resultOf } from '../adapters/mcp-tracker'
 import { AGENT_TYPES, SHELL_TOOL, agentSpecs } from '../core/agents'
 import { briefOf } from '../core/brief'
 import { safePath } from '../core/checks'
 import { rowsOf } from '../core/layout'
 import type { Tone } from '../core/layout'
+import type { McpResult } from '../core/mcp-tracker'
 import { emptyModel } from '../core/model'
 import { displayWidth } from '../core/rows'
 import { failureOf } from '../core/run'
@@ -13,7 +15,7 @@ import { stateBaseOf } from '../core/state-path'
 import { ancestorsOf, confirmedTop } from '../core/top'
 import { checkedSpawn, isOwnReport, onFileCall, onShell, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
 import type { Io } from './io'
-import { answerJob, rejectJob, stopLine } from './commands'
+import { answerJob, rejectJob, stopLine, trackerCheck } from './commands'
 import { init } from './init'
 import type { Spawn } from './agent-events'
 import { whereText } from './jobs'
@@ -34,6 +36,7 @@ const REFRESH_MS = 60_000
 // The timer that keeps the line's lock alive and sees an agent that is gone. It starts no agent.
 const WATCH_MS = 15_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
+const word0 = (arg: string): string => arg.split(/\s+/)[0] ?? ''
 const GIT_TOP_MS = 5_000
 const ONLY_A_PERSON_CAN = 'Only a person can do this. Type the command at the prompt.'
 const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
@@ -178,6 +181,26 @@ export const register: Register = (on, options) => {
           }))
           .catch(failureOf)
       },
+      // The engine's call raced with a timer of our own. Only what the plugin
+      // reads of the result is copied (adapters/mcp-tracker.ts).
+      mcp: (server, tool, args, timeoutMs) =>
+        new Promise<McpResult>(resolve => {
+          let timer: { cancel: () => void } | null = null
+          const done = (result: McpResult) => {
+            timer?.cancel()
+            resolve(result)
+          }
+          try {
+            timer = $.clock.after(timeoutMs, () => resolve({ failed: 'timeout', why: 'no answer in time' }))
+          } catch {
+            // No timer: the call still answers, or the engine refuses it.
+          }
+          try {
+            $.mcp.call(server, tool, args).then(result => done(resultOf(result)), error => done(rejectedOf(error)))
+          } catch (error) {
+            done(rejectedOf(error))
+          }
+        }),
       storeGet: key => $.store.get(key).catch(() => undefined),
       storeSet: (key, value) => $.store.set(key, value),
       getModel: () => read($, panel),
@@ -238,7 +261,7 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'factory',
-      description: 'Open the Factory work panel (close | init | approve | where | plan | run | stop | answer | reject)',
+      description: 'Open the Factory work panel (close | init | approve | where | plan | run | stop | answer | reject | tracker)',
     })
     // One quick read now, so the status line and the session brief have the
     // branch and the progress before the first prompt. It runs no `gh` and no
@@ -374,6 +397,12 @@ export const register: Register = (on, options) => {
     if (arg === 'init') return { text: await init(io) }
     if (arg === 'where') return { text: await whereText(io, await io.root()) }
 
+    if (word0(arg) === 'tracker') {
+      const [, given = ''] = arg.split(/\s+/)
+
+      return { text: await trackerCheck(io, given === '' ? null : given) }
+    }
+
     // The commands that change the line or a job: the person's own act, like approve.
     const [word = '', id = ''] = arg.split(/\s+/)
     if (word === 'stop' || word === 'answer' || word === 'reject' || word === 'run' || word === 'plan') {
@@ -394,7 +423,7 @@ export const register: Register = (on, options) => {
     }
 
     return {
-      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory plan, /factory run [id], /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
+      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory tracker [id], /factory plan, /factory run [id], /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
     }
   })
 

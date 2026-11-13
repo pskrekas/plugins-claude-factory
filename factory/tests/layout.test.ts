@@ -72,6 +72,16 @@ test('a settings error is one line', async () => {
   expect(text).toContain('settings: not valid JSON')
 })
 
+// The person learns from this row why the settings were refused: it is wrapped, never cut.
+test('a long settings error is wrapped, every character of it', async () => {
+  const error = 'tracker: comments: needs a field name of 1 to 6 parts of letters, digits and _, joined by dots ' + 'z'.repeat(40) + ' END'
+  for (const columns of [40, 80]) {
+    const rows = rowsOf({ ...FULL, progress: [], settingsError: error }, columns, 0).filter(r => r.tone === 'bad').map(r => r.left)
+    expect(rows.join('')).toBe(`settings: ${error}`)
+    expect(rows.every(row => !row.includes('…') && row.length <= columns)).toBe(true)
+  }
+})
+
 test('no row is wider than the pane, at 24 to 120 columns', async () => {
   for (let columns = 24; columns <= 120; columns++) {
     for (const r of rowsOf(FULL, columns, 5000)) {
@@ -145,4 +155,27 @@ test('bidi, zero-width and line-separator characters never reach a row', async (
     .map(r => r.left)
     .join('|')
   expect(text).toContain('PROJ-12 abcdef')
+})
+
+// A line to approve must be readable whole: fifteen long MCP lines lose no character.
+test('fifteen 300-character MCP lines to approve are wrapped whole, at 40 and 80 columns', async () => {
+  const lines = Array.from({ length: 15 }, (_, i) => {
+    const head = `[tracker] mcp tasks · state done ${i + 1}/15: move_task {"note":"`
+    const tail = `","task_id":"{id}"}`
+
+    return head + 'abcdefghij'.repeat(30).slice(0, 300 - head.length - tail.length) + tail
+  })
+  expect(lines.every(line => line.length === 300)).toBe(true)
+  for (const columns of [40, 80]) {
+    const rows = rowsOf({ ...FULL, consent: 'needed', pendingCommands: lines }, columns, 0).map(r => r.left)
+    const first = rows.indexOf('SETTINGS NOT APPROVED · 15 commands')
+    const last = rows.findIndex(row => row.startsWith('Run /factory approve'))
+    const shown = rows.slice(first + 1, last)
+    expect(shown.join('')).toBe(lines.join(''))
+    // No row of the approval section is cut: the lines, and the sentence under them.
+    const run = 'Run /factory approve to allow these commands.'
+    const section = rows.slice(first, last + Math.ceil(run.length / columns))
+    expect(rows.slice(last, last + Math.ceil(run.length / columns)).join('')).toBe(run)
+    expect(section.some(row => row.includes('…'))).toBe(false)
+  }
 })

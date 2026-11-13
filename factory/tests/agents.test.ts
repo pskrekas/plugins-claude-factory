@@ -98,3 +98,16 @@ test('the brief of a station names the places and holds no text of the item', as
   // The item's title or text is never in it: the agent reads it from item.md, as quoted data.
   expect(Object.keys(facts).sort()).toEqual(['files', 'focus', 'itemId', 'jobId', 'out', 'round', 'worktree'])
 })
+
+test("no factory agent can reach a tracker's MCP server: its only MCP tool is the plugin's own shell, and no type lists a server", async () => {
+  for (const role of ROLES) {
+    for (const shell of ['container', 'host'] as const) {
+      const mcp = toolsOf(role, shell).filter(tool => tool.startsWith('mcp__') && tool !== SHELL_TOOL)
+      expect([role, shell, mcp]).toEqual([role, shell, []])
+    }
+  }
+  for (const spec of agentSpecs(F)) {
+    expect([spec.name, 'mcpServers' in spec]).toEqual([spec.name, false])
+    expect([spec.name, spec.tools.filter(tool => tool.startsWith('mcp__') && tool !== SHELL_TOOL)]).toEqual([spec.name, []])
+  }
+})

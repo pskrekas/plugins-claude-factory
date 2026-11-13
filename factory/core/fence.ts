@@ -45,6 +45,7 @@ const STAY = "An agent stays on its job's branch."
 const OUT_WRITE = 'This write is outside the job.'
 const TOO_DEEP = 'A shell inside a shell inside a shell is not run.'
 const NO_SHELL = 'This agent has no shell on this machine.'
+const NO_MCP = 'An agent of the line does not call an MCP server.'
 
 // A path as the tools see it, with `.` and `..` resolved. A relative path is
 // under `base`. Null for a path that cannot be judged.
@@ -336,6 +337,11 @@ export function fenceOf(call: { tool: string; input: unknown }, who: Who): Verdi
     // A builder in a container has no shell of this machine. Its type does
     // not hold one; a call of one is refused here too, not passed on.
     if (call.tool === 'Bash' && who.role === 'builder') return deny(NO_SHELL, isObject(call.input) ? (text(call.input.command) ?? '') : '')
+    // A server the person connected (a tracker's, for one) answers with the
+    // person's own sign-in: no agent of the line calls one. Its type lists no
+    // such tool; a call of one is refused here too. The plugin's own shell
+    // tool refuses a caller that is not its builder itself.
+    if (call.tool.startsWith('mcp__') && call.tool !== SHELL_TOOL) return deny(NO_MCP, call.tool)
 
     return null
   }

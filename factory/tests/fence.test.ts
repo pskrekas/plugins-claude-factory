@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { fenceOf } from '../core/fence'
 import type { Who } from '../core/fence'
+import { ROLES } from '../core/factory-settings'
 
 const WT = '/s/worktrees/12-a'
 const JOB = '/s/jobs/12-a'
@@ -219,4 +220,23 @@ test('the git file of the folder is not written to, by any spelling of its name'
   }
   expect(fenceOf({ tool: 'Write', input: { file_path: `${WT}/.gitignore`, content: 'x' } }, who)).toEqual({ decision: 'allow' })
   expect(fenceOf({ tool: 'Write', input: { file_path: `${WT}/src/.github/x.yml`, content: 'x' } }, who)).toEqual({ decision: 'allow' })
+})
+
+test("a tracker's MCP tool is refused to every agent of the line, in either shell", async () => {
+  for (const role of ROLES) {
+    for (const shell of ['container', 'host'] as const) {
+      const as: Who = { ...who, role, shell }
+      for (const tool of ['mcp__tasks__move_task', 'mcp__tasks__add_comment', 'mcp__claude_ai_Tasks__find_tasks', 'mcp__plugin_x_tasks__show_task']) {
+        const verdict = fenceOf({ tool, input: { task_id: 'PROJ-12', step: 'done' } }, as)
+        expect([role, shell, tool, verdict?.decision]).toEqual([role, shell, tool, 'deny'])
+      }
+      // Also when the call is not understood.
+      expect([role, shell, fenceOf({ tool: 'mcp__tasks__move_task', input: null }, as)?.decision]).toEqual([role, shell, 'deny'])
+    }
+  }
+  expect(fenceOf({ tool: 'mcp__tasks__move_task', input: { task_id: 'PROJ-12' } }, reviewer)).toEqual({
+    decision: 'deny',
+    reason: 'An agent of the line does not call an MCP server.',
+    command: 'mcp__tasks__move_task',
+  })
 })
