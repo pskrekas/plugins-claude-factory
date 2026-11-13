@@ -4,8 +4,7 @@
     "description": "Factory: a work panel and a software factory for Claude Code."
   },
   "owner": {
-    "name": "pskrekas",
-    "url": "https://github.com/pskrekas"
+    "name": "Olbrix"
   },
   "plugins": [
     {

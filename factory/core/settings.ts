@@ -4,15 +4,20 @@
 
 import { FACTORY_DEFAULTS, containerLine, parseFactory } from './factory-settings'
 import type { FactorySettings } from './factory-settings'
+import { mcpLines, parseMcpTracker } from './mcp-tracker'
+import type { McpTracker } from './mcp-tracker'
 import { CONTROL_CHAR, isInside, isObject, isText } from './rules'
 
 export type CheckSpec = { name: string; run?: string[]; want?: string; minFreeGb?: number }
 
-export type TrackerKind = 'github' | 'azure-boards' | 'jira' | 'asana' | 'mcp'
+export type TrackerKind = 'github' | 'azure-boards' | 'mcp'
 
 export type Settings = {
   ticketPattern: string | null
-  tracker: { kind: TrackerKind; mark: string; project: string | null } | null
+  // `project`: where the items are when the remote does not say it. For `azure-boards`: a project of the
+  // remote's organization, or `<organization>/<project>`. For `github` with code on another host: `owner/name`.
+  // `mcp`: the settings of a tracker behind an MCP server; non-null exactly when `kind` is `mcp`.
+  tracker: { kind: TrackerKind; mark: string; project: string | null; mcp: McpTracker | null } | null
   prHost: 'auto' | 'github' | 'azure-repos'
   baseBranch: string
   progress: { files: string; done: string; open: string; blocked: string } | null
@@ -36,7 +41,9 @@ export const DEFAULTS: Settings = {
   factory: FACTORY_DEFAULTS,
 }
 
-const TRACKERS: readonly string[] = ['github', 'azure-boards', 'jira', 'asana', 'mcp']
+const TRACKERS: readonly string[] = ['github', 'azure-boards', 'mcp']
+// Kinds that were named for one tracker each; a tracker is reached through its MCP server instead.
+const USE_MCP = ['jira', 'asana']
 const PR_HOSTS: readonly string[] = ['auto', 'github', 'azure-repos']
 const WRONG = 'wrong type'
 const BAD_PATTERN = 'not a valid pattern'
@@ -175,14 +182,22 @@ function ticketPattern(v: unknown): Parsed<string> {
 }
 
 function tracker(v: unknown): Parsed<Settings['tracker']> {
+  if (isObject(v) && isText(v.kind) && USE_MCP.includes(v.kind)) return { no: 'use kind mcp: see docs/trackers' }
   if (!isObject(v) || !isText(v.kind) || !TRACKERS.includes(v.kind)) return { no: WRONG }
   // The mark is handed to the tracker's command as an argument: it must look
   // like a label, so it can never be read as an option.
   if (v.mark !== undefined && (!isText(v.mark) || !isMark(v.mark))) return { no: WRONG }
   if (v.project !== undefined && !isText(v.project)) return { no: WRONG }
 
+  if (v.kind === 'mcp') {
+    const mcp = parseMcpTracker(v)
+    if ('no' in mcp) return mcp
+
+    return { ok: { kind: 'mcp', mark: v.mark ?? 'factory', project: null, mcp: mcp.ok } }
+  }
+
   return {
-    ok: { kind: v.kind as TrackerKind, mark: v.mark ?? 'factory', project: v.project ?? null },
+    ok: { kind: v.kind as TrackerKind, mark: v.mark ?? 'factory', project: v.project ?? null, mcp: null },
   }
 }
 
@@ -333,6 +348,18 @@ export function lineOf(argv: string[]): string {
 // gate's, and the two kinds of approval cannot be mixed up.
 export const GATE_MARK = '[gate] '
 
+// A tracker place that the settings file names itself (`tracker.project` with
+// a `/`: `<organization>/<project>` on Azure DevOps, `owner/name` on GitHub),
+// as the line a person approves. A settings file arrives with a clone: it
+// must not point the person's login at a place the person did not choose.
+// Null when the place is the remote's own, or when the text is not a place.
+export function trackerLine(tracker: Settings['tracker']): string | null {
+  if (tracker === null || tracker.project === null || !tracker.project.includes('/')) return null
+  if (tracker.kind !== 'github' && tracker.kind !== 'azure-boards') return null
+
+  return /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.][A-Za-z0-9 _.-]{0,99}$/.test(tracker.project) ? `[tracker] ${tracker.kind} ${tracker.project}` : null
+}
+
 // Every command the settings file can make the plugin run, one line each: the
 // checks, then the gate's commands with their mark. A person approves both
 // kinds together, but a line approved for one purpose never runs for the
@@ -345,6 +372,8 @@ export function commandsOf(settings: Settings): string[] {
   for (const argv of [...settings.gate.fast, ...settings.gate.full]) gate.add(GATE_MARK + lineOf(argv))
 
   const container = containerLine(settings.factory.container)
+  const place = trackerLine(settings.tracker)
+  const calls = settings.tracker?.mcp ? mcpLines(settings.tracker.mcp, settings.tracker.mark) : []
 
-  return [...[...checks].sort(), ...[...gate].sort(), ...(container === null ? [] : [container])]
+  return [...[...checks].sort(), ...[...gate].sort(), ...(container === null ? [] : [container]), ...(place === null ? [] : [place]), ...calls]
 }

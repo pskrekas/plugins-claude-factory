@@ -112,10 +112,11 @@ export async function hasMark(run: Run, id: string, mark: string): Promise<boole
 }
 
 // The same runner, with every `gh` call told which repository it is for.
+// (`gh api` takes no repository: it asks about the login.)
 export const inRepo =
   (run: Run, repo: string): Run =>
   (argv, stdin) =>
-    run(argv[0] === 'gh' ? [...argv, '-R', repo] : argv, stdin)
+    run(argv[0] === 'gh' && argv[1] !== 'api' ? [...argv, '-R', repo] : argv, stdin)
 
 export const stateLabel = (mark: string, state: 'in-progress' | 'needs-human') => `${mark}:${state}`
 
@@ -173,7 +174,7 @@ export async function setIssueState(run: Run, id: string, mark: string, state: T
   return run(['gh', 'issue', 'edit', n, ...labels])
 }
 
-// The five actions of the tracker contract on GitHub Issues. A method throws
+// The tracker contract on GitHub Issues. A method of the five actions throws
 // with one readable line when its command fails; `comment` throws before it
 // runs anything when the text may not be sent.
 export function githubIssues(run: Run, mark: string, forbidden: string[]): Tracker {
@@ -187,8 +188,23 @@ export function githubIssues(run: Run, mark: string, forbidden: string[]): Track
     must(await commentIssue(run, id, text.ok))
   }
 
+  // The login of the person who runs the line: asked once.
+  let login: string | null | undefined
+
   return {
+    kind: 'github',
+    scan: () => listIssues(run, mark),
     list: async () => (await listIssues(run, mark)).items ?? [],
+    hasMark: id => hasMark(run, id, mark),
+    me: async () => {
+      if (login === undefined) {
+        const asked = await run(['gh', 'api', 'user', '--jq', '.login'])
+        const name = 'failed' in asked || asked.exitCode !== 0 ? '' : asked.stdout.trim()
+        login = /^[A-Za-z0-9-]{1,100}$/.test(name) ? name : null
+      }
+
+      return login
+    },
     read: async id => (await readIssue(run, id)).item,
     comment,
     // gh refuses a label the repository does not have, also one it is asked

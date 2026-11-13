@@ -76,6 +76,7 @@ test('the tracker gets its mark and project defaults', async () => {
     kind: 'github',
     mark: 'factory',
     project: null,
+    mcp: null,
   })
   expect(parseSettings('{"tracker": {"kind": "nope"}}')).toEqual({
     settings: DEFAULTS,

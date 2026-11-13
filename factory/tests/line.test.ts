@@ -128,6 +128,16 @@ test('the whole section, in order', async () => {
   expect(text.some(line => line.startsWith('PROJ-14 ') && !line.includes('Which'))).toBe(false)
 })
 
+// The note says how to fix a tracker that cannot be read: it is wrapped, never cut.
+test('a long note is wrapped at 40 columns, every character of it', async () => {
+  const note = 'The MCP server tasks did not answer. Connect it with /mcp, or check the tool names in the settings.'
+  const [head, gap, ...rows] = factoryRows({ ...EMPTY, note }, 40).map(row => row.left)
+  expect([head, gap]).toEqual(['FACTORY', ''])
+  expect(rows.join('')).toBe(note)
+  expect(rows.every(row => !row.includes('…') && row.length <= 40)).toBe(true)
+  expect(rows.length).toBe(3)
+})
+
 test('small cases of the section', async () => {
   expect(factoryRows(EMPTY, 80)).toEqual([])
   const queued = factoryRows({ ...EMPTY, queue: 1 }, 80).map(row => row.left)

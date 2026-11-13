@@ -4,6 +4,7 @@ import type { PrState } from '../core/model'
 import { clean } from '../core/rows'
 import type { RunResult } from '../core/run'
 import { isBranchName } from '../core/settings'
+import type { PrHost } from './pr-host'
 import type { Run } from './tracker'
 
 const FIELDS = 'number,state,isDraft,reviewDecision,statusCheckRollup,url'
@@ -114,4 +115,19 @@ export async function commentPr(run: Run, number: number, markdown: string): Pro
 
 export async function closePr(run: Run, number: number): Promise<RunResult> {
   return isNumber(number) ? run(['gh', 'pr', 'close', String(number)]) : NOTHING_RAN
+}
+
+// The pull request host contract on GitHub. `current` asks for the pull
+// request of the branch that is checked out: `gh` finds it by itself, and
+// only when no repository is named (`bare`: a runner that adds no `-R`).
+export function githubPrs(run: Run, bare: Run = run): PrHost {
+  return {
+    kind: 'github',
+    open: pr => createDraftPr(run, pr),
+    ready: number => readyPr(run, number),
+    read: number => readPrByNumber(run, number),
+    current: () => readPr(bare),
+    comment: (number, markdown) => commentPr(run, number, markdown),
+    close: number => closePr(run, number),
+  }
 }

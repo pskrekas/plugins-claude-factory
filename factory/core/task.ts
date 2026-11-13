@@ -37,6 +37,17 @@ export function repoOf(remote: string | null): string | null {
   return parts.length === 2 && parts.every(isName) ? parts.join('/') : null
 }
 
+// The GitHub repository of the issues: the one the remote names, or, with
+// the code on another host, `tracker.project` as `owner/name`.
+export function githubRepoOf(remote: string | null, project: string | null): string | null {
+  const own = repoOf(remote)
+  if (own !== null || project === null) return own
+  const isName = (part: string) => /^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,99}$/.test(part)
+  const parts = project.split('/')
+
+  return parts.length === 2 && parts.every(isName) ? project : null
+}
+
 export function prHostOf(
   remote: string | null,
   setting: Settings['prHost'],
@@ -52,18 +63,20 @@ export function prHostOf(
   return null
 }
 
-// What to tell the person when `gh` could not answer, or null when it is
-// nothing they can fix (a branch with no pull request, an issue that is gone).
-export function toolNote(result: RunResult | null): string | null {
+// What to tell the person when the tool (`gh` or `az`) could not answer, or
+// null when it is nothing they can fix (a branch with no pull request, an
+// item that is gone).
+export function toolNote(result: RunResult | null, tool: 'gh' | 'az' = 'gh'): string | null {
   if (result === null) return null
   if ('failed' in result) {
-    return result.failed === 'timeout'
-      ? 'gh did not answer in time'
-      : 'gh could not start. Is it installed?'
+    return result.failed === 'timeout' ? `${tool} did not answer in time` : `${tool} could not start. Is it installed?`
   }
-  if (result.exitCode !== 0 && result.stderr.includes('gh auth login')) {
-    return 'gh is not logged in. Run: gh auth login'
+  if (result.exitCode === 0) return null
+  if (tool === 'gh') return result.stderr.includes('gh auth login') ? 'gh is not logged in. Run: gh auth login' : null
+  // `az` with no `azure-devops` extension does not know the command.
+  if (/is misspelled or not recognized/.test(result.stderr) || (result.stderr.includes('azure-devops') && result.stderr.includes('extension'))) {
+    return 'az has no azure-devops extension. Run: az extension add --name azure-devops'
   }
 
-  return null
+  return result.stderr.includes('az login') ? 'az is not logged in. Run: az login' : null
 }

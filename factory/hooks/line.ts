@@ -10,7 +10,6 @@
 // and makes no move of the state machine: it keeps the lock alive, makes a
 // job whose agent is gone ask the person, says when the line waits for a
 // hook, ends a run that is done, and sees a merged pull request.
-import { commentPr, createDraftPr, readPrByNumber, readyPr } from '../adapters/github-pr'
 import { briefOf } from '../core/agents'
 import { answerOf } from '../core/answer'
 import { parseDfFreeGb } from '../core/checks'
@@ -47,6 +46,7 @@ const MERGE_ASK_MS = 300_000
 const NO_ANSWER = 'gave no answer the line can read'
 const UNSEEN = 'the fence did not see this agent'
 const NOT_SENT = 'the comment was not sent'
+const NO_HOST = 'no pull request host for this repository'
 const HIDDEN_QUESTION = 'The factory has a question about this item. Its text cannot be shown here: see the job on the machine that runs the line.'
 // What is posted when a job waits for the person who runs the line. The
 // question itself stays on the job: it can hold text that an agent wrote, and
@@ -429,7 +429,8 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
           if (step.to === 'review') {
             if (job.pr === null && ctx.tracker !== null) {
               const body = `Built by the factory line for item ${job.itemId}.${job.itemUrl === null ? '' : `\n\n${job.itemUrl}`}`
-              const made = await createDraftPr(ctx.run, { head: branchOf(job.id), base: ctx.base, title: `${job.itemId}: ${job.title}`, body })
+              if (ctx.host === null) throw new Error(NO_HOST)
+              const made = await ctx.host.open({ head: branchOf(job.id), base: ctx.base, title: `${job.itemId}: ${job.title}`, body })
               if (made.pr === null) throw new Error('the pull request could not be opened')
               // Kept at once: a second try must not open a second pull request.
               const withPr = await save({ ...job, pr: made.pr }, job)
@@ -437,7 +438,7 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
               set = { ...set, pr: made.pr }
               await ctx.tracker.linkPr(job.itemId, made.pr.url).catch(error => tell(job, `the pull request was not linked (${why(error)})`))
             } else if (job.pr !== null) {
-              await commentPr(ctx.run, job.pr.number, `Round ${job.round} pushed.`)
+              await ctx.host?.comment(job.pr.number, `Round ${job.round} pushed.`)
             }
             const baseSha = await baseHeadOf(io, root, ctx.base)
             if (baseSha === null || !(await writeDiff(io, root, job, baseSha, sha))) throw new Error('the change could not be written for the reviewers')
@@ -446,8 +447,8 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
         }
         if (step.to === 'ready') {
           if (job.pr !== null) {
-            const made = await readyPr(ctx.run, job.pr.number)
-            if ('failed' in made || made.exitCode !== 0) throw new Error('the pull request could not be marked ready')
+            const made = ctx.host === null ? null : await ctx.host.ready(job.pr.number)
+            if (made === null || 'failed' in made || made.exitCode !== 0) throw new Error(made === null ? NO_HOST : 'the pull request could not be marked ready')
           }
           const files = await testFilesOf(io, dir, job)
           // No report text of an agent is posted: the reports are in the job's files, for the pane.
@@ -662,7 +663,7 @@ async function settleMerged(io: Io): Promise<void> {
   try {
     for (const job of due) {
       mergeAsked.set(job.id, ctx.now)
-      const { pr } = await readPrByNumber(ctx.run, job.pr?.number ?? 0)
+      const pr = ctx.host === null ? null : (await ctx.host.read(job.pr?.number ?? 0)).pr
       if (pr?.state !== 'merged') continue
       const disk = await readJob(io, ctx.root, job.id)
       if (disk === null || !isSame(disk, job)) continue

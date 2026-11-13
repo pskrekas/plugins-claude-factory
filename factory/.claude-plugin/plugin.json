@@ -3,8 +3,7 @@
   "version": "0.2.0",
   "description": "A work panel and a software factory for Claude Code",
   "author": {
-    "name": "pskrekas",
-    "url": "https://github.com/pskrekas"
+    "name": "Olbrix"
   },
   "homepage": "https://github.com/pskrekas/plugins-claude-factory",
   "repository": "https://github.com/pskrekas/plugins-claude-factory",

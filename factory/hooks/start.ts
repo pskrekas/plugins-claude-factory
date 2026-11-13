@@ -1,6 +1,5 @@
 // `/factory run`: what must be true before the line runs, then the run file
 // and the first call that advances the jobs.
-import { hasMark } from '../adapters/github-issues'
 import { endWork, isActive, isFinished } from '../core/job'
 import type { Spawn } from './agent-events'
 import { context } from './context'
@@ -11,7 +10,9 @@ import type { Io } from './io'
 import { lockInfo, readJobs, releaseLock, retireJob, setStop, stateDirOf, takeLock, writeJob } from './jobs'
 import { advance, liveOf, tidy } from './line'
 import { MAX_QUEUE, endRun, readRun, writeRun } from './run'
+import { failureText } from '../core/comment'
 import { clean } from '../core/rows'
+import { toolNote } from '../core/task'
 
 const ITEM_ID = /^[A-Za-z0-9#][A-Za-z0-9_.#-]{0,39}$/
 const BOX_NOT_APPROVED = 'the container settings are not approved'
@@ -43,7 +44,7 @@ async function clearPlan(io: Io, root: string, now: number): Promise<void> {
 // Intake said of each item.
 export async function startPlan(io: Io, spawn: Spawn, ready: { hasAgentTypes: boolean }): Promise<string> {
   const ctx = await context(io)
-  if (ctx.tracker === null || ctx.mark === null) return '/factory plan needs a GitHub tracker in the settings.'
+  if (ctx.tracker === null || ctx.mark === null) return ctx.trackerNote ?? '/factory plan needs a tracker in the settings (github, azure-boards or mcp).'
   if (!ready.hasAgentTypes) return 'The agent types of the line are not registered. Start a new session.'
   // A run that is going is left alone. A run file with no live lock is a run that died.
   const lock = await lockInfo(io, ctx.root, ctx.now)
@@ -66,7 +67,9 @@ export async function startPlan(io: Io, spawn: Spawn, ready: { hasAgentTypes: bo
 export async function startRun(io: Io, spawn: Spawn, only: string | null, ready: { hasAgentTypes: boolean }): Promise<string> {
   if (only !== null && !ITEM_ID.test(only)) return 'Not an item id: /factory run [id]'
   const ctx = await context(io)
-  if (ctx.tracker === null || ctx.mark === null) return '/factory run needs a GitHub tracker in the settings.'
+  if (ctx.tracker === null || ctx.mark === null) return ctx.trackerNote ?? '/factory run needs a tracker in the settings (github, azure-boards or mcp).'
+  // A job ends as a pull request: the remote must be one the plugin can open one on.
+  if (ctx.host === null) return '/factory run needs a pull request host: a github.com or a dev.azure.com remote.'
   if (!ready.hasAgentTypes) return 'The agent types of the line are not registered. Start a new session.'
   // No gate, no factory (design 8.2): the fast checks must be there and approved.
   const gate = await gateCommands(io, ctx.root, ctx.base, 'fast')
@@ -82,7 +85,7 @@ export async function startRun(io: Io, spawn: Spawn, only: string | null, ready:
     if (!docker.ok) return `No container, no factory: ${docker.why.replace(/\.$/, '')}.`
   }
   // Only a marked item runs, also when it is named: the mark is the person's own word (design 8.1).
-  if (only !== null && !(await hasMark(ctx.run, only, ctx.mark))) return `${clean(only)} does not carry the mark "${ctx.mark}". Only a marked item runs.`
+  if (only !== null && !(await ctx.tracker.hasMark(only))) return `${clean(only)} does not carry the mark "${ctx.mark}". Only a marked item runs.`
   // A session that already runs the line may have a builder's command or a gate in a container now.
   const wasMine = (await lockInfo(io, ctx.root, ctx.now)).state === 'mine'
   const lock = await takeLock(io, ctx.root, ctx.now)
@@ -117,7 +120,15 @@ async function begin(io: Io, spawn: Spawn, only: string | null, ctx: Ctx, hasDoc
   }
 
   // The queue is read once. An item that gets the mark later waits for the next run.
-  const queue = only !== null ? [only] : (await ctx.tracker.list(ctx.mark)).map(item => item.id).slice(0, MAX_QUEUE)
+  // A tracker that cannot be read (its tool is missing or not logged in) stops the start, with the reason.
+  const scan = only !== null ? null : await ctx.tracker.scan()
+  if (scan !== null && scan.items === null) {
+    // An MCP tracker runs no command: its own note says why.
+    if (ctx.tracker.kind === 'mcp') throw new Error(`the tracker could not be read: ${scan.note ?? 'no reason given'}`)
+    const tool = ctx.tracker.kind === 'github' ? 'gh' : 'az'
+    throw new Error(`the tracker could not be read: ${toolNote(scan.result, tool) ?? (scan.result === null ? 'not a mark' : failureText(tool, scan.result))}`)
+  }
+  const queue = only !== null ? [only] : (scan?.items ?? []).map(item => item.id).slice(0, MAX_QUEUE)
   await writeRun(io, ctx.root, { version: 1, session: await io.sessionId(), startedAt: ctx.now, queue })
   const going = jobs.filter(isActive).length
   await advance(io, spawn)

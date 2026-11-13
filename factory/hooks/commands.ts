@@ -1,12 +1,12 @@
 // The person's commands on the line and on a job: stop, answer, reject.
 // Each takes the lock first, so two sessions never change one job.
-import { closePr, readPrByNumber } from '../adapters/github-pr'
-import { listIssues } from '../adapters/github-issues'
+import type { Tracker } from '../adapters/tracker'
 import { failureText } from '../core/comment'
 import type { FactorySettings } from '../core/factory-settings'
 import { grant, isFinished, move, reject, resume } from '../core/job'
 import type { Job } from '../core/job'
 import { limitOf } from '../core/limits'
+import { isItemId } from '../core/mcp-tracker'
 import { clean } from '../core/rows'
 import type { Spawn } from './agent-events'
 import { context } from './context'
@@ -144,13 +144,23 @@ async function firstFailure(steps: Step[]): Promise<string | null> {
   return null
 }
 
+// The command an adapter of this kind runs, for a failure's text.
+const toolOf = (kind: 'github' | 'azure-boards' | 'azure-repos'): string => (kind === 'github' ? 'gh' : 'az')
+
+// Why a scan could not read the queue: an MCP tracker says it itself; the others are told by their command's result.
+const scanFailure = (kind: Tracker['kind'], listed: Awaited<ReturnType<Tracker['scan']>>): string => {
+  if (kind === 'mcp') return listed.note ?? 'the tracker could not be read'
+
+  return listed.result === null ? 'not a label' : failureText(toolOf(kind), listed.result)
+}
+
 // An item the tracker says is in progress, with no job here (a lost state
 // folder): the person drops it on the tracker. There is nothing here to change.
 async function rejectClaimed(ctx: Ctx, itemId: string, said: string): Promise<string> {
   if (ctx.tracker === null || ctx.mark === null || !ITEM_ID.test(itemId)) return none(itemId)
-  const listed = await listIssues(ctx.run, ctx.mark)
+  const listed = await ctx.tracker.scan()
   if (listed.items === null) {
-    const reason = listed.result === null ? 'not a label' : failureText('gh', listed.result)
+    const reason = scanFailure(ctx.tracker.kind, listed)
 
     return `${itemId} was not rejected: read the tracker failed (${clean(reason).slice(0, 200)}). Run the command again.`
   }
@@ -182,11 +192,11 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
       [
         'close the pull request',
         async () => {
-          if (ctx.tracker === null || job.pr === null) return
-          const { pr } = await readPrByNumber(ctx.run, job.pr.number)
+          if (ctx.tracker === null || ctx.host === null || job.pr === null) return
+          const { pr } = await ctx.host.read(job.pr.number)
           if (pr !== null && pr.state !== 'open') return
-          const closed = await closePr(ctx.run, job.pr.number)
-          if ('failed' in closed || closed.exitCode !== 0) throw new Error(failureText('gh', closed))
+          const closed = await ctx.host.close(job.pr.number)
+          if ('failed' in closed || closed.exitCode !== 0) throw new Error(failureText(toolOf(ctx.host.kind), closed))
         },
       ],
       ['set the tracker state', async () => ctx.tracker?.setState(itemId, 'rejected')],
@@ -255,4 +265,62 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
       (left.length === 0 ? '' : ` Not cleaned up: ${left.join('; ')}.`)
     )
   })
+}
+
+// /factory tracker [id]: reads the tracker and says what the mapping understood.
+// The answer goes to the session's model, so it holds no text of the tracker:
+// only counts, lengths, fixed words, ids that pass the id rule, and a failure reason.
+const TRACKER_ANSWER_MAX = 1_200
+const attempt = async <T>(work: () => Promise<T>): Promise<T | null> => work().catch(() => null)
+// The adapter's reason for its last failed read, cleaned and cut, as ` (<reason>)`; empty when it gives none.
+const because = (tracker: Tracker): string => {
+  const said = tracker.why?.()
+  const reason = typeof said === 'string' ? clean(said).trim().slice(0, 200) : ''
+
+  return reason === '' ? '' : ` (${reason})`
+}
+
+export async function trackerCheck(io: Io, id: string | null): Promise<string> {
+  const ctx = await context(io)
+  const tracker = ctx.tracker
+  if (tracker === null) return clean(ctx.trackerNote ?? 'No tracker in the settings.')
+  if (id !== null && !isItemId(id)) return 'Not an id.'
+  const lines: string[] = [`Tracker: ${tracker.kind}`]
+  const listed = await attempt(() => tracker.scan())
+  let target = id
+  if (listed === null) lines.push('Queue: not read (the tracker could not be read).')
+  else if (listed.items === null) lines.push(`Queue: not read (${clean(scanFailure(tracker.kind, listed)).slice(0, 200)})`)
+  else if (listed.items.length === 0 && id === null) lines.push('Queue: 0 items. Nothing to read. Is the mark right?')
+  else {
+    const shown = listed.items.slice(0, 3).map(item => item.id).filter(isItemId)
+    target ??= listed.items.map(item => item.id).find(isItemId) ?? null
+    lines.push(`Queue: ${listed.items.length} item${listed.items.length === 1 ? '' : 's'}${shown.length > 0 ? ` (${shown.join(', ')})` : ''}. Claimed: ${listed.claimed.length}.`)
+  }
+  const me = await attempt(() => tracker.me())
+  lines.push(me === null || me === '' ? `Me: not known${because(tracker)}.` : 'Me: read.')
+  if (target !== null) {
+    const id = target
+    const item = await attempt(() => tracker.read(id, true))
+    if (item === null) lines.push(`${id}: not read${because(tracker)}.`)
+    else {
+      const has = await attempt(() => tracker.hasMark(id))
+      const found = (value: string, word: string) => (value === '' ? `${word} not there` : `${word} found`)
+      lines.push(
+        `${id}: ${[
+          item.title === '' ? 'title not there' : `title found (${item.title.length} characters)`,
+          item.text === '' ? 'text not there' : `text found (${item.text.length} characters)`,
+          found(item.author, 'author'),
+          found(item.state, 'state'),
+          found(item.url, 'address'),
+        ].join(' · ')}`,
+      )
+      // The comments an agent would read: the item's author's and the runner's.
+      const trusted = [item.author, me].filter((name): name is string => typeof name === 'string' && name !== '')
+      const own = item.comments.filter(comment => trusted.includes(comment.author)).length
+      const mark = has === null ? 'not known' : has ? 'yes' : 'no'
+      lines.push(`${id}: carries the mark: ${mark} · ${item.comments.length} comment${item.comments.length === 1 ? '' : 's'} (${own} of the author or the runner)`)
+    }
+  }
+
+  return lines.map(line => clean(line)).join('\n').slice(0, TRACKER_ANSWER_MAX)
 }
