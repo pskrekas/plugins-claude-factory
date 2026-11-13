@@ -1161,6 +1161,33 @@ test('with an MCP tracker one item goes from the queue to a ready pull request',
   expect(mcpOf(w).at(-1)).toBe('tasks move_task {"task_id":"PROJ-12","to":"closed"}')
 })
 
+test('an id of 40 characters goes through the whole line, the same in every call', async () => {
+  const long = 'PROJ-' + '1'.repeat(35)
+  expect(long.length).toBe(40)
+  const w = mcpWorld()
+  const answer = w.io.mcpAnswer
+  w.io.mcpAnswer = (server, tool, args) =>
+    tool === 'find_tasks' && JSON.stringify(args.states) === '["open"]'
+      ? { content: [{ type: 'text', text: JSON.stringify({ tasks: [{ id: long, title: 'Long', state: 'Open' }] }) }], isError: false }
+      : answer?.(server, tool, args)
+  expect(await startRun(w.io, w.spawn, null, READY)).toBe('The line runs: 1 item in the queue, 0 jobs go on. /factory stop stops it.')
+  await ends(w, 'intake', 'ACCEPT risk=low surfaces=none')
+  await ends(w, 'spec', 'DONE')
+  w.state.isDirty = true
+  await ends(w, 'builder', 'DONE')
+  await ends(w, 'reviewer', 'OK', 'code')
+  w.state.heads = [SHA1]
+  w.state.head = SHA2
+  await ends(w, 'approver', 'READY')
+  w.state.isMerged = true
+  w.io.time += 301_000
+  await watch(w.io)
+  expect((await jobOf(w, long))?.stage).toBe('done')
+  const sent = w.io.mcpCalls.filter(([, , args]) => 'task_id' in args)
+  expect(new Set(sent.map(([, tool]) => tool))).toEqual(new Set(['show_task', 'move_task', 'add_comment', 'attach_link']))
+  expect(sent.every(([, , args]) => args.task_id === long)).toBe(true)
+})
+
 test('the panel says when the MCP server did not answer, and /factory run does not start', async () => {
   const w = mcpWorld()
   w.io.mcpAnswer = null

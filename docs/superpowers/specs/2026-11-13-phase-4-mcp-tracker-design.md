@@ -161,8 +161,10 @@ it is, after it puts values in for these six placeholders:
   mixed into a query or a command of the tracker (a JQL text, for example).
 - `{mark}` and `{id}` may, because each passes a rule first: the mark is the
   settings' own (the parser's `isMark`), and an id must match
-  `^[A-Za-z0-9][A-Za-z0-9_.#-]{0,63}$`. A row whose id does not match is no item. An
-  id that the person types (`/factory run PROJ-12`) passes the same rule.
+  `^[A-Za-z0-9][A-Za-z0-9_.#-]{0,39}$` (40 characters at most: the line keeps 40
+  characters of an id, so a longer one would be cut and written to another item). A
+  row whose id does not match is no item. An id that the person types
+  (`/factory run PROJ-12`) passes the same rule.
 - A placeholder is never read in a key, in `tool` or in `server`. An unknown
   `{name}` in a value is an error of the settings.
 - A step of `states` takes no `{text}`: `setState` has no text in the contract, and

@@ -12,8 +12,19 @@ const text = (t: string, isError = false): McpResult => ({ content: [{ type: 'te
 test('isItemId', () => {
   expect(isItemId('PROJ-12')).toBe(true)
   expect(isItemId('a#1.b_c')).toBe(true)
-  for (const bad of ['', '-x', 'a b', 'a'.repeat(65), '.a']) expect(isItemId(bad)).toBe(false)
-  expect(isItemId('a'.repeat(64))).toBe(true)
+  for (const bad of ['', '-x', 'a b', 'a'.repeat(41), '.a']) expect(isItemId(bad)).toBe(false)
+  expect(isItemId('a'.repeat(40))).toBe(true)
+})
+
+// The line keeps 40 characters of an id: a longer one would be cut, and its writes would go to another item.
+test('an id over 40 characters is no item and is never sent', () => {
+  const spec = { tool: 't', args: {}, rows: 'tasks', id: 'id', title: 'title', state: null }
+  const long = 'A-' + '1'.repeat(39)
+  expect(long.length).toBe(41)
+  expect(listedOf({ tasks: [{ id: long, title: 'x' }, { id: long.slice(0, 40), title: 'y' }] }, spec)).toEqual([{ id: long.slice(0, 40), title: 'y', state: '' }])
+  expect(fill({ k: '{id}' }, { mark: 'm', id: long })).toBe(null)
+  expect(fill({ k: 'key = {id}' }, { mark: 'm', id: long })).toBe(null)
+  expect(fill({ k: '{id}' }, { mark: 'm', id: long.slice(0, 40) })).toEqual({ k: long.slice(0, 40) })
 })
 
 test('fill: a lone placeholder keeps its type; mark and id go inside a text', () => {

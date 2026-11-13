@@ -18,7 +18,7 @@
 - No tool is called while one approval line of the tracker is not in the store: not a write, not a read, not the panel's queue.
 - Outside text (`{text}`, `{url}`) is only ever a whole JSON value. `{mark}` and `{id}` pass their rule before use. A placeholder is never read in a key, in `tool` or in `server`.
 - A value that is not text where text is expected is "not there", never `String(value)`. Everything fails closed.
-- Limits: `args` of one action ≤ 1,000 characters as JSON and ≤ 4 levels deep; ≤ 4 steps per state; a field name has 1 to 6 parts of `[A-Za-z0-9_]+`; `server` and `tool` match `^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$`; an id matches `^[A-Za-z0-9][A-Za-z0-9_.#-]{0,63}$`; an answer ≤ 1 MB; a queue is the first 200 rows; 50 comments of 5,000 characters; an item's text 20,000; a title 300; an author 200, in lower case.
+- Limits: `args` of one action ≤ 1,000 characters as JSON and ≤ 4 levels deep; ≤ 4 steps per state; a field name has 1 to 6 parts of `[A-Za-z0-9_]+`; `server` and `tool` match `^[A-Za-z0-9][A-Za-z0-9 ._-]{0,99}$`; an id matches `^[A-Za-z0-9][A-Za-z0-9_.#-]{0,39}$` (40 characters at most); an answer ≤ 1 MB; a queue is the first 200 rows; 50 comments of 5,000 characters; an item's text 20,000; a title 300; an author 200, in lower case.
 - Commits: one per task at least, message style of the repo (`feat:`, `fix:`, `docs:`, `test:`), ending with `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>`. Never push.
 - After every task: `claude plugin test factory` shows 0 fail and `claude plugin validate factory` passes.
 
@@ -164,7 +164,7 @@ export type McpResult =
   | { content: { type: string; text?: string }[]; isError: boolean; structuredContent?: unknown }
   | { failed: 'timeout' | 'no-server' | 'other'; why: string }
 export type Fill = { mark: string; id?: string; text?: string; url?: string; labels?: string[]; state?: TrackerState }
-export const isItemId = (id: string): boolean // ^[A-Za-z0-9][A-Za-z0-9_.#-]{0,63}$
+export const isItemId = (id: string): boolean // ^[A-Za-z0-9][A-Za-z0-9_.#-]{0,39}$
 // The arguments to send, or null when a value it needs is missing or breaks its rule.
 export function fill(args: { [key: string]: Json }, values: Fill): { [key: string]: Json } | null
 // Why the call failed, as one clean line of at most 200 characters; null when it did not.

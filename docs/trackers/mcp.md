@@ -89,7 +89,7 @@ A settings file that says `"kind": "jira"` or `"kind": "asana"` is refused with 
 
 - "Alone" means the whole JSON value is the placeholder. The value then keeps its type: `{labels}` becomes a list of texts.
 - `{text}` and `{url}` never stand inside a longer text. Text from outside is never mixed into a query of the tracker.
-- `{mark}` and `{id}` may, because each passes a rule first. The mark is yours, and it holds no quote. An id must match `^[A-Za-z0-9][A-Za-z0-9_.#-]{0,63}$`: a row whose id does not match is no item, and an id you type (`/factory run PROJ-12`) passes the same rule.
+- `{mark}` and `{id}` may, because each passes a rule first. The mark is yours, and it holds no quote. An id must match `^[A-Za-z0-9][A-Za-z0-9_.#-]{0,39}$` (40 characters at most): a row whose id does not match is no item, and an id you type (`/factory run PROJ-12`) passes the same rule.
 - A placeholder is never read in a key, in `tool` or in `server`. A `{name}` that is not one of the six is an error.
 - `{id}` is always sent as text.
 - Limits: the `args` of one call are at most 1,000 characters as compact JSON, and four levels deep. No control character, anywhere.
@@ -190,6 +190,7 @@ PROJ-12: carries the mark: yes · 4 comments (2 of the author or the runner)
 
 - **More than the first page.** A queue is the first 200 rows of one answer. Put a limit or a page size in `args` if the tool takes one.
 - **An id as a number.** `{id}` is sent as text. A tool that wants a number for an id is not served.
+- **An id over 40 characters.** The line keeps 40 characters of an id, so a longer one is no item: it is not listed, read or written.
 - **A state with text.** A step of `states` takes no `{text}`. A tracker whose state change needs a reason is not served.
 - **An error that says it is not one.** A server that answers a failed write with `isError: false` and an error sentence counts as a success. The plugin does not read the text of a write.
 - **Tell two people with one name apart.** An author is what its field holds. When that is a display name, two people with the same name read as one author, and both of their comments reach an agent. Choose a field with an id or an email when the tracker has one, for `author`, `commentAuthor` and `me` alike.

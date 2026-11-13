@@ -418,7 +418,8 @@ export type McpResult =
   | { failed: 'timeout' | 'no-server' | 'other'; why: string }
 export type Fill = { mark: string; id?: string; text?: string; url?: string; labels?: string[]; state?: TrackerState }
 
-const ITEM_ID = /^[A-Za-z0-9][A-Za-z0-9_.#-]{0,63}$/
+// 40 characters at most: the line keeps 40 characters of an id (core/job.ts), so a longer one is no item.
+const ITEM_ID = /^[A-Za-z0-9][A-Za-z0-9_.#-]{0,39}$/
 const HTTPS = /^https:\/\/\S+$/
 const MAX_ANSWER = 1_048_576
 const MAX_URL_VALUE = 2000
