@@ -246,3 +246,61 @@ What to write down for the plugin's author: the text and the exit code of any `a
 failure; whether the comments of a work item came newest first; whether
 `7.1-preview.4` was accepted for the comments; whether a tag kept its `:`.
 
+## An MCP tracker, by hand (phase 4)
+
+To do by the owner. The plugin was run on a real MCP tracker with reading tools only
+(`docs/notes/r3-check.md`). This is where the whole line meets one. It needs a scratch
+repository outside this one, with a small npm project and its gate and container
+settings as in the GitHub check, and a tracker with an MCP server in which you can make
+a test item.
+
+Before:
+
+- [ ] Connect the tracker's server with `/mcp` and sign in. Note its name as `/mcp`
+      shows it.
+- [ ] Write the `tracker` object of `.claude/factory.json` by hand, from
+      `docs/trackers/mcp.md`, with the tracker's own tool names and fields. Commit it
+      to `main` and push.
+- [ ] `claude --plugin-dir <this repo>/factory` in the scratch repository, then
+      `/factory`. The pane shows `SETTINGS NOT APPROVED` and one `[tracker] mcp
+      <server> · …` line for each call, and the mark's line. Read each line. A long
+      line is wrapped, not cut. Scroll to the last line.
+- [ ] Before the approval: `/factory tracker` says the calls are not approved, and the
+      tracker shows no call of the plugin (nothing was read).
+- [ ] `/factory approve`.
+
+Read only:
+
+- [ ] `/factory tracker`: `Tracker: mcp`, the size of the queue and up to three ids.
+      With no item marked yet: `Queue: 0 items. Nothing to read. Is the mark right?`
+- [ ] Put the mark on one test item. `/factory tracker`: `Queue: 1 item (<id>)`.
+- [ ] `/factory tracker <id>`: `title found`, `text found`, `author found`, and
+      `carries the mark: yes`. `address found` when the settings have `url`. With `me`
+      set: `Me: read.`
+- [ ] The answer of `/factory tracker` holds no title, no author and no text of the
+      item: only counts, ids, `found` and `not there`.
+- [ ] Change one argument of one call in the settings. The pane shows that line as
+      not approved, `/factory tracker` calls nothing, and the panel's queue is gone.
+      `/factory approve` again.
+- [ ] Close the session and open a new one. The panel shows no queue at first, and
+      the queue appears at its first refresh (`/factory`, or within a minute).
+
+The line:
+
+- [ ] `/factory run`. The test item gets the comment `The factory started on this.`,
+      as plain text, and its state is the one the settings give for `in-progress`.
+- [ ] `<state>/jobs/<job>/files/item.md` holds the item's text and your comment.
+- [ ] After Approve: the item's state is the one for `needs-human`, and the pull
+      request is linked to it (with `linkPr`), or its address is a comment (without).
+- [ ] Merge the pull request. Within about five minutes of an open session the job is
+      done and the item has the state for `done`.
+- [ ] `/factory reject <id> <reason>` on a second test item: the reason is a comment,
+      and the item has the state for `rejected`.
+- [ ] Disconnect the server in `/mcp`, then `/factory`: the panel says
+      `The MCP server <name> did not answer. Connect it with /mcp, or check the tool
+      names in the settings.` `/factory run` does not start. Connect it again.
+- [ ] Cancel or close the test items at the end.
+
+What to write down for the plugin's author: the tracker's tool names and the settings
+you used (not in this repo), the text of any failure, how long a call took, and whether
+a step marked `optional` was needed.

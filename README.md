@@ -60,6 +60,7 @@ The status line shows the task id, the first progress percent, the checks and a 
 | `/factory close` | closes it |
 | `/factory init` | looks at the repo and writes a first `.claude/factory.json`; it never overwrites one |
 | `/factory where` | says where the factory keeps its state for this repository |
+| `/factory tracker [id]` | reads the tracker and says what the plugin understood: the size of the queue and, for an item, which fields were found. It writes nothing, and its answer holds no text of the tracker |
 | `/factory approve` | opens the pane and allows the commands it shows (see below). Only your own Enter at the prompt counts |
 | `/factory plan` | the dry run: Intake judges each item of the queue (ten at most). It builds nothing, opens no pull request and writes nothing to the tracker. The pane shows what Intake said |
 | `/factory run [id]` | runs the line: one pass over the queue as it is now (or over one item that carries the mark), and the jobs that are already there. It ends when every job is ready, waits for you, or is refused, or when a limit of the day or a full disk holds it |
@@ -220,6 +221,14 @@ Only for a repo whose settings say `"tracker": { "kind": "azure-boards" }`, or w
 - **Mixes.** GitHub Issues with the code on Azure Repos: `"tracker": { "kind": "github", "project": "<owner>/<name>" }`. Azure Boards with the code on GitHub: `"tracker": { "kind": "azure-boards", "project": "<organization>/<project>" }`; the pull request is then a comment on the work item, not a link. Such a place comes from the settings file, not from the remote, and a settings file arrives with a clone: the pane shows it as a line `[tracker] azure-boards <organization>/<project>`, and it is used only after `/factory approve`. With an Azure DevOps remote the organization is always the remote's.
 - **Not checked on a real organization yet.** The `az` calls are built from the tool's help and its code (`docs/notes/az-check.md`). The hand check is in `docs/notes/r1-check.md`.
 
+### Other trackers (through an MCP server)
+
+With `"tracker": { "kind": "mcp" }` the line works with any tracker whose MCP server you connected with `/mcp`. The settings file names the server and, for each action, the tool to call, its arguments and the fields of the answer. Every call is a line in the pane that you approve, and the plugin stores no login. Try a mapping with `/factory tracker` before you run the line.
+
+- [The reference](docs/trackers/mcp.md): every key, the placeholders, how an answer is read, and what it cannot do.
+- [Jira](docs/trackers/jira.md), through Atlassian's MCP server: an example, not tested.
+- [Asana](docs/trackers/asana.md), through Asana's MCP server: what it can and cannot do, and a mapping with names to fill. Not tested.
+
 ## Settings
 
 One file per repo, `.claude/factory.json`. Every key is optional. With no file the panel shows the branch, its pull request, the agents and the worktrees.
@@ -247,7 +256,7 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 | Key | Meaning |
 | --- | --- |
 | `ticketPattern` | finds the ticket id in the branch name. A small subset of regular expressions: plain characters, `.`, `\d` `\w` `\s`, simple character classes, `^` `$`, up to three repeats, one capture group (its text is the id). |
-| `tracker` | `{ "kind": "github" }` reads the items with `gh`; `{ "kind": "azure-boards" }` reads Azure DevOps work items with `az`. `mark` (`factory` by default) is the label or the tag that lets an item into the line. `project` says where the items are when the remote does not: for `azure-boards` a project of the remote's organization, or `<organization>/<project>`; for `github` with the code on another host, `owner/name`. Jira, Asana and an MCP tracker come in later versions. |
+| `tracker` | `{ "kind": "github" }` reads the items with `gh`; `{ "kind": "azure-boards" }` reads Azure DevOps work items with `az`. `mark` (`factory` by default) is the label or the tag that lets an item into the line. `project` says where the items are when the remote does not: for `azure-boards` a project of the remote's organization, or `<organization>/<project>`; for `github` with the code on another host, `owner/name`. `{ "kind": "mcp" }` reaches a tracker through its MCP server: see [`docs/trackers/mcp.md`](docs/trackers/mcp.md). |
 | `prHost` | `auto` (the default) reads the git remote: `github.com` is GitHub, `dev.azure.com` (or `<name>.visualstudio.com`) is Azure DevOps Repos. `github` or `azure-repos` forces one. |
 | `baseBranch` | the branch worktrees are compared with, `main` by default. |
 | `gate` | `fast` and `full`: lists of commands, each a list of words. See "The gate". The factory will not run with an empty `fast`. |
@@ -264,7 +273,7 @@ The panel reads. It changes nothing but its own state and, when you ask, `.claud
 
 - **It runs** `git`, `gh` or `az`, and `docker` (the full lists are below), `id` for your user id, `find` to look for a git repository inside a job's folder, `df` for a disk check and `nc` for the ports a settings file names, `mkdir`, `mv` and `rm` on its own state folder, and, only after your approval, the commands a settings file names (the checks; and the gate's commands, in a container).
 - **It stores no password and no token.** `gh` and `az` use your own login.
-- **It runs no command from a settings file until you approve it.** A settings file arrives with a clone, so the panel first shows `SETTINGS NOT APPROVED`, the number of commands and every command in full. `/factory approve` allows exactly the lines the pane showed while it was on screen, for that repo; a file the pane has not shown yet is shown first, and a second `/factory approve` allows it. Only your own Enter at the prompt can approve. The approved lines are kept outside the repo, for the repo and all its worktrees; a line that changes asks again.
+- **It runs no command from a settings file until you approve it.** A settings file arrives with a clone, so the panel first shows `SETTINGS NOT APPROVED`, the number of commands and every command in full. `/factory approve` allows exactly the lines the pane showed while it was on screen, for that repo; a file the pane has not shown yet is shown first, and a second `/factory approve` allows it. Only your own Enter at the prompt can approve. The approved lines are kept outside the repo, for the repo and all its worktrees; a line that changes asks again. An MCP tracker's settings show one line for each call, whole (`[tracker] mcp <server> · …`), and the plugin calls none of them, not even to read, until every line is approved: such a call asks you nothing and acts with your own sign-in.
 - **What an approval covers.** It covers the command line you read, not the code that command runs. A check must name a program on your `PATH` (never a file of the repo), runs with a `PATH` that leaves the repo out, and is not run when one of its arguments names a file of the repo. These are guards against the plain cases, not a boundary: a command that runs repo code by its nature (an inline script, a build tool) runs what the repo holds at that time. Approve a check as you would approve the same command in a shell.
 - **The factory's state is yours, not the repo's.** Jobs and the lock are files under your home folder. The folder is named after the repository's path, holds that path, and is not used when it names another repository or when it would be inside the repo.
 - **It checks where the repo starts.** The top of the working tree is the nearest folder above the session's that holds a `.git`, and only when git names the same folder. A folder's own git config can make git name any path, and another user of the machine can put a `.git` in a shared folder; when the two do not agree, the plugin stays in the session's own folder.
@@ -429,7 +438,7 @@ All behaviour is in `factory/core/` as pure functions with tests. `factory/hooks
 
 ## Next
 
-Jira, Asana and a tracker through an MCP server. The keys in the pane. A run of one command that is longer than ten minutes.
+The keys in the pane. A run of one command that is longer than ten minutes.
 
 ## License
 
