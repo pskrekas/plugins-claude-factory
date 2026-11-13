@@ -261,7 +261,7 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'factory',
-      description: 'Open the Factory work panel (close | init | approve | where | plan | run | stop | answer | reject)',
+      description: 'Open the Factory work panel (close | init | approve | where | plan | run | stop | answer | reject | tracker)',
     })
     // One quick read now, so the status line and the session brief have the
     // branch and the progress before the first prompt. It runs no `gh` and no

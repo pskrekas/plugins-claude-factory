@@ -115,6 +115,8 @@ export function engine(
     registered: [] as { name: string; tools?: readonly string[]; model?: string }[],
     // The tools the plugin registered.
     tools: [] as { name: string; inputSchema?: unknown }[],
+    // The commands the plugin registered, with their description.
+    commands: [] as { name: string; description?: string }[],
     spawned: [] as { type: string; description: string; cwd?: string }[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
     // Every $.mcp.call: the server, the tool and the arguments.
@@ -131,7 +133,11 @@ export function engine(
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.version', () => ({ value: { version: '2.1.322', base: '2.1.322' } as never }))
-  on('command.register', () => ({ value: { command: 'factory' } }))
+  on('command.register', (_, e) => {
+    seen.commands.push(e as { name: string; description?: string })
+
+    return { value: { command: 'factory' } }
+  })
   on('ui.open', () => {
     seen.isOpen = true
 

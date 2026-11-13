@@ -475,6 +475,12 @@ test('/factory tracker says why an item or me was not read', async () => {
   expect((await trackerCheck(unset, 'PROJ-12')).split('\n')[2]).toBe('Me: not known.')
 })
 
+test('the registered command names every sub-command, tracker among them', async ($, on) => {
+  const w = engine(on, { now: 1_000_000 })
+  await $.session.start(START)
+  expect(w.commands.map(c => c.description)).toEqual(['Open the Factory work panel (close | init | approve | where | plan | run | stop | answer | reject | tracker)'])
+})
+
 test('/factory tracker is a plain command word, not a person-only one', async ($, on) => {
   engine(on, { files: { '/r/.claude/factory.json': '{}' }, now: 1_000_000 })
   await $.session.start(START)
