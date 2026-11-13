@@ -303,3 +303,50 @@ test('a server that hangs is cut off by the time limit', async ($, on) => {
   await opened
   expect((await paneText($, 200)).some(row => row.includes('The MCP server tasks did not answer in time.'))).toBe(true)
 })
+
+// why: the reason of the last reading call that failed, as fixed words or the tool's own cut line.
+test('why: each failed reading call gives its own reason, and a good call clears it', async () => {
+  const cases: [Answer, string][] = [
+    [text('Not found.\nAdd dark mode', true), 'show_task: Not found.'],
+    [text('Add dark mode'), 'show_task: the answer is not JSON'],
+    [json({ description: 'Do it' }), 'show_task: title not there'],
+    [json({ ...TASK, comments: 'Hi' }), 'show_task: no list of comments'],
+    [{ failed: 'timeout', why: 'x' }, 'The MCP server tasks did not answer in time.'],
+    [{ failed: 'no-server', why: 'x' }, NO_SERVER('tasks')],
+  ]
+  for (const [answer, why] of cases) {
+    const t = mcpTracker(server({ show_task: answer }).call, SPEC, 'factory', [])
+    expect(t.why?.()).toBe(null)
+    expect(await t.read('PROJ-12')).toBe(null)
+    expect(t.why?.()).toBe(why)
+    expect(why.includes('Add dark mode') || why.includes('Do it')).toBe(false)
+  }
+  // The comments of a call of their own.
+  const comments = { tool: 'list_comments', args: { task_id: '{id}' }, rows: 'items', author: 'by', text: 'text' }
+  const own = mcpTracker(server({ list_comments: json({ items: 'Hi' }) }).call, specOf({ comments }), 'factory', [])
+  expect(await own.read('PROJ-12')).toBe(null)
+  expect(own.why?.()).toBe('list_comments: no list of comments')
+  // A value that breaks a rule: nothing is sent.
+  const quiet = server()
+  const odd = mcpTracker(quiet.call, SPEC, 'factory', [])
+  expect(await odd.read('a b')).toBe(null)
+  expect(quiet.calls).toEqual([])
+  expect(odd.why?.()).toBe('show_task: not sent (a value broke a rule)')
+  // A read that works clears the reason.
+  const later = server({ show_task: text('Not found.', true) })
+  const t = mcpTracker(later.call, SPEC, 'factory', [])
+  await t.read('PROJ-12')
+  expect(t.why?.()).toBe('show_task: Not found.')
+  later.calls.length = 0
+  const fixed = mcpTracker(server().call, SPEC, 'factory', [])
+  expect((await fixed.read('PROJ-12'))?.title).toBe('Add dark mode')
+  expect(fixed.why?.()).toBe(null)
+  // me: its call's reason; with no me in the settings, none.
+  const signedOut = mcpTracker(server({ who_am_i: text('Signed out.', true) }).call, SPEC, 'factory', [])
+  expect(await signedOut.me()).toBe(null)
+  expect(signedOut.why?.()).toBe('who_am_i: Signed out.')
+  const none = mcpTracker(server({ show_task: text('x', true) }).call, specOf({ me: undefined }), 'factory', [])
+  await none.read('PROJ-12')
+  expect(await none.me()).toBe(null)
+  expect(none.why?.()).toBe(null)
+})

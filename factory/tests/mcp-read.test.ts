@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { at, commentsOf, dataOf, errorOf, fill, isItemId, itemOf, labelsAfter, listedOf, parseMcpTracker } from '../core/mcp-tracker'
+import { at, commentsOf, dataOf, errorOf, fill, isItemId, itemOf, itemProblem, labelsAfter, listedOf, parseMcpTracker } from '../core/mcp-tracker'
 import type { McpResult, McpTracker, ReadSpec } from '../core/mcp-tracker'
 
 import { GOOD } from './mcp-good'
@@ -236,4 +236,15 @@ test('an error text is cut early and never in half of an emoji', () => {
 test('fill: text and url never stand inside a longer text', () => {
   expect(fill({ k: 'x {text}' }, { mark: 'm', text: 't' })).toBe(null)
   expect(fill({ k: 'see {url}' }, { mark: 'm', url: 'https://a.example/1' })).toBe(null)
+})
+
+test('itemProblem: why an answer is no item, in fixed words', () => {
+  expect(itemProblem(data(), READ)).toBe(null)
+  expect(itemProblem(data({ title: undefined }), READ)).toBe('title not there')
+  expect(itemProblem(data({ title: '' }), READ)).toBe('title not there')
+  expect(itemProblem(data({ title: 5 }), READ)).toBe('title not there')
+  expect(itemProblem('no', READ)).toBe('title not there')
+  expect(itemProblem(data({ comments: 'no' }), READ)).toBe('no list of comments')
+  expect(itemProblem(data({ comments: 'no' }), { ...READ, comments: null, commentAuthor: null, commentText: null })).toBe(null)
+  for (const d of [data(), data({ title: undefined }), data({ comments: 'no' }), 'no']) expect(itemProblem(d, READ) === null).toBe(itemOf(d, READ, 'A-1', null) !== null)
 })

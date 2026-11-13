@@ -680,6 +680,15 @@ export function itemOf(
   }
 }
 
+// Why an answer is no item (`itemOf` gives null), in fixed words; null when it is one.
+export function itemProblem(data: unknown, spec: ReadSpec): string | null {
+  const title = textAt(data, spec.title)
+  if (title === undefined || title === '') return 'title not there'
+  if (spec.comments !== null && (spec.commentAuthor === null || spec.commentText === null || listAt(data, spec.comments) === null)) return 'no list of comments'
+
+  return null
+}
+
 // The labels with the four state labels taken away and the one of `state` added last.
 export function labelsAfter(labels: string[], mark: string, state: TrackerState, names: Record<TrackerState, string> | null): string[] {
   const nameOf_ = (s: TrackerState): string => names?.[s] ?? `${mark}:${s}`

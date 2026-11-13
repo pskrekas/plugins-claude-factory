@@ -5,7 +5,8 @@ import type { Job } from '../core/job'
 import { lockText } from '../core/lock'
 import { storeKey } from '../core/consent'
 import { mcpLines, parseMcpTracker } from '../core/mcp-tracker'
-import type { McpTracker } from '../core/mcp-tracker'
+import type { McpResult, McpTracker } from '../core/mcp-tracker'
+import { NO_SERVER } from '../adapters/mcp-tracker'
 import { trackerCheck } from '../hooks/commands'
 import { START, STATE, cmd, engine, fakeIo } from './kit'
 import { GOOD } from './mcp-good'
@@ -429,7 +430,7 @@ test('/factory tracker refusals and failures', async () => {
   down.mcpAnswer = null
   const failed = (await trackerCheck(down, null)).split('\n')
   expect(failed[1]?.startsWith('Queue: not read (')).toBe(true)
-  expect(failed[2]).toBe('Me: not known.')
+  expect(failed[2]).toBe(`Me: not known (${NO_SERVER('tasks')}).`)
   // A failed scan whose text is long, with newlines and a control character: one line, cut, no tail.
   const long = trackerWorld()
   const bad = `${'a\n'.repeat(125)}\u0007${'b'.repeat(10)} Tailword ${'c'.repeat(240)}`
@@ -438,10 +439,40 @@ test('/factory tracker refusals and failures', async () => {
   expect([line.startsWith('Queue: not read ('), line.includes('Tailword'), line.length <= 'Queue: not read ()'.length + 200]).toEqual([true, false, true])
   expect(line.includes('\u0007')).toBe(false)
   // An item that cannot be read.
-  expect((await trackerCheck(trackerWorld(), 'PROJ-404')).split('\n').at(-1)).toBe('PROJ-404: not read.')
+  expect((await trackerCheck(trackerWorld(), 'PROJ-404')).split('\n').at(-1)).toBe(`PROJ-404: not read (${NO_SERVER('tasks')}).`)
   // A queue id that fails the id rule is counted, not shown.
   const odd = await trackerCheck(trackerWorld({ tasks: [{ id: 'Zebrafish title!', title: 't', state: 's' }, { id: 'PROJ-1', title: 't', state: 's' }] }), null)
   expect(odd.split('\n')[1]).toBe('Queue: 1 item (PROJ-1). Claimed: 1.')
+})
+
+// Why a read failed: fixed words, or the tool's own error line, cut; never text of the item.
+test('/factory tracker says why an item or me was not read', async () => {
+  const causes: [string, unknown, string][] = [
+    ['an error', { content: [{ type: 'text', text: 'No such task.\nZebrafish title' }], isError: true }, 'PROJ-12: not read (show_task: No such task.).'],
+    ['not JSON', { content: [{ type: 'text', text: 'Zebrafish title, Quokka description' }], isError: false }, 'PROJ-12: not read (show_task: the answer is not JSON).'],
+    ['no title', { content: [{ type: 'text', text: JSON.stringify({ description: 'Quokka description', made_by: 'Wombat Author', comments: [] }) }], isError: false }, 'PROJ-12: not read (show_task: title not there).'],
+    ['no comments', { content: [{ type: 'text', text: JSON.stringify({ title: 'Zebrafish title', comments: 'Narwhal comment' }) }], isError: false }, 'PROJ-12: not read (show_task: no list of comments).'],
+  ]
+  const seen: string[] = []
+  for (const [, answer, line] of causes) {
+    const io = trackerWorld()
+    const before = io.mcpAnswer
+    io.mcpAnswer = (server, tool, args) => (tool === 'show_task' ? (answer as McpResult) : before?.(server, tool, args))
+    const text = await trackerCheck(io, 'PROJ-12')
+    expect(text.split('\n').at(-1)).toBe(line)
+    for (const word of SECRETS) expect([word, text.includes(word)]).toEqual([word, false])
+    seen.push(line)
+  }
+  expect(new Set(seen).size).toBe(causes.length)
+  // Me: the reason of its call; with no me in the settings, none.
+  const noMe = trackerWorld()
+  const before = noMe.mcpAnswer
+  noMe.mcpAnswer = (server, tool, args) => (tool === 'who_am_i' ? { content: [{ type: 'text', text: 'Signed out.' }], isError: true } : before?.(server, tool, args))
+  expect((await trackerCheck(noMe, 'PROJ-12')).split('\n')[2]).toBe('Me: not known (who_am_i: Signed out.).')
+  const { me: _, ...withoutMe } = GOOD
+  const unset = trackerWorld({ tracker: withoutMe })
+  unset.store.set(storeKey('/r/.git'), mcpLines((parseMcpTracker(withoutMe) as { ok: McpTracker }).ok, 'factory'))
+  expect((await trackerCheck(unset, 'PROJ-12')).split('\n')[2]).toBe('Me: not known.')
 })
 
 test('/factory tracker is a plain command word, not a person-only one', async ($, on) => {

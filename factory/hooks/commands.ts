@@ -272,6 +272,13 @@ export async function rejectJob(io: Io, itemId: string, reason: string): Promise
 // only counts, lengths, fixed words, ids that pass the id rule, and a failure reason.
 const TRACKER_ANSWER_MAX = 1_200
 const attempt = async <T>(work: () => Promise<T>): Promise<T | null> => work().catch(() => null)
+// The adapter's reason for its last failed read, cleaned and cut, as ` (<reason>)`; empty when it gives none.
+const because = (tracker: Tracker): string => {
+  const said = tracker.why?.()
+  const reason = typeof said === 'string' ? clean(said).trim().slice(0, 200) : ''
+
+  return reason === '' ? '' : ` (${reason})`
+}
 
 export async function trackerCheck(io: Io, id: string | null): Promise<string> {
   const ctx = await context(io)
@@ -290,11 +297,11 @@ export async function trackerCheck(io: Io, id: string | null): Promise<string> {
     lines.push(`Queue: ${listed.items.length} item${listed.items.length === 1 ? '' : 's'}${shown.length > 0 ? ` (${shown.join(', ')})` : ''}. Claimed: ${listed.claimed.length}.`)
   }
   const me = await attempt(() => tracker.me())
-  lines.push(me === null || me === '' ? 'Me: not known.' : 'Me: read.')
+  lines.push(me === null || me === '' ? `Me: not known${because(tracker)}.` : 'Me: read.')
   if (target !== null) {
     const id = target
     const item = await attempt(() => tracker.read(id, true))
-    if (item === null) lines.push(`${id}: not read.`)
+    if (item === null) lines.push(`${id}: not read${because(tracker)}.`)
     else {
       const has = await attempt(() => tracker.hasMark(id))
       const found = (value: string, word: string) => (value === '' ? `${word} not there` : `${word} found`)

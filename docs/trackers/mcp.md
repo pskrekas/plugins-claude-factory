@@ -173,8 +173,18 @@ PROJ-12: carries the mark: yes · 4 comments (2 of the author or the runner)
 - The queue line names at most three ids. The two item lines are for the first item of the queue, or for the id you gave.
 - `Queue: 0 items. Nothing to read. Is the mark right?` A label filter that names no known label often answers an empty list, not an error.
 - `Queue: not read (<reason>)`: the reason of the failed call.
-- `Me: not known.`: no `me` in the settings, or its field was not there.
-- `PROJ-12: not read.`: the read failed, the title was not there, or the comments could not be read.
+- `Me: not known (<reason>).`: the `me` call failed, for that reason. `Me: not known.` with no reason: no `me` in the settings, or its field was not there.
+- `PROJ-12: not read (<reason>).`: the read failed. The reason is the tool's own first line (`show_task: Not found.`), `show_task: the answer is not JSON`, `show_task: title not there`, `show_task: no list of comments` (or the `comments` call's tool, when there is one), `show_task: not sent (a value broke a rule)`, or one of the two server notes below. Never text of the item.
+
+A failed read looks like this:
+
+```text
+Tracker: mcp
+Queue: 4 items (PROJ-12, PROJ-14, PROJ-15). Claimed: 1.
+Me: read.
+PROJ-12: not read (show_task: title not there).
+```
+
 - The comments it counts as "of the author or the runner" are the ones an agent reads.
 - With lines that are not approved, it says so and calls nothing.
 

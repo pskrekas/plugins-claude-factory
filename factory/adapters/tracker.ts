@@ -41,4 +41,8 @@ export interface Tracker {
   comment(id: string, markdown: string): Promise<void>
   setState(id: string, state: TrackerState): Promise<void>
   linkPr(id: string, url: string): Promise<void>
+  // The reason of the adapter's last reading call that failed, or null. Fixed
+  // words or a tool's own error line, cut: never text of an item. Only a
+  // tracker that runs no command gives one (as `scan().note`).
+  why?: () => string | null
 }

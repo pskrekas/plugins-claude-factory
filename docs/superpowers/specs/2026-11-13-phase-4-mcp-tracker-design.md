@@ -26,9 +26,10 @@ read-only command.
   can make is a line the person reads in the pane, whole, and approves with
   `/factory approve`.
 - G3. The line and its commands do not change: they use the `Tracker` contract
-  (`factory/adapters/tracker.ts`), and the new adapter is one more behind it. Two
-  small changes are accepted: `scan` carries a plain note (6.7), and the pane's list
-  of lines to approve shows a long line whole (6.6).
+  (`factory/adapters/tracker.ts`), and the new adapter is one more behind it. Three
+  small changes are accepted: `scan` carries a plain note (6.7), the pane's list
+  of lines to approve shows a long line whole (6.6), and an optional `why` gives
+  `/factory tracker` the reason of a failed read (8).
 - G4. Proven on a real engine and a real MCP tracker before the phase is called done
   (section 9).
 - G5. A person can try a mapping without a write: `/factory tracker` runs the reading
@@ -313,7 +314,14 @@ For any tracker kind (it uses the contract). It never writes.
   item, each field as `found (N characters)` or `not there` (title, text, author,
   state, address), how many labels, whether it carries the mark, how many comments,
   and how many of them are the author's or the runner's.
-- For each action that failed, the reason, cut as an error text is today.
+- For each action that failed, the reason, cut as an error text is today. The
+  contract gains one optional method for it, `why?: () => string | null`: the
+  reason of the adapter's last reading call that failed, as `scan().note` is. Only
+  the MCP adapter gives one, and only fixed words or a tool's own error line, cut
+  (`<tool>: <reason>`, `<tool>: the answer is not JSON`, `<tool>: title not there`,
+  `<tool>: no list of comments`, `<tool>: not sent (a value broke a rule)`, the two
+  server notes), never text of an item. The answer prints `<id>: not read
+  (<reason>).` and `Me: not known (<reason>).`; with no reason, the lines without it.
 - With lines that are not approved, it says so and calls nothing.
 
 ## 9. Proof
