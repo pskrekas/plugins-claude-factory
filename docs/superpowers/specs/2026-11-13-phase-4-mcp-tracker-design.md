@@ -156,6 +156,12 @@ it is, after it puts values in for these six placeholders:
 | `{labels}` | The item's new list of labels. | Alone only. `states.labels` (6.5). |
 | `{state}` | `in-progress`, `needs-human`, `done` or `rejected`. | Alone, or inside a longer text. Steps of `states`. |
 
+- Some calls must hold a placeholder: `read`, `comments`, `comment`, every step of
+  `states`, `states.labels` and `linkPr` must hold `{id}` (alone or inside a text);
+  `comment` must hold `{text}`, `linkPr` `{url}` and `states.labels` `{labels}`.
+  The parser refuses a call that leaves one out, with a reason that names the key
+  and the placeholder (`comment.args: needs {id}`): such a call would act on no
+  item, or on every item.
 - "Alone" means the whole JSON value is the placeholder. The value then keeps its
   type: `{labels}` becomes a list of texts.
 - `{text}` and `{url}` never stand inside a longer text: text from outside is never

@@ -67,6 +67,18 @@ const ALLOWED: Record<Kind, readonly string[]> = {
   labels: ['mark', 'id', 'labels'],
   linkPr: ['mark', 'id', 'url'],
 }
+// Which placeholders each call must hold: without them it would act on no item, or on every one.
+const NEEDED: Record<Kind, readonly string[]> = {
+  list: [],
+  claimed: [],
+  me: [],
+  read: ['id'],
+  comments: ['id'],
+  comment: ['id', 'text'],
+  step: ['id'],
+  labels: ['id', 'labels'],
+  linkPr: ['id', 'url'],
+}
 const ALONE: readonly string[] = ['text', 'url', 'labels']
 const KNOWN: readonly string[] = ['mark', 'id', 'text', 'url', 'labels', 'state']
 
@@ -183,14 +195,26 @@ function canonical(v: Json): string {
   return text.replace(/[^\x20-\x7e]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
 }
 
-function argsOf(path: string, v: unknown, kind: Kind): Parsed<{ [key: string]: Json }> {
-  if (v === undefined) return { ok: {} }
-  if (!isObject(v)) return no(`${path}.args`, 'must be an object')
-  const problem = valueProblem(v, kind, 1)
-  if (problem) return no(`${path}.args`, problem)
-  if (canonical(v as Json).length > MAX_ARGS) return no(`${path}.args`, `more than ${MAX_ARGS} characters`)
+// The placeholders that the values of `v` hold (checked JSON, so no deeper than its limit).
+function placeholdersIn(v: Json, found: Set<string> = new Set()): Set<string> {
+  if (typeof v === 'string') for (const hit of v.match(PLACEHOLDER) ?? []) found.add(hit.slice(1, -1))
+  else if (Array.isArray(v)) v.forEach(item => placeholdersIn(item, found))
+  else if (v !== null && typeof v === 'object') Object.values(v).forEach(item => placeholdersIn(item, found))
 
-  return { ok: v as { [key: string]: Json } }
+  return found
+}
+
+function argsOf(path: string, v: unknown, kind: Kind): Parsed<{ [key: string]: Json }> {
+  const given = v === undefined ? {} : v
+  if (!isObject(given)) return no(`${path}.args`, 'must be an object')
+  const problem = valueProblem(given, kind, 1)
+  if (problem) return no(`${path}.args`, problem)
+  if (canonical(given as Json).length > MAX_ARGS) return no(`${path}.args`, `more than ${MAX_ARGS} characters`)
+  const held = placeholdersIn(given as Json)
+  const missing = NEEDED[kind].find(name => !held.has(name))
+  if (missing !== undefined) return no(`${path}.args`, `needs {${missing}}`)
+
+  return { ok: given as { [key: string]: Json } }
 }
 
 function callOf(path: string, v: unknown, keys: readonly string[], kind: Kind): Parsed<McpCall> {

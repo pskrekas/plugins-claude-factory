@@ -78,14 +78,16 @@ A settings file that says `"kind": "jira"` or `"kind": "asana"` is refused with 
 
 `args` is JSON: objects, lists, text, numbers, `true`, `false` and `null`. The plugin sends it as it is, after it puts in the values of six placeholders:
 
-| Placeholder | The value | Where it may stand | In which calls |
-| --- | --- | --- | --- |
-| `{mark}` | The mark. | Alone, or inside a longer text. | All. |
-| `{id}` | The item's id. | Alone, or inside a longer text. | All but `list`, `claimed` and `me`. |
-| `{text}` | A comment's text. | Alone only. | `comment`. |
-| `{url}` | The pull request's address. | Alone only. | `linkPr`. |
-| `{labels}` | The item's new list of labels. | Alone only. | `states.labels`. |
-| `{state}` | `in-progress`, `needs-human`, `done` or `rejected`. | Alone, or inside a longer text. | A step of `states`. |
+| Placeholder | The value | Where it may stand | In which calls | Which calls must hold it |
+| --- | --- | --- | --- | --- |
+| `{mark}` | The mark. | Alone, or inside a longer text. | All. | None. |
+| `{id}` | The item's id. | Alone, or inside a longer text. | All but `list`, `claimed` and `me`. | `read`, `comments`, `comment`, every step of `states`, `states.labels`, `linkPr`. |
+| `{text}` | A comment's text. | Alone only. | `comment`. | `comment`. |
+| `{url}` | The pull request's address. | Alone only. | `linkPr`. | `linkPr`. |
+| `{labels}` | The item's new list of labels. | Alone only. | `states.labels`. | `states.labels`. |
+| `{state}` | `in-progress`, `needs-human`, `done` or `rejected`. | Alone, or inside a longer text. | A step of `states`. | None. |
+
+A call that leaves out a placeholder it must hold is refused, with the key and the placeholder (`comment.args: needs {id}`): it would act on no item, or on every item.
 
 - "Alone" means the whole JSON value is the placeholder. The value then keeps its type: `{labels}` becomes a list of texts.
 - `{text}` and `{url}` never stand inside a longer text. Text from outside is never mixed into a query of the tracker.

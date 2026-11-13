@@ -40,8 +40,8 @@ test('the keys that are optional may be left out', async () => {
     kind: 'mcp',
     server: 'tasks',
     list: { tool: 'find', id: 'id', title: 'title' },
-    read: { tool: 'get', title: 'title', text: 'body' },
-    comment: { tool: 'add', args: { text: '{text}' } },
+    read: { tool: 'get', args: { id: '{id}' }, title: 'title', text: 'body' },
+    comment: { tool: 'add', args: { id: '{id}', text: '{text}' } },
     states: { done: [{ tool: 'close', args: { id: '{id}' } }] },
   }) as { ok: McpTracker }
   expect(ok.url).toBe(null)
@@ -136,7 +136,7 @@ test('what is refused, each with a reason that names the key', async () => {
     [with_({ url: 'https://tracker.example.com/{id}\n' }), 'url'],
     [with_({ url: 'https://tracker.example.com/a b/{id}' }), 'url'],
     [with_({ url: 'https://t.example.com/' + 'a'.repeat(300) + '{id}' }), 'url'],
-    [with_({ comments: { tool: 'c', args: {}, author: 'by' } }), 'comments.text'],
+    [with_({ comments: { tool: 'c', args: { id: '{id}' }, author: 'by' } }), 'comments.text'],
   ]
   for (const [settings, key] of cases) {
     const r = parseMcpTracker(settings)
@@ -205,7 +205,7 @@ test('the lines of the other forms', async () => {
 })
 
 test('a character that hides in a line is shown as an escape', async () => {
-  const hidden = (parseMcpTracker(with_({ comment: { tool: 'add', args: { text: '{text}', note: 'a\u202eb\u2028c' } } })) as { ok: McpTracker }).ok
+  const hidden = (parseMcpTracker(with_({ comment: { tool: 'add', args: { id: '{id}', text: '{text}', note: 'a\u202eb\u2028c' } } })) as { ok: McpTracker }).ok
   const line = mcpLines(hidden, 'factory').find(l => l.includes('· comment:')) ?? ''
   expect(line).toContain('a\\u202eb\\u2028c')
   expect(/[^\x20-\x7e]/.test(line.replace('·', ''))).toBe(false)
@@ -248,4 +248,26 @@ test('a field name is at most 200 characters in all', async () => {
   expect(reason(with_({ read: { ...GOOD.read, title: `${'b'.repeat(100)}.${'c'.repeat(100)}` } }))).toContain('read.title')
   const ok = parseMcpTracker(with_({ list: { ...GOOD.list, rows: `${'a'.repeat(99)}.${'b'.repeat(100)}` } })) as { ok: McpTracker }
   expect(ok.ok.list.rows?.length).toBe(200)
+})
+
+// A call that leaves out the value it needs would act on no item, or on every item.
+test('each call holds the placeholders it needs', async () => {
+  const cases: [Record<string, unknown>, string, string][] = [
+    [with_({ read: { ...GOOD.read, args: {} } }), 'read.args', '{id}'],
+    [with_({ comments: { tool: 'c', args: { all: true }, rows: 'items', author: 'by', text: 'text' } }), 'comments.args', '{id}'],
+    [with_({ comment: { tool: 'add_comment', args: { text: '{text}' } } }), 'comment.args', '{id}'],
+    [with_({ comment: { tool: 'add_comment', args: { task_id: '{id}' } } }), 'comment.args', '{text}'],
+    [with_({ states: { done: [step('closed'), { tool: 'close_all', args: {} }] } }), 'states.done', '{id}'],
+    [with_({ states: { labels: { tool: 'edit_item', args: { fields: { labels: '{labels}' } } } } }), 'states.labels.args', '{id}'],
+    [with_({ states: { labels: { tool: 'edit_item', args: { key: '{id}' } } } }), 'states.labels.args', '{labels}'],
+    [with_({ linkPr: { tool: 'attach_link', args: { ref: '{url}' } } }), 'linkPr.args', '{id}'],
+    [with_({ linkPr: { tool: 'attach_link', args: { task_id: '{id}' } } }), 'linkPr.args', '{url}'],
+  ]
+  for (const [settings, key, placeholder] of cases) {
+    const no = reason(settings)
+    expect([no.includes(key), no.includes(placeholder)]).toEqual([true, true])
+  }
+  // {id} inside a longer text counts; list, claimed and me need none.
+  expect('ok' in parseMcpTracker(with_({ read: { ...GOOD.read, args: { q: 'key = {id}' } } }))).toBe(true)
+  expect('ok' in parseMcpTracker(with_({ list: { ...GOOD.list, args: {} }, me: { tool: 'who_am_i', name: 'name' } }))).toBe(true)
 })
