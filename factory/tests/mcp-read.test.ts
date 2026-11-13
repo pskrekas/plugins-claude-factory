@@ -151,7 +151,13 @@ test('an item: its fields, its labels, its address', () => {
     },
     labels: ['Factory', 'bug'],
   })
-  expect(itemOf(data({ labels: [{ name: 'x' }, { name: 2 }, 'y'] }), READ, 'A-1', null)?.labels).toEqual(['x', 'y'])
+  expect(itemOf(data({ labels: [{ name: 'x' }, 'y'] }), READ, 'A-1', null)?.labels).toEqual(['x', 'y'])
+  expect(itemOf(data({ labels: [] }), READ, 'A-1', null)?.labels).toEqual([])
+  // One entry that cannot be read: the list is not known, so it is never written back.
+  for (const labels of [[{ name: 'x' }, { name: 2 }, 'y'], [12, 15], [{ id: 1, title: 'bug' }], ['x', null]]) {
+    const read = itemOf(data({ labels }), READ, 'A-1', null)
+    expect([read?.item.title, read?.labels]).toEqual(['T', null])
+  }
   expect(itemOf(data({ labels: 'no' }), READ, 'A-1', null)?.labels).toBe(null)
   expect(itemOf(data(), { ...READ, labels: null }, 'A-1', null)?.labels).toBe(null)
 })

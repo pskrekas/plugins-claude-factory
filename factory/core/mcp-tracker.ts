@@ -626,17 +626,17 @@ export function commentsOf(data: unknown, rows: string | null, author: string, t
   return out
 }
 
+// The labels, or null when the list, or any entry of it, cannot be read: a list that is
+// written back whole must be known whole, or a label the plugin could not read is lost.
 function labelsAt(data: unknown, path: string | null): string[] | null {
   if (path === null) return null
   const v = at(data, path)
   if (!Array.isArray(v)) return null
   const out: string[] = []
   for (const l of v) {
-    if (typeof l === 'string') out.push(l)
-    else {
-      const name = textAt(l, 'name')
-      if (name !== undefined) out.push(name)
-    }
+    const name = typeof l === 'string' ? l : textAt(l, 'name')
+    if (name === undefined) return null
+    out.push(name)
   }
 
   return out

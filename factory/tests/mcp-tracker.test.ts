@@ -115,6 +115,12 @@ test('states as labels: read, then write the whole list', async () => {
   const broken = server({ show_task: text('No such task.', true), edit_item: json({}) })
   await expect(mcpTracker(broken.call, specOf({ states: LABELS }), 'factory', []).setState('PROJ-12', 'done')).rejects.toThrow('show_task: the item could not be read')
   expect(broken.calls.map(([tool]) => tool)).toEqual(['show_task'])
+  // Labels that cannot be read are not written over: the write would replace them all.
+  for (const labels of [[12], [{ id: 1, title: 'bug' }]]) {
+    const unread = server({ show_task: json({ ...TASK, labels }), edit_item: json({}) })
+    await expect(mcpTracker(unread.call, specOf({ states: LABELS }), 'factory', []).setState('PROJ-12', 'done')).rejects.toThrow('show_task: the item could not be read')
+    expect(unread.calls.map(([tool]) => tool)).toEqual(['show_task'])
+  }
   // A write that the server refuses fails the move.
   const refused = server({ edit_item: text('No rights.', true) })
   await expect(mcpTracker(refused.call, specOf({ states: LABELS }), 'factory', []).setState('PROJ-12', 'done')).rejects.toThrow('edit_item: No rights.')
@@ -181,6 +187,7 @@ test('hasMark: by the labels, in any case; without labels, by the list', async (
   expect(await mcpTracker(server({ show_task: json({ ...TASK, labels: ['bug'] }) }).call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(false)
   expect(await mcpTracker(server({ show_task: json({ ...TASK, labels: 'factory' }) }).call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(false)
   expect(await mcpTracker(server({ show_task: text('x', true) }).call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(false)
+  expect(await mcpTracker(server({ show_task: json({ ...TASK, labels: ['factory', 12] }) }).call, SPEC, 'factory', []).hasMark('PROJ-12')).toBe(false)
   // No labels in the read: the item must be a row of the list or of the claimed.
   const read = { ...GOOD.read, labels: undefined }
   const s = server()

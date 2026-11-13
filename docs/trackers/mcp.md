@@ -103,7 +103,7 @@ A settings file that says `"kind": "jira"` or `"kind": "asana"` is refused with 
 - **Rows.** `rows` must end at a list (`<tool>: the answer holds no list of rows`). Without `rows`, the answer itself must be the list.
 - **An id** is a text, or a whole number that JSON holds exactly (it is read as its digits).
 - **An item.** A row with no id, or with no title, is no item. A value that is not text where text is expected is "not there".
-- **Labels** are a list of texts, or a list of objects with a `name` text.
+- **Labels** are a list of texts, or a list of objects with a `name` text. One entry that is neither (a number, an object with no `name`) makes the labels unknown: the labels form then sets no state (`<tool>: the item could not be read`), because its write would replace the labels it could not read, and the item does not carry the mark.
 - **Comments.** A comment with no author or no text is skipped. Authors are compared with no regard to case.
 - **Limits.** A queue is the first 200 rows of the answer. A title is cut to 300 characters, a text to 20,000, an author to 200. The comments read are the first 50 of the answer, in the answer's order, each cut to 5,000 characters. When a tracker gives the oldest comment first, an item with more than 50 comments loses its newest ones: use the separate `comments` call, with the tool's own order or limit argument when it has one.
 - **It fails closed.** A queue that cannot be read is no queue: the panel shows the reason and `/factory run` does not start. A claimed list that cannot be read is empty, and the queue stays as it is. An item that cannot be read, or whose comments cannot be read, is not started: its author may have answered a question there.

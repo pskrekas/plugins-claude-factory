@@ -194,7 +194,9 @@ it is, after it puts values in for these six placeholders:
   item. Text fields are cut to the limits the other adapters use. A value that is
   not text where text is expected is "not there", never `String(value)`.
 - `labels` must be a list of texts (or a list of objects with a `name` text: my
-  call, because several trackers answer so).
+  call, because several trackers answer so). One entry that is neither makes the
+  labels unknown: the labels form writes no state (the write would replace labels
+  it could not read), and the item does not carry the mark.
 - Everything fails closed: a list that cannot be read is `items: null` (the panel
   shows a note, `/factory run` does not start); an item that cannot be read is not
   started.
