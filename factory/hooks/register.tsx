@@ -15,7 +15,7 @@ import { stateBaseOf } from '../core/state-path'
 import { ancestorsOf, confirmedTop } from '../core/top'
 import { checkedSpawn, isOwnReport, onFileCall, onShell, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
 import type { Io } from './io'
-import { answerJob, rejectJob, stopLine, trackerCheck } from './commands'
+import { answerJob, jobFiles, rejectJob, stopLine, trackerCheck } from './commands'
 import { init } from './init'
 import type { Spawn } from './agent-events'
 import { whereText } from './jobs'
@@ -263,7 +263,7 @@ export const register: Register = (on, options) => {
 
     await $.command.register({
       name: 'factory',
-      description: 'Open the Factory work panel (close | init | approve | where | plan | run | stop | answer | reject | tracker)',
+      description: 'Open the Factory work panel (close | init | approve | where | plan | run | stop | answer | reject | tracker | files)',
     })
     // One quick read now, so the status line and the session brief have the
     // branch and the progress before the first prompt. It runs no `gh` and no
@@ -410,6 +410,12 @@ export const register: Register = (on, options) => {
 
       return { text: await trackerCheck(io, given === '' ? null : given) }
     }
+    // Where a job's files are. It reads names only, so it is not a person-only command.
+    if (word0(arg) === 'files') {
+      const [, given = ''] = arg.split(/\s+/)
+
+      return { text: await jobFiles(io, given === '' ? null : given) }
+    }
 
     // The commands that change the line or a job: the person's own act, like approve.
     const [word = '', id = ''] = arg.split(/\s+/)
@@ -438,7 +444,7 @@ export const register: Register = (on, options) => {
     }
 
     return {
-      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory tracker [id], /factory plan, /factory run [id], /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
+      text: 'Commands: /factory, /factory close, /factory init, /factory approve, /factory where, /factory tracker [id], /factory files [id], /factory plan, /factory run [id], /factory stop, /factory answer <id> [text], /factory reject <id> <reason>',
     }
   })
 

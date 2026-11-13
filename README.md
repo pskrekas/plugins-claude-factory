@@ -61,6 +61,7 @@ The status line shows the task id, the first progress percent, the checks and a 
 | `/factory init` | looks at the repo and writes a first `.claude/factory.json`; it never overwrites one |
 | `/factory where` | says where the factory keeps its state for this repository |
 | `/factory tracker [id]` | reads the tracker and says what the plugin understood: the size of the queue and, for the first item of the queue (or the item you name), which fields were found. It writes nothing, and its answer holds no text of an item (a failed call's own first line, cut, is shown) |
+| `/factory files [id]` | says where the files of a job are, one path on a line: the item, Intake's note, the spec, and each round's build note, checks, reviews, decision and change. It prints paths, never a file's text. With no id it names the jobs on this machine |
 | `/factory approve` | opens the pane and allows the commands it shows (see below). Only your own Enter at the prompt counts |
 | `/factory plan` | the dry run: Intake judges each item of the queue (ten at most). It builds nothing, opens no pull request and writes nothing to the tracker. The pane shows what Intake said |
 | `/factory run [id]` | runs the line: one pass over the queue as it is now (or over one item that carries the mark), and the jobs that are already there. It ends when every job is ready, waits for you, or is refused, or when a limit of the day or a full disk holds it |
@@ -177,6 +178,8 @@ The **FACTORY** section of the pane shows:
 - the size of the queue (open GitHub issues that carry the mark) and the totals of the day.
 
 The first row says who runs the line: `2 of 2 slots busy` (this session), `another session runs the line`, or `no session runs the line`; and `stopped` after `/factory stop`.
+
+**To read what an agent wrote**, run `/factory files <id>` and open a path it prints. `files/item.md` is the item as the agents see it, `files/intake.md` is Intake's decision, `files/spec.md` is the spec, and each `files/round-<n>/` folder holds that round's `build.md`, `checks.md`, `review-<kind>.md`, `decision.md`, `merge-checks.md` and `diff.patch`. The command prints paths only, because a command's answer goes to the model of your session, and these files are text that an agent wrote from the item.
 
 A job is a file, `job.json`, in a folder of its own. The plugin keeps these under your home folder, never in the repo: `~/.local/state/claude-factory/<repo>/jobs/` (or under `$XDG_STATE_HOME`). `/factory where` prints the folder for the repo you are in. The folder is named after the path of the repository, so a repo that you move to another place starts with no jobs. A `.factory/` folder that a repo brings along is never read, so a repo cannot show you jobs of its own.
 
