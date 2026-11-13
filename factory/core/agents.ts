@@ -1,22 +1,29 @@
-// The five agent types of the line: which tools each has, which model, and
-// the text a station's agent is started with. Pure.
-import { PROMPTS } from '../agents/prompts'
+// The agent types of the line: which tools each has, which model, and the
+// text a station's agent is started with. Pure.
+//
+// There are two builders (design 8.3). The builder of a job that builds in a
+// container has no shell of the person's machine: its shell is a tool of the
+// plugin, which runs each command inside the job's container. The host
+// builder has `Bash`; a job gets it only when the settings say that commands
+// run on this machine.
+import { HOST_BUILDER, PROMPTS } from '../agents/prompts'
 import { ROLES } from './factory-settings'
 import type { FactorySettings, Role, Tier } from './factory-settings'
 
 // The one place where a tier becomes a model.
 export const MODEL_OF: Record<Tier, string> = { strongest: 'opus', strong: 'sonnet', fast: 'haiku' }
 
-// Every role reads files and writes its one file. Only the builder has a
-// shell and can edit code (design 8.1).
-const READS = ['Read', 'Glob', 'Grep', 'Write'] as const
-export const TOOLS: Record<Role, readonly string[]> = {
-  intake: READS,
-  spec: READS,
-  builder: ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash'],
-  reviewer: READS,
-  approver: READS,
-}
+// Where a job's builder runs its commands.
+export type Shell = 'container' | 'host'
+// The plugin's own shell tool, as the engine names it (`mcp__<plugin>__<tool>`).
+export const SHELL_TOOL = 'mcp__factory__sh'
+
+// Every role reads files and writes its one file. Only a builder has a shell
+// and can edit code (design 8.1).
+const READS: readonly string[] = ['Read', 'Glob', 'Grep', 'Write']
+const EDITS: readonly string[] = ['Read', 'Glob', 'Grep', 'Write', 'Edit']
+export const toolsOf = (role: Role, shell: Shell): readonly string[] =>
+  role !== 'builder' ? READS : [...EDITS, shell === 'container' ? SHELL_TOOL : 'Bash']
 
 const DESCRIPTIONS: Record<Role, string> = {
   intake: 'Factory line: decides if a tracker item can be built',
@@ -26,11 +33,14 @@ const DESCRIPTIONS: Record<Role, string> = {
   approver: 'Factory line: decides if a job is ready for a person',
 }
 
-// The name the engine gives a type the plugin registered.
-export const typeOf = (role: Role): string => `factory:${role}`
+// The name the engine gives a type the plugin registered. Only the builder
+// has two types; the job's shell says which one.
+export const typeOf = (role: Role, shell: Shell): string => `factory:${role === 'builder' && shell === 'host' ? 'builder-host' : role}`
+// Every type of the line.
+export const AGENT_TYPES: readonly string[] = [...ROLES.map(role => typeOf(role, 'container')), typeOf('builder', 'host')]
 
 export type AgentSpecOf = {
-  name: Role
+  name: Role | 'builder-host'
   description: string
   prompt: string
   tools: string[]
@@ -39,16 +49,18 @@ export type AgentSpecOf = {
 }
 
 export function agentSpecs(f: FactorySettings): AgentSpecOf[] {
-  return ROLES.map(role => ({
-    name: role,
-    description: DESCRIPTIONS[role],
-    prompt: PROMPTS[role],
-    tools: [...TOOLS[role]],
+  const spec = (role: Role, shell: Shell): AgentSpecOf => ({
+    name: role === 'builder' && shell === 'host' ? 'builder-host' : role,
+    description: DESCRIPTIONS[role] + (role === 'builder' && shell === 'host' ? ' (commands run on this machine)' : ''),
+    prompt: role === 'builder' && shell === 'host' ? HOST_BUILDER : PROMPTS[role],
+    tools: [...toolsOf(role, shell)],
     model: MODEL_OF[f.models[role]],
     // A repo's own instruction file is text of the repo: an agent of the line
     // does not take it as instructions.
     omitClaudeMd: true,
-  }))
+  })
+
+  return ROLES.flatMap(role => (role === 'builder' ? [spec(role, 'container'), spec(role, 'host')] : [spec(role, 'container')]))
 }
 
 // Which reviewer: `code`, `ui`, … A part of a file name, so it is plain.

@@ -5,6 +5,7 @@ import { endWork, isActive, isFinished } from '../core/job'
 import type { Spawn } from './agent-events'
 import { context } from './context'
 import type { Ctx } from './context'
+import { dockerState, sweepContainers } from './container'
 import { gateCommands } from './gate'
 import type { Io } from './io'
 import { lockInfo, readJobs, releaseLock, retireJob, setStop, stateDirOf, takeLock, writeJob } from './jobs'
@@ -13,6 +14,7 @@ import { MAX_QUEUE, endRun, readRun, writeRun } from './run'
 import { clean } from '../core/rows'
 
 const ITEM_ID = /^[A-Za-z0-9#][A-Za-z0-9_.#-]{0,39}$/
+const BOX_NOT_APPROVED = 'the container settings are not approved'
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 // What to do about a gate that cannot run.
@@ -68,13 +70,25 @@ export async function startRun(io: Io, spawn: Spawn, only: string | null, ready:
   if (!ready.hasAgentTypes) return 'The agent types of the line are not registered. Start a new session.'
   // No gate, no factory (design 8.2): the fast checks must be there and approved.
   const gate = await gateCommands(io, ctx.root, ctx.base, 'fast')
+  if (!gate.ok && gate.why === BOX_NOT_APPROVED) return `No container, no factory: ${gate.why}. Approve them with /factory approve.`
   if (!gate.ok) return `No gate, no factory: ${gate.why}. ${gateHint(gate.why)}`
+  // No container, no factory (design 8.3): the builder and the gate run code
+  // that an agent wrote. The base branch's settings say where: in a container
+  // (then docker and the image must be there), or, by the person's own
+  // approved word, on this machine.
+  if (gate.container === null) return 'No container, no factory: set factory.container in the settings file on the base branch (an image, or false to run on this machine).'
+  if (gate.container !== false) {
+    const docker = await dockerState(io, gate.container.image)
+    if (!docker.ok) return `No container, no factory: ${docker.why.replace(/\.$/, '')}.`
+  }
   // Only a marked item runs, also when it is named: the mark is the person's own word (design 8.1).
   if (only !== null && !(await hasMark(ctx.run, only, ctx.mark))) return `${clean(only)} does not carry the mark "${ctx.mark}". Only a marked item runs.`
+  // A session that already runs the line may have a builder's command or a gate in a container now.
+  const wasMine = (await lockInfo(io, ctx.root, ctx.now)).state === 'mine'
   const lock = await takeLock(io, ctx.root, ctx.now)
   if (!lock.isHeld) return `Another session runs the line (${clean(lock.holder ?? 'unknown')}). Nothing was changed.`
   try {
-    return await begin(io, spawn, only, ctx)
+    return await begin(io, spawn, only, ctx, gate.container !== false && !wasMine)
   } catch (error) {
     // Nothing is left half-started: no run file, no lock.
     await endRun(io, ctx.root).catch(() => undefined)
@@ -84,9 +98,13 @@ export async function startRun(io: Io, spawn: Spawn, only: string | null, ready:
   }
 }
 
-async function begin(io: Io, spawn: Spawn, only: string | null, ctx: Ctx): Promise<string> {
+async function begin(io: Io, spawn: Spawn, only: string | null, ctx: Ctx, hasDocker: boolean): Promise<string> {
   if (ctx.tracker === null || ctx.mark === null) return ''
   await setStop(io, ctx.root, false)
+  // Containers that a crash, a closed session or a time limit left behind go.
+  // Only when this session did not run the line before this call: then no
+  // gate and no builder of this repository runs now.
+  if (hasDocker) await sweepContainers(io, ctx.root, []).catch(() => 0)
 
   // The jobs of an earlier session go on. An agent of theirs that is gone is
   // taken off its job, so its station starts again: this is a hook, it may.

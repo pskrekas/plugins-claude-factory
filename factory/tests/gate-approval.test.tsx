@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { storeKey } from '../core/consent'
-import { gateCommands } from '../hooks/gate'
+import { baseContainer, gateCommands } from '../hooks/gate'
 import { START, cmd, engine, fakeIo, paneText } from './kit'
 
 const SETTINGS = JSON.stringify({
@@ -53,6 +53,8 @@ test("the gate's commands are the base branch's, when they are approved", async 
     baseSha: BASE,
     // The protected paths are the base branch's too.
     protectedPaths: ['.claude/factory.json'],
+    // The base names no container.
+    container: null,
   })
   expect(await gateCommands(io, '/r', 'main', 'full')).toEqual(
     expect.objectContaining({ ok: true, commands: [['npm', 'test'], ['npm', 'run', 'build']] }),
@@ -94,5 +96,37 @@ test("a job's own settings file cannot change the gate", async () => {
   io.files['/r/.claude/factory.json'] = JSON.stringify({ gate: { fast: [['true']] } })
 
   expect(await gateCommands(io, '/r', 'main', 'fast')).toEqual(expect.objectContaining({ ok: true, commands: [['npm', 'test']] }))
+  expect(io.reads).not.toContain('/r/.claude/factory.json')
+})
+
+const BOX = { image: 'node:22', network: 'on', memory: '4g', cpus: 2 }
+const BOX_LINE = '[container] node:22 · network on · memory 4g · cpus 2'
+const HOST_LINE = '[container] none: the builder and the gate run on this machine'
+const withBox = (container: unknown) => JSON.stringify({ gate: { fast: [['npm', 'test']] }, factory: { container } })
+
+test("the container is the base branch's, and it counts only when its line is approved", async () => {
+  const gate = ['[gate] npm test']
+  expect(await gateCommands(ioWith(withBox({ image: 'node:22' }), [...gate, BOX_LINE]), '/r', 'main', 'fast')).toEqual(expect.objectContaining({ ok: true, container: BOX }))
+  expect(await gateCommands(ioWith(withBox(false), [...gate, HOST_LINE]), '/r', 'main', 'fast')).toEqual(expect.objectContaining({ ok: true, container: false }))
+  const refused = { ok: false, why: 'the container settings are not approved' }
+  expect(await gateCommands(ioWith(withBox({ image: 'node:22' }), gate), '/r', 'main', 'fast')).toEqual(refused)
+  expect(await gateCommands(ioWith(withBox(false), gate), '/r', 'main', 'fast')).toEqual(refused)
+  // Another image, or the same image with the network on when `none` was approved.
+  expect(await gateCommands(ioWith(withBox({ image: 'node:23' }), [...gate, BOX_LINE]), '/r', 'main', 'fast')).toEqual(refused)
+  expect(await gateCommands(ioWith(withBox({ image: 'node:22' }), [...gate, '[container] node:22 · network none · memory 4g · cpus 2']), '/r', 'main', 'fast')).toEqual(refused)
+
+  // The same answer for the builder's container, which needs no gate command.
+  expect(await baseContainer(ioWith(withBox({ image: 'node:22' }), [BOX_LINE]), '/r', 'main')).toEqual({ ok: true, container: BOX })
+  expect(await baseContainer(ioWith(withBox(false), [HOST_LINE]), '/r', 'main')).toEqual({ ok: true, container: false })
+  expect(await baseContainer(ioWith(SETTINGS, []), '/r', 'main')).toEqual({ ok: true, container: null })
+  expect(await baseContainer(ioWith(withBox({ image: 'node:22' }), []), '/r', 'main')).toEqual(refused)
+  expect(await baseContainer(ioWith(null, []), '/r', 'main')).toEqual({ ok: false, why: 'no settings file on main' })
+  expect(await baseContainer(ioWith(SETTINGS, []), '/r', '-x')).toEqual({ ok: false, why: 'not a branch name' })
+})
+
+test("a job's own settings file cannot change the container", async () => {
+  const io = ioWith(withBox({ image: 'node:22' }), ['[gate] npm test', BOX_LINE])
+  io.files['/r/.claude/factory.json'] = withBox({ image: 'evil:1' })
+  expect(await baseContainer(io, '/r', 'main')).toEqual({ ok: true, container: BOX })
   expect(io.reads).not.toContain('/r/.claude/factory.json')
 })

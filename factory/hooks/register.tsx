@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import { agentSpecs, typeOf } from '../core/agents'
+import { AGENT_TYPES, SHELL_TOOL, agentSpecs } from '../core/agents'
 import { briefOf } from '../core/brief'
 import { safePath } from '../core/checks'
 import { rowsOf } from '../core/layout'
@@ -10,9 +10,8 @@ import { emptyModel } from '../core/model'
 import { displayWidth } from '../core/rows'
 import { failureOf } from '../core/run'
 import { stateBaseOf } from '../core/state-path'
-import { ROLES } from '../core/factory-settings'
 import { ancestorsOf, confirmedTop } from '../core/top'
-import { checkedSpawn, isOwnReport, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
+import { checkedSpawn, isOwnReport, onFileCall, onShell, onSpawn, onToolCheck, onTurn, rememberAgent, spawnSettled } from './agent-events'
 import type { Io } from './io'
 import { answerJob, rejectJob, stopLine } from './commands'
 import { init } from './init'
@@ -36,7 +35,6 @@ const REFRESH_MS = 60_000
 const WATCH_MS = 15_000
 const NOT_READY = 'Factory is not ready. Start a new session.'
 const GIT_TOP_MS = 5_000
-const AGENT_TYPES = ROLES.map(typeOf)
 const ONLY_A_PERSON_CAN = 'Only a person can do this. Type the command at the prompt.'
 const ONLY_A_PERSON = 'Only a person can approve. Type /factory approve at the prompt.'
 
@@ -218,6 +216,26 @@ export const register: Register = (on, options) => {
       })
     }
 
+    // The builder's shell (design 8.3): a tool of the plugin. Its hook below
+    // runs each command inside the job's container.
+    await $.tool
+      .register({
+        name: 'sh',
+        description: "Factory line: runs one shell command in the container of the builder's job and answers the exit code and what the command printed. Only the builder of the factory line can use it.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            command: { type: 'string', description: 'One shell command.' },
+            timeout_ms: { type: 'number', description: 'The time limit in milliseconds: 120000 when left out, 600000 at most.' },
+          },
+          required: ['command'],
+        },
+      })
+      .catch(() => {
+        hasAgentTypes = false
+        $.ui.log("factory: the builder's shell tool could not be registered")
+      })
+
     await $.command.register({
       name: 'factory',
       description: 'Open the Factory work panel (close | init | approve | where | plan | run | stop | answer | reject)',
@@ -286,6 +304,25 @@ export const register: Register = (on, options) => {
     const verdict = io === null ? null : await onToolCheck(io, e)
 
     return verdict === null ? next(e) : verdict
+  })
+
+  // The builder's shell. The plugin answers the call itself: the command runs
+  // inside the job's container, never on this machine.
+  on('tool.call', { tool: SHELL_TOOL }, async ($, e) => {
+    if (io === null) return { deny: NOT_READY }
+    const call = e as { agentId?: string; command?: unknown; timeout_ms?: unknown }
+
+    return onShell(io, { agentId: call.agentId, command: call.command, timeout_ms: call.timeout_ms })
+  })
+
+  // A file tool of an agent whose job builds in a container never runs while
+  // a command of that job runs in its container (design 8.3). Every other
+  // call goes on unchanged; the shell tool has its own hook above.
+  on('tool.call', async ($, e, next) => {
+    const ready = io
+    if (ready === null || e.tool === SHELL_TOOL) return next(e)
+
+    return onFileCall(ready, e as { agentId?: string; tool: string; [key: string]: unknown }, () => next(e))
   })
 
   // The end of a turn. For an agent of the line it is a fact for the inbox.

@@ -21,6 +21,8 @@ test('a GitHub repo with npm scripts', async () => {
     fast: [['npm', 'install'], ['npm', 'run', 'lint'], ['npm', 'test']],
     full: [['npm', 'install'], ['npm', 'run', 'lint'], ['npm', 'test'], ['npm', 'run', 'build']],
   })
+  // Where the builder's and the gate's commands run: a container with the repo's kind of tools.
+  expect(settings.factory.container).toEqual({ image: 'node:22', network: 'on', memory: '4g', cpus: 2 })
   expect(settings.checks).toEqual([{ name: 'disk', minFreeGb: 10 }])
   expect(settings.progress?.files).toBe('docs/plans/*/progress.md')
   expect(settings.owed).toBe('.claude/owed.md')
@@ -35,6 +37,7 @@ test('a Python repo with another remote', async () => {
   expect(settings.tracker).toBe(null)
   expect(settings.baseBranch).toBe('dev')
   expect(settings.gate.fast).toEqual([['python3', '-m', 'pytest', '-q']])
+  expect(settings.factory.container).toEqual({ image: 'python:3.12', network: 'on', memory: '4g', cpus: 2 })
 })
 
 test('an unknown repo gets no gate, and a strange base branch falls back to main', async () => {
@@ -43,6 +46,8 @@ test('an unknown repo gets no gate, and a strange base branch falls back to main
   )
   expect(error).toBe(null)
   expect(settings.gate).toEqual({ fast: [], full: [] })
+  // No image is guessed: the person names one (the line does not run without).
+  expect(settings.factory.container).toBe(null)
   expect(settings.baseBranch).toBe('main')
 })
 

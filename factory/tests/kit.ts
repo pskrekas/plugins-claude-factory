@@ -107,6 +107,8 @@ export function engine(
     cwds: [] as (string | undefined)[],
     // The agent types the plugin registered, and the agents it started.
     registered: [] as { name: string; tools?: readonly string[]; model?: string }[],
+    // The tools the plugin registered.
+    tools: [] as { name: string; inputSchema?: unknown }[],
     spawned: [] as { type: string; description: string; cwd?: string }[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
   }
@@ -159,6 +161,11 @@ export function engine(
     return { value: { agent: 'factory:' + e.name } as never }
   })
   on('agent.offer', () => ({ isOffered: true }) as never)
+  on('tool.register', (_, e) => {
+    seen.tools.push(e as { name: string; inputSchema?: unknown })
+
+    return { value: { tool: 'mcp__factory__' + e.name } as never }
+  })
   on('tool.check', () => ({ decision: 'ask' }) as never)
   on('prompt.submit', (_, e) => ({ text: e.text }) as never)
   on('turn.complete', (_, e) => ({ text: e.answer }) as never)
@@ -345,7 +352,7 @@ export function fakeIo(
     failNext: null as string | null,
     // Answers for commands the fake does not act out itself (git, gh).
     answer: null as
-      | ((argv: string[]) => { exitCode: number; stdout: string; stderr?: string; isCut?: boolean } | undefined)
+      | ((argv: string[]) => { exitCode: number; stdout: string; stderr?: string; isCut?: boolean; failed?: 'timeout' | 'other' } | undefined)
       | null,
     now: async () => io.time,
     root: async () => '/r',
@@ -395,10 +402,26 @@ export function fakeIo(
       }
       const given = io.answer?.(argv)
       if (given !== undefined) {
+        // A command that ran past its time, or broke, as the real `run` reports it.
+        if (given.failed !== undefined) return { failed: given.failed }
+
         return { exitCode: given.exitCode, stdout: given.stdout, stderr: given.stderr ?? '', ...(given.isCut ? { isCut: true } : {}) }
       }
       const args = argv.filter(arg => arg !== '-p' && arg !== '-f')
       const [program, a, b] = args
+      // `find <folder> … -iname .git -print`: every entry below the folder that is named `.git`, by any case.
+      if (program === 'find' && a !== undefined) {
+        const hits = new Set<string>()
+        for (const file of Object.keys(files)) {
+          if (!file.startsWith(a + '/')) continue
+          const parts = file.slice(a.length + 1).split('/')
+          parts.forEach((part, i) => {
+            if (part.toLowerCase() === '.git') hits.add(`${a}/${parts.slice(0, i + 1).join('/')}`)
+          })
+        }
+
+        return { exitCode: 0, stdout: [...hits].sort().map(hit => hit + '\n').join(''), stderr: '' }
+      }
       // mkdir makes a folder only if nothing is there: it is the atomic step of the lock.
       if (program === 'mkdir' && a !== undefined) {
         if (argv.includes('-p') && isDir(a)) return done(true)
@@ -431,6 +454,9 @@ export function fakeIo(
       }
       if (program === 'rm' && a === '-r' && b !== undefined) {
         for (const file of Object.keys(files).filter(name => name.startsWith(b + '/'))) delete files[file]
+        // A file or a link of that name goes too.
+        delete files[b]
+        world.links?.delete(b)
         dirs.delete(b)
 
         return done(true)

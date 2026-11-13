@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { FACTORY_DEFAULTS } from '../core/factory-settings'
-import { DEFAULTS, parseSettings } from '../core/settings'
+import { FACTORY_DEFAULTS, containerLine } from '../core/factory-settings'
+import { DEFAULTS, commandsOf, parseSettings } from '../core/settings'
 
 test('no factory key gives the defaults', async () => {
   expect(parseSettings('{}').settings.factory).toEqual(FACTORY_DEFAULTS)
@@ -118,4 +118,32 @@ test('prices per model and the time one station may take', async () => {
     expect(error).not.toBe(null)
     expect(settings.factory).toEqual(FACTORY_DEFAULTS)
   }
+})
+
+test('the container: an image and its limits, or an explicit "on this machine"', async () => {
+  expect(FACTORY_DEFAULTS.container).toBe(null)
+  const container = (value: unknown) => parseSettings(JSON.stringify({ factory: { container: value } }))
+  expect([container({ image: 'node:22' }).error, container({ image: 'node:22' }).settings.factory.container]).toEqual([null, { image: 'node:22', network: 'on', memory: '4g', cpus: 2 }])
+  const full = { image: 'ghcr.io/acme/build@sha256:abc123', network: 'none', memory: '512m', cpus: 0.5 }
+  expect(container(full).settings.factory.container).toEqual(full)
+  expect([container(false).error, container(false).settings.factory.container]).toEqual([null, false])
+
+  const bad = [{ image: '--privileged' }, { image: 'a b' }, { image: '' }, { image: '.hidden' }, { image: 'x'.repeat(201) }, {}, 'node:22', true,
+    { image: 'node:22', network: 'host' }, { image: 'node:22', memory: 'lots' }, { image: 'node:22', memory: '4g; rm' }, { image: 'node:22', cpus: 0 }, { image: 'node:22', cpus: 99 }]
+  for (const value of bad) {
+    const { settings, error } = container(value)
+    expect([JSON.stringify(value), error === null, settings.factory.container]).toEqual([JSON.stringify(value), false, null])
+  }
+})
+
+test('the container is approved as its own line, also the choice to run on this machine', async () => {
+  expect(containerLine(null)).toBe(null)
+  expect(containerLine({ image: 'node:22', network: 'on', memory: '4g', cpus: 2 })).toBe('[container] node:22 · network on · memory 4g · cpus 2')
+  expect(containerLine(false)).toBe('[container] none: the builder and the gate run on this machine')
+  const settings = (factory: object) => parseSettings(JSON.stringify({ gate: { fast: [['npm', 'test']] }, checks: [{ name: 'a', run: ['x', 'y'] }], factory })).settings
+  expect(commandsOf(settings({ container: { image: 'node:22', network: 'none' } }))).toEqual(['x y', '[gate] npm test', '[container] node:22 · network none · memory 4g · cpus 2'])
+  expect(commandsOf(settings({ container: false })).at(-1)).toBe('[container] none: the builder and the gate run on this machine')
+  expect(commandsOf(settings({}))).toEqual(['x y', '[gate] npm test'])
+  // Another image, or the network turned on, is another line: it asks again.
+  expect(commandsOf(settings({ container: { image: 'node:23' } })).at(-1)).toBe('[container] node:23 · network on · memory 4g · cpus 2')
 })

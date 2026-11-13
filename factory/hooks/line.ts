@@ -24,16 +24,18 @@ import { nextStep } from '../core/step'
 import type { GateResult, Step } from '../core/step'
 import { descriptionOf } from './agent-events'
 import type { Spawn } from './agent-events'
+import { containerName } from '../core/container-args'
+import { containersGone, removeContainer } from './container'
 import { context } from './context'
 import type { Ctx } from './context'
-import { runGate } from './gate'
+import { runGate, baseContainer } from './gate'
 import { drainFacts } from './inbox'
 import type { Io } from './io'
 import { isStopped, lockInfo, readJob, readJobs, releaseLock, retireJob, stateDirOf, takeLock, writeJob } from './jobs'
 import { readInside } from './readers/files'
 import { endRun, readRun, writeRun } from './run'
 import { collect, discardOut, spendOf, writeDiff, writeItem } from './station'
-import { addPlanTree, addWorktree, baseHeadOf, dropBranch, fetchBase, headOf, pushCommit, removeCleanCopy, removeWorktree, syncBase } from './worktrees'
+import { addPlanTree, addWorktree, baseHeadOf, commitAll, dropBranch, fetchBase, headOf, pushCommit, removeCleanCopy, removeWorktree, syncBase } from './worktrees'
 
 export type Advanced = { ran: boolean; started: number; moved: number; isDone: boolean; note: string | null }
 
@@ -95,8 +97,13 @@ async function freeDiskGb(io: Io, dir: string): Promise<number | null> {
 // local branch. The job itself stays in the state folder for the rest of its
 // day: what it spent is in the day's total and under the day's limit.
 export async function tidy(io: Io, root: string, dir: string, job: Job): Promise<void> {
-  if ((await io.stat(`${dir}/worktrees/${job.id}`)) !== null) await removeWorktree(io, root, job.id).catch(() => undefined)
-  if ((await io.stat(`${dir}/gate/${job.id}`)) !== null) await removeCleanCopy(io, root, job.id).catch(() => undefined)
+  // The containers go before the folders they hold: nothing may run in a
+  // folder while git removes it. While docker does not say that they are
+  // gone, the folders stay. A job that ran on this machine asks docker nothing.
+  const isOpen = job.shell !== 'container' || (await containersGone(io, root, job.id).catch(() => false))
+  if (!isOpen) io.toast(`Factory: a container of ${clean(job.itemId)} could not be stopped. Its folders stay in ${dir}. Start Docker, then remove them.`)
+  if (isOpen && (await io.stat(`${dir}/worktrees/${job.id}`)) !== null) await removeWorktree(io, root, job.id).catch(() => undefined)
+  if (isOpen && (await io.stat(`${dir}/gate/${job.id}`)) !== null) await removeCleanCopy(io, root, job.id).catch(() => undefined)
   // The local branch goes too, so the item can run again.
   if (job.branch !== null && (await headOf(io, root, job.id)) !== null) await dropBranch(io, root, job.id).catch(() => undefined)
   for (const map of [gates, repeats, mergeAsked, fails, abandoned]) map.delete(job.id)
@@ -313,6 +320,7 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
         for (const agent of step.agents) {
           const got = await spawn({
             role: agent.role,
+            shell: job.shell,
             description: descriptionOf(agent.role, agent.focus, job.id),
             prompt: briefOf(agent.role, { jobId: job.id, itemId: job.itemId, round: job.round, focus: agent.focus, files: `${dir}/jobs/${job.id}/files`, out: `${dir}/jobs/${job.id}/out`, worktree: `${dir}/worktrees/${job.id}` }),
           })
@@ -396,6 +404,16 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
       let set = step.set ?? {}
       let judged: string | null = job.sha
       try {
+        if (job.stage === 'build' && step.to === 'gate') {
+          // Nothing of the builder runs when the plugin reads its folder: a
+          // container that a command left (it should not) is removed first,
+          // and docker must say that it is gone.
+          const box = job.shell === 'container' ? containerName('job', job.id, dir.slice(dir.lastIndexOf('/') + 1)) : null
+          if (box !== null && !(await removeContainer(io, box).catch(() => false))) throw new Error("the builder's container could not be stopped (start Docker)")
+          // The builder has no git: the plugin commits what it left, and the gate judges that commit.
+          const committed = await commitAll(io, root, job)
+          if (!committed.ok) throw new Error(`the work could not be committed (${committed.why ?? 'git failed'})`)
+        }
         if ((job.stage === 'gate' && step.to === 'review') || step.to === 'ready') {
           // What goes on is the commit the gate judged. A branch that moved is gated again.
           const sha = await headOf(io, root, job.id)
@@ -502,7 +520,15 @@ async function pass(io: Io, spawn: Spawn | null): Promise<Pass> {
       out.note = `${clean(itemId)}: the item could not be read`
       continue
     }
-    const fresh = newJob({ id: item.id, title: item.title }, ctx.now)
+    // Where the job's builder runs its commands is set here, once: the base
+    // branch's container settings, as the person approved them. Never the
+    // settings file of a working tree.
+    const box = isPlanRun ? { ok: true as const, container: false as const } : await baseContainer(io, root, ctx.base)
+    if (!box.ok || box.container === null) {
+      out.note = `${clean(itemId)}: no container (${box.ok ? 'no container is set' : box.why})`
+      continue
+    }
+    const fresh = newJob({ id: item.id, title: item.title }, ctx.now, box.container === false ? 'host' : 'container')
     // An item that ended runs again: its old job is retired first.
     const old = jobs.find(one => one.id === fresh.id)
     if (old !== undefined) {

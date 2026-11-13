@@ -5,6 +5,8 @@ import { stateFolderOf } from '../core/state-path'
 import {
   addCleanCopy,
   addWorktree,
+  commitAll,
+  healGitFile,
   changedFiles,
   headOf,
   diffText,
@@ -31,6 +33,7 @@ const GIT_DIR = '/r/.git/worktrees/' + ID
 const LINKED = { '/r/.git/HEAD': 'ref: refs/heads/main\n', [`${GIT_DIR}/gitdir`]: `${WT}/.git\n`, [`${WT}/.git`]: `gitdir: ${GIT_DIR}\n` }
 const IN_WT = `git --git-dir=${GIT_DIR} --work-tree=${WT} -c core.fsmonitor=false -c core.hooksPath=/dev/null`
 const line = (call: Parameters<typeof gitArgs>[0]) => gitArgs(call)?.join(' ') ?? null
+const MESSAGE = 'Factory: item 12, round 1'
 
 test('every git call of the factory, word for word', async () => {
   expect(branchOf(ID)).toBe('factory/12-add-dark-mode')
@@ -52,7 +55,7 @@ test('every git call of the factory, word for word', async () => {
   // A rename is shown as a file that went and a file that came: both names are checked.
   expect(line({ do: 'changed', from: BASE, to: SHA })).toBe(`git diff --name-only --no-renames -z ${BASE}...${SHA}`)
   expect(line({ do: 'uncommitted', gitDir: GIT_DIR, workTree: WT })).toBe(
-    `${IN_WT} status --porcelain --no-renames --untracked-files=all -z`,
+    `${IN_WT} status --porcelain --no-renames --untracked-files=all --ignore-submodules=all -z`,
   )
   // The tip of the job's own branch: the ref that a push sends, by its full name.
   expect(line({ do: 'head', jobId: ID })).toBe('git rev-parse --verify refs/heads/factory/12-add-dark-mode^{commit}')
@@ -62,6 +65,10 @@ test('every git call of the factory, word for word', async () => {
   // `origin/main` is not read in its place; then everything by commit id.
   expect(line({ do: 'base-head', base: 'main' })).toBe('git rev-parse --verify refs/remotes/origin/main^{commit}')
   expect(line({ do: 'show-settings', sha: BASE })).toBe(`git show ${BASE}:.claude/factory.json`)
+  // The plugin commits what the builder left: every file of the folder, under one fixed message.
+  expect(line({ do: 'add-all', gitDir: GIT_DIR, workTree: WT })).toBe(`${IN_WT} add -A`)
+  expect(line({ do: 'staged', gitDir: GIT_DIR, workTree: WT })).toBe(`${IN_WT} diff --cached --raw --no-renames --no-abbrev -z`)
+  expect(line({ do: 'commit', gitDir: GIT_DIR, workTree: WT, message: MESSAGE })).toBe(`${IN_WT} commit --no-verify --no-gpg-sign -m ${MESSAGE}`)
 })
 
 test('a commit is named by its full id only', async () => {
@@ -111,6 +118,12 @@ test('a value that breaks a rule gives no call at all', async () => {
   expect(gitArgs({ do: 'remove', path: '-rf' })).toBe(null)
   expect(gitArgs({ do: 'remove', path: '/a\nb' })).toBe(null)
   expect(gitArgs({ do: 'base-head', base: 'x..y' + ' z' })).toBe(null)
+  // A commit's message is the fixed sentence and nothing else: no word of an agent is in it.
+  for (const message of ['--amend', 'Fix the bug', `${MESSAGE}\n\nmore`, 'Factory: item 12; x, round 1', 'Factory: item 12, round 0', 'Factory: item , round 1', `${MESSAGE} `]) {
+    expect([message, gitArgs({ do: 'commit', gitDir: GIT_DIR, workTree: WT, message })]).toEqual([message, null])
+  }
+  expect(gitArgs({ do: 'commit', gitDir: GIT_DIR, workTree: WT, message: 'Factory: item PROJ-12, round 14' })?.at(-1)).toBe('Factory: item PROJ-12, round 14')
+  expect(gitArgs({ do: 'add-all', gitDir: 'relative', workTree: WT })).toBe(null)
 })
 
 test('the factory cannot force, merge into the base, or push another branch', async () => {
@@ -129,8 +142,12 @@ test('the factory cannot force, merge into the base, or push another branch', as
     gitArgs({ do: 'add-clean', path: CLEAN, sha: SHA }),
     gitArgs({ do: 'base-head', base: 'main' }),
     gitArgs({ do: 'show-settings', sha: BASE }),
+    gitArgs({ do: 'add-all', gitDir: GIT_DIR, workTree: WT }),
+    gitArgs({ do: 'staged', gitDir: GIT_DIR, workTree: WT }),
+    gitArgs({ do: 'commit', gitDir: GIT_DIR, workTree: WT, message: MESSAGE }),
   ].map(list => list ?? [])
-  const banned = ['-f', '--force-with-lease', '--mirror', '--all', '--delete', '--tags', 'reset', 'rebase', 'checkout', 'commit', 'clean']
+  expect(all.every(list => list.length > 0)).toBe(true)
+  const banned = ['-f', '--force-with-lease', '--mirror', '--all', '--delete', '--tags', 'reset', 'rebase', 'checkout', 'clean', '--amend', '--allow-empty', '-a']
   for (const list of all) {
     expect(list[0]).toBe('git')
     for (const word of list) {
@@ -147,6 +164,10 @@ test('the factory cannot force, merge into the base, or push another branch', as
   // The one merge brings the base's commit into the job's branch; nothing merges the other way.
   const merges = all.filter(list => list.includes('merge') && !list.includes('--abort'))
   expect(merges.map(list => list.slice(-3))).toEqual([['merge', '--no-edit', BASE]])
+  // The one commit is a new commit on the job's branch, in the job's worktree, under the fixed message.
+  const commits = all.filter(list => list.includes('commit'))
+  expect(commits.map(list => list.slice(-5))).toEqual([['commit', '--no-verify', '--no-gpg-sign', '-m', MESSAGE]])
+  expect(commits[0]?.slice(0, 3)).toEqual(['git', `--git-dir=${GIT_DIR}`, `--work-tree=${WT}`])
 })
 
 const git = (table: Record<string, { exitCode: number; stdout?: string; stderr?: string }>) => (argv: string[]) => {
@@ -246,7 +267,7 @@ test('sync with the base: a conflict is undone and named', async () => {
   io.answer = git({ ...REFS, 'git fetch': { exitCode: 0 }, [`${IN_WT} merge --no-edit`]: { exitCode: 1, stdout: 'CONFLICT (content): x' }, [`${IN_WT} merge --abort`]: { exitCode: 0 } })
 
   expect(await syncBase(io, '/r', ID, 'main')).toEqual({ ok: false, why: 'conflict with main' })
-  expect(io.ran).toEqual([
+  expect(io.ran.filter(line => line.startsWith("git "))).toEqual([
     'git fetch origin main',
     'git rev-parse --verify refs/remotes/origin/main^{commit}',
     `${IN_WT} merge --no-edit ${BASE}`,
@@ -298,4 +319,135 @@ test('changed files, push and remove', async () => {
   const none = fakeIo({ files: { '/r/.git/HEAD': 'x' } })
   expect(await pushCommit(none, '/r', 'not a job', SHA)).toEqual({ ok: false, why: 'not a job id or a branch name' })
   expect(none.ran).toEqual([])
+})
+
+const JOB12 = { id: ID, itemId: '12', round: 1 }
+const NEW = '0'.repeat(40)
+const raw = (mode: string, name: string) => `:000000 ${mode} ${NEW} ${SHA} A\0${name}\0`
+
+test("the plugin commits what the builder left; a clean folder gets no commit", async () => {
+  const clean = fakeIo({ files: LINKED })
+  clean.answer = git({ [`${IN_WT} status`]: { exitCode: 0, stdout: '' } })
+  expect(await commitAll(clean, '/r', JOB12)).toEqual({ ok: true, isNew: false })
+  expect(clean.ran.filter(one => one.startsWith('git '))).toEqual([`${IN_WT} status --porcelain --no-renames --untracked-files=all --ignore-submodules=all -z`])
+
+  const dirty = fakeIo({ files: LINKED })
+  dirty.answer = git({
+    [`${IN_WT} status`]: { exitCode: 0, stdout: '?? src/new.ts\0 M src/x.ts\0' },
+    [`${IN_WT} diff --cached`]: { exitCode: 0, stdout: raw('100644', 'src/new.ts') + raw('120000', 'a link') },
+    [IN_WT]: { exitCode: 0 },
+  })
+  expect(await commitAll(dirty, '/r', { id: ID, itemId: '#PROJ 12!', round: 3 })).toEqual({ ok: true, isNew: true })
+  expect(dirty.ran.filter(one => one.startsWith('git '))).toEqual([
+    `${IN_WT} status --porcelain --no-renames --untracked-files=all --ignore-submodules=all -z`,
+    `${IN_WT} add -A`,
+    `${IN_WT} diff --cached --raw --no-renames --no-abbrev -z`,
+    `${IN_WT} commit --no-verify --no-gpg-sign -m Factory: item PROJ-12, round 3`,
+  ])
+  expect(dirty.cwds.every(cwd => cwd === '/r')).toBe(true)
+})
+
+test('a git repository that the builder left inside the folder is not committed', async () => {
+  const io = fakeIo({ files: LINKED })
+  io.answer = git({
+    [`${IN_WT} status`]: { exitCode: 0, stdout: '?? sub/\0' },
+    [`${IN_WT} diff --cached`]: { exitCode: 0, stdout: raw('100644', 'src/new.ts') + raw('160000', 'sub') },
+    [IN_WT]: { exitCode: 0 },
+  })
+  expect(await commitAll(io, '/r', JOB12)).toEqual({ ok: false, why: 'the code folder holds a git repository of its own (sub): the line does not commit one' })
+  expect(io.ran.some(one => one.includes(' commit '))).toBe(false)
+})
+
+test('a commit that cannot be made says why', async () => {
+  const failing = fakeIo({ files: LINKED })
+  failing.answer = git({
+    [`${IN_WT} status`]: { exitCode: 0, stdout: ' M src/x.ts\0' },
+    [`${IN_WT} commit`]: { exitCode: 128, stderr: 'fatal: unable to write new index file' },
+    [`${IN_WT} diff --cached`]: { exitCode: 0, stdout: raw('100644', 'src/x.ts') },
+    [IN_WT]: { exitCode: 0 },
+  })
+  expect(await commitAll(failing, '/r', JOB12)).toEqual({ ok: false, why: 'git: fatal: unable to write new index file' })
+  const blind = fakeIo({ files: LINKED })
+  blind.answer = git({ [`${IN_WT} status`]: { exitCode: 128, stderr: 'fatal: bad index' } })
+  expect((await commitAll(blind, '/r', JOB12)).ok).toBe(false)
+  expect(blind.ran.some(one => one.includes(' add -A'))).toBe(false)
+  // A worktree that is not the one git made gets no call at all.
+  const odd = fakeIo({ files: { '/r/.git/HEAD': 'x', [`${WT}/.git`]: 'gitdir: /elsewhere\n' } })
+  expect(await commitAll(odd, '/r', JOB12)).toEqual({ ok: false, why: 'the worktree is not the one git made' })
+  expect(odd.ran.filter(one => one.startsWith('git '))).toEqual([])
+})
+
+test("a git repository inside the job's folder stops every git call on the folder", async () => {
+  for (const [inner, shown] of [['nested/.git/config', 'nested/.git'], ['nested/.GIT/config', 'nested/.GIT'], ['a/b/.git', 'a/b/.git'], ['.GIT/x', '.GIT']] as const) {
+    const io = fakeIo({ files: { ...LINKED, [`${WT}/${inner}`]: 'x' } })
+    io.answer = git({ ...REFS, 'git fetch': { exitCode: 0 }, [IN_WT]: { exitCode: 0 } })
+    expect([inner, await worktreeGitDir(io, '/r', ID)]).toEqual([inner, null])
+    expect(await commitAll(io, '/r', JOB12)).toEqual({ ok: false, why: `the code folder holds a git repository of its own (${shown}): the line does not commit one` })
+    expect(await uncommittedFiles(io, '/r', ID)).toBe(null)
+    expect((await syncBase(io, '/r', ID, 'main')).ok).toBe(false)
+    // Git was not started on the folder at all: a repository inside it can name a program for git to run.
+    expect(io.ran.some(line => line.startsWith(IN_WT))).toBe(false)
+  }
+  // The look itself: one fixed call, in the repo.
+  const plain = fakeIo({ files: LINKED })
+  plain.answer = git({ [IN_WT]: { exitCode: 0 } })
+  expect(await worktreeGitDir(plain, '/r', ID)).toEqual({ gitDir: GIT_DIR, workTree: WT })
+  expect(plain.ran).toEqual([`find ${WT} -mindepth 1 -iname .git -print`])
+  // A folder that cannot be listed is not used.
+  const blind = fakeIo({ files: LINKED })
+  blind.answer = argv => (argv[0] === 'find' ? { exitCode: 1, stdout: '', stderr: 'find: permission denied' } : undefined)
+  expect(await worktreeGitDir(blind, '/r', ID)).toBe(null)
+  expect(await commitAll(blind, '/r', JOB12)).toEqual({ ok: false, why: 'the worktree is not the one git made' })
+})
+
+const POINTER = `gitdir: ${GIT_DIR}\n`
+
+test("the folder's own .git file is put back when a command changed it", async () => {
+  // As git made it: nothing is touched.
+  const whole = fakeIo({ files: LINKED })
+  expect(await healGitFile(whole, '/r', WT)).toBe(true)
+  expect([whole.ran, whole.written]).toEqual([[], []])
+
+  // In its place: a git repository of the builder's own, another text, a link, or the file under another case beside a folder.
+  const hostile: [string, Record<string, string>, Set<string>?][] = [
+    ['a repository', { [`${WT}/.git/config`]: '[core]\n\tfsmonitor = /x', [`${WT}/.git/HEAD`]: 'ref: refs/heads/main' }],
+    ['another text', { [`${WT}/.git`]: 'gitdir: /somewhere/else\n' }],
+    ['more than the pointer', { [`${WT}/.git`]: `${POINTER}[core]\n` }],
+    ['a link', { [`${WT}/.git`]: 'x' }, new Set([`${WT}/.git`])],
+    ['another case', { [`${WT}/.GIT/config`]: 'x' }],
+    ['nothing', {}],
+  ]
+  for (const [what, files, links] of hostile) {
+    const base = Object.fromEntries(Object.entries(LINKED).filter(([name]) => name !== `${WT}/.git` || what === 'another case'))
+    const io = fakeIo({ files: { ...base, [`${WT}/src/a.ts`]: 'x', ...files }, links })
+    expect([what, await healGitFile(io, '/r', WT)]).toEqual([what, true])
+    // What is there now is the pointer git wrote, as a plain file, and no other `.git` of any case.
+    expect([what, io.files[`${WT}/.git`], await io.isLink(`${WT}/.git`)]).toEqual([what, POINTER, false])
+    expect([what, Object.keys(io.files).filter(name => name.toLowerCase().startsWith(`${WT}/.git/`.toLowerCase()))]).toEqual([what, []])
+    // The builder's other files are not touched, and no link is followed (the name has no `/` at its end).
+    expect(io.files[`${WT}/src/a.ts`]).toBe('x')
+    expect(io.ran.filter(line => line.startsWith('rm -r')).every(line => line.startsWith(`rm -r -f ${WT}/.`) && !line.endsWith('/'))).toBe(true)
+    // The pointer is never written to the name itself (a write follows a link): it is written in the plugin's own folder and moved into place.
+    expect([what, io.written.every(path => path.startsWith(`${WT.slice(0, WT.indexOf('/worktrees/'))}/tmp/`))]).toEqual([what, true])
+  }
+
+  // Fail closed. What is in the way cannot be removed: nothing is written.
+  const stays = fakeIo({ files: { ...LINKED, [`${WT}/.git`]: 'x' }, links: new Set([`${WT}/.git`]) })
+  stays.failNext = 'rm'
+  expect(await healGitFile(stays, '/r', WT)).toBe(false)
+  expect([stays.written, stays.files[`${WT}/.git`], stays.ran.some(line => line.startsWith('mv '))]).toEqual([[], 'x', false])
+  // The folder cannot be listed, and a link is at the name: nothing is removed and nothing is written.
+  const unlisted = fakeIo({ files: { ...LINKED, [`${WT}/.git`]: 'x' }, links: new Set([`${WT}/.git`]) })
+  unlisted.listDir = async path => (path === WT ? [] : ['12-add-dark-mode/'])
+  expect(await healGitFile(unlisted, '/r', WT)).toBe(false)
+  expect([unlisted.written, unlisted.files[`${WT}/.git`], unlisted.ran]).toEqual([[], 'x', []])
+
+  // A folder that git does not know (no folder of the repo names it): a hostile `.git` is still removed, and none is written.
+  const unknown = fakeIo({ files: { '/r/.git/HEAD': 'x', [`${WT}/.git/config`]: 'x', [`${WT}/a.ts`]: 'x' } })
+  expect(await healGitFile(unknown, '/r', WT)).toBe(false)
+  expect(Object.keys(unknown.files).some(name => name.startsWith(`${WT}/.git`))).toBe(false)
+  // A plain file there is left: the plugin's own check refuses a wrong one.
+  const plain = fakeIo({ files: { '/r/.git/HEAD': 'x', [`${WT}/.git`]: 'gitdir: x\n' } })
+  expect(await healGitFile(plain, '/r', WT)).toBe(false)
+  expect([plain.ran, plain.files[`${WT}/.git`]]).toEqual([[], 'gitdir: x\n'])
 })

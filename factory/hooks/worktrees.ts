@@ -1,8 +1,9 @@
 // A worktree and a branch per job. The worktree is in the state folder, not in
 // the repo. Every git call comes from core/git-args.ts.
 import { failureText } from '../core/comment'
-import { branchOf, gitArgs, isCommitId } from '../core/git-args'
+import { branchOf, commitMessage, gitArgs, isCommitId } from '../core/git-args'
 import type { GitCall } from '../core/git-args'
+import { clean } from '../core/rows'
 import type { RunResult } from '../core/run'
 import type { Io } from './io'
 import { stateDirOf } from './jobs'
@@ -101,8 +102,93 @@ export async function worktreeGitDir(
   const back = await pointer(io, `${real}/gitdir`)
   const [named, own] = await Promise.all([back === null || back === '' ? null : io.stat(back), io.stat(dot)])
   if (named === null || own === null || named.realPath !== own.realPath) return null
+  // A git repository inside the folder (a `.git` below the top, or a second
+  // one beside git's own by another case) can name a program in its own
+  // settings, and git would start that program when it looks into the
+  // folder. With one there, no git call is made on the folder at all.
+  const entries = await gitEntries(io, root, workTree)
+  if (entries === null || entries.length !== 1 || entries[0] !== dot) return null
 
   return { gitDir: real, workTree }
+}
+
+// Puts a folder's own `.git` file back as git made it: one plain file that
+// names the folder of the repository's git folder that names it back. A
+// command in a container can put anything in its place (a git repository of
+// its own, a link), and then a `git` that a person, the engine or a tool
+// runs in that folder would read the builder's settings and start the
+// programs they name. Called only when nothing of the job runs. Every other
+// entry named `.git`, by any case, at the top of the folder is removed.
+// False when git knows no such folder: then nothing is written, and a `.git`
+// that is not a plain file is still removed.
+export async function healGitFile(io: Io, root: string, folder: string): Promise<boolean> {
+  const here = await io.stat(folder)
+  if (here === null || here.kind !== 'dir') return false
+  const common = await consentKeyOf(io, root)
+  const home = common.endsWith('/.git') ? await io.stat(`${common}/worktrees`) : null
+  let expected: string | null = null
+  for (const entry of home === null || home.kind !== 'dir' ? [] : await io.listDir(home.realPath)) {
+    if (!entry.endsWith('/')) continue
+    const gitDir = `${home?.realPath}/${entry.slice(0, -1)}`
+    const back = await pointer(io, `${gitDir}/gitdir`)
+    const parent = back === null || !back.endsWith('/.git') ? null : await io.stat(back.slice(0, -'/.git'.length))
+    if (parent === null || parent.realPath !== here.realPath) continue
+    expected = `gitdir: ${gitDir}\n`
+    break
+  }
+  const dot = `${folder}/.git`
+  let isWhole = false
+  const entries = await io.listDir(folder)
+  // A list that does not show what is at the name cannot be trusted (the
+  // folder could not be listed): nothing is removed and nothing is written.
+  const isThere = (await io.isLink(dot)) || (await io.stat(dot)) !== null
+  if (isThere && !entries.some(entry => (entry.endsWith('/') ? entry.slice(0, -1) : entry).toLowerCase() === '.git')) return false
+  for (const entry of entries) {
+    const name = entry.endsWith('/') ? entry.slice(0, -1) : entry
+    if (name.toLowerCase() !== '.git') continue
+    const info = name === '.git' && !entry.endsWith('/') && !(await io.isLink(dot)) ? await io.stat(dot) : null
+    const isPlain = info !== null && info.kind === 'file' && info.size <= MAX_POINTER
+    // With no known pointer a plain file is left: the plugin's own check refuses a wrong one.
+    if (isPlain && expected === null) continue
+    if (isPlain && (await io.readFile(dot)) === expected) {
+      isWhole = true
+      continue
+    }
+    // By its name with no `/` at the end: a link is removed, not followed.
+    const removed = await io.run(['rm', '-r', '-f', `${folder}/${name}`], { timeoutMs: GIT_TIMEOUT_MS })
+    if ('failed' in removed || removed.exitCode !== 0) return false
+  }
+  if (expected === null) return false
+  if (isWhole) return true
+  // The pointer is never written to the name itself: a write follows a link.
+  // It is written in the plugin's own folder and put in place by one rename,
+  // and only when nothing is at the name; then what is there is checked.
+  const dir = await stateDirOf(io, root)
+  if (dir === null || (await io.isLink(dot)) || (await io.stat(dot)) !== null) return false
+  const fresh = () => Math.random().toString(36).slice(2)
+  const temp = `${dir}/tmp/${fresh()}${fresh()}.tmp`
+  await io.run(['mkdir', '-p', `${dir}/tmp`])
+  await io.writeFile(temp, expected)
+  const moved = await io.run(['mv', '-f', temp, dot])
+  const after = 'failed' in moved || moved.exitCode !== 0 || (await io.isLink(dot)) ? null : await io.stat(dot)
+  if (after === null || after.kind !== 'file' || after.realPath !== `${here.realPath}/.git` || (await io.readFile(dot)) !== expected) {
+    await io.run(['rm', '-f', temp])
+
+    return false
+  }
+
+  return true
+}
+
+const FIND_TIMEOUT_MS = 60_000
+
+// Every entry of a job's folder that is named `.git`, by any case; null when
+// the folder cannot be listed. `find` follows no link.
+async function gitEntries(io: Io, root: string, workTree: string): Promise<string[] | null> {
+  const found = await io.run(['find', workTree, '-mindepth', '1', '-iname', '.git', '-print'], { cwd: root, timeoutMs: FIND_TIMEOUT_MS })
+  if ('failed' in found || found.exitCode !== 0 || found.isCut === true) return null
+
+  return found.stdout.split('\n').filter(line => line !== '')
 }
 
 // Removes the local branch of a job that ended, so its item can run again.
@@ -227,6 +313,35 @@ export async function uncommittedFiles(io: Io, root: string, jobId: string): Pro
     .split('\0')
     .filter(entry => entry.length > 3)
     .map(entry => entry.slice(3))
+}
+
+// Commits what a job's worktree holds and its branch does not, under the
+// fixed message: the builder has no git, so the plugin makes the commit. A
+// folder with nothing new gets no commit. A git repository of its own inside
+// the folder is not committed: the gate's copy would not hold its files.
+export async function commitAll(io: Io, root: string, job: { id: string; itemId: string; round: number }): Promise<Done & { isNew?: boolean }> {
+  const tree = await worktreeGitDir(io, root, job.id)
+  if (tree === null) {
+    // Say which one, when the reason is a git repository inside the folder.
+    const path = await worktreePath(io, root, job.id)
+    const inner = path === null ? undefined : (await gitEntries(io, root, path))?.find(entry => entry !== `${path}/.git`)
+
+    return { ok: false, why: inner === undefined || path === null ? NOT_GITS : `the code folder holds a git repository of its own (${clean(inner.slice(path.length + 1)).slice(0, 100)}): the line does not commit one` }
+  }
+  const left = await git(io, root, { do: 'uncommitted', ...tree })
+  if (left === null || !passed(left)) return { ok: false, why: done(left).why ?? 'git failed' }
+  if (!('failed' in left) && left.stdout === '') return { ok: true, isNew: false }
+  const added = done(await git(io, root, { do: 'add-all', ...tree }))
+  if (!added.ok) return added
+  const staged = await git(io, root, { do: 'staged', ...tree })
+  if (staged === null || 'failed' in staged || staged.exitCode !== 0 || staged.isCut === true) return { ok: false, why: done(staged).why ?? 'what the commit holds could not be read' }
+  // Entries are `:<old mode> <new mode> <old id> <new id> <letter>`, then the name.
+  const parts = staged.stdout.split('\0')
+  const inner = parts.findIndex(part => /^:[0-7]{6} 160000 /.test(part))
+  if (inner >= 0) return { ok: false, why: `the code folder holds a git repository of its own (${(parts[inner + 1] ?? '').slice(0, 100)}): the line does not commit one` }
+  const made = done(await git(io, root, { do: 'commit', ...tree, message: commitMessage(job.itemId, job.round) }))
+
+  return made.ok ? { ok: true, isNew: true } : made
 }
 
 // The text of what commit `to` changed since it left the line of `from`, for

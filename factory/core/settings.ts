@@ -2,7 +2,7 @@
 // wrong falls back to its default and is named in `error` (the first one only).
 // Unknown keys are ignored, so a later phase's keys never break this one.
 
-import { FACTORY_DEFAULTS, parseFactory } from './factory-settings'
+import { FACTORY_DEFAULTS, containerLine, parseFactory } from './factory-settings'
 import type { FactorySettings } from './factory-settings'
 import { CONTROL_CHAR, isInside, isObject, isText } from './rules'
 
@@ -344,5 +344,7 @@ export function commandsOf(settings: Settings): string[] {
   const gate = new Set<string>()
   for (const argv of [...settings.gate.fast, ...settings.gate.full]) gate.add(GATE_MARK + lineOf(argv))
 
-  return [...[...checks].sort(), ...[...gate].sort()]
+  const container = containerLine(settings.factory.container)
+
+  return [...[...checks].sort(), ...[...gate].sort(), ...(container === null ? [] : [container])]
 }

@@ -22,15 +22,21 @@ const DIR = '/state/' + stateFolderOf('/r/.git')
 const BASE = 'f'.repeat(40)
 const SHA1 = '1'.repeat(40)
 const SHA2 = '2'.repeat(40)
-const SETTINGS = { tracker: { kind: 'github' }, gate: { fast: [['npm', 'test']], full: [['npm', 'run', 'build']] } }
+// Most tests here run the builder and the gate on this machine: the settings say so, and the person approved that.
+const SETTINGS = { tracker: { kind: 'github' }, gate: { fast: [['npm', 'test']], full: [['npm', 'run', 'build']] }, factory: { container: false as unknown } }
+const GATE_LINES = ['[gate] npm run build', '[gate] npm test']
+const HOST_LINE = '[container] none: the builder and the gate run on this machine'
+const BOX = { image: 'node:22' }
+const BOX_LINE = '[container] node:22 · network on · memory 4g · cpus 2'
+const LABEL = stateFolderOf('/r/.git')
 
 type World = ReturnType<typeof lineWorld>
-function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } = {}) {
-  const settings = JSON.stringify({ ...SETTINGS, ...opts.settings })
+function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: { factory?: object; [key: string]: unknown } } = {}) {
+  const settings = JSON.stringify({ ...SETTINGS, ...opts.settings, factory: { ...SETTINGS.factory, ...opts.settings?.factory } })
   const io = fakeIo({ files: { '/r/.git/HEAD': 'x', '/r/.claude/factory.json': settings }, remote: 'git@github.com:a/b.git', now: NOW })
-  io.store.set(storeKey('/r/.git'), ['[gate] npm run build', '[gate] npm test'])
+  io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE, BOX_LINE])
   // What the fake git, gh and npm answer; a test changes it as it goes.
-  const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isMerged: false, fail: [] as string[], list: '[]', labels: ['factory'], comments: [] as { author: { login: string }; body: string }[], onRun: null as ((line: string) => void) | null }
+  const state = { heads: [] as string[], head: SHA1, changed: 'src/a.ts\0', npm: 0, isDirty: false, hasDocker: false, containers: '', isMerged: false, fail: [] as string[], failText: 'it broke', list: '[]', labels: ['factory'], comments: [] as { author: { login: string }; body: string }[], onRun: null as ((line: string) => void) | null }
   const link = (path: string) => {
     const id = path.slice(path.lastIndexOf('/') + 1)
     io.files[`${path}/.git`] = `gitdir: /r/.git/worktrees/${id}\n`
@@ -40,7 +46,7 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
   io.answer = argv => {
     const line = argv.join(' ')
     state.onRun?.(line)
-    if (state.fail.some(start => line.startsWith(start))) return { exitCode: 1, stdout: '', stderr: 'it broke' }
+    if (state.fail.some(start => line.startsWith(start))) return { exitCode: 1, stdout: '', stderr: state.failText }
     if (line.startsWith('gh api user')) return { exitCode: 0, stdout: 'runner\n' }
     if (line.startsWith('gh issue view') && line.includes('--json labels')) return { exitCode: 0, stdout: JSON.stringify({ labels: state.labels.map(name => ({ name })) }) }
     if (line.startsWith('gh issue view')) {
@@ -56,6 +62,9 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
     if (line.startsWith('git rev-parse --verify refs/heads/')) return { exitCode: 0, stdout: (state.heads.shift() ?? state.head) + '\n' }
     if (line.startsWith('git rev-parse --verify refs/remotes/')) return { exitCode: 0, stdout: BASE + '\n' }
     if (line.startsWith('git show')) return { exitCode: 0, stdout: settings }
+    // The job's folder holds work that is not committed until the plugin commits it.
+    if (line.includes(' status --porcelain')) return { exitCode: 0, stdout: state.isDirty ? ' M src/a.ts\0' : '' }
+    if (line.includes(' commit --no-verify')) state.isDirty = false
     if (line.startsWith('git diff --name-only')) return { exitCode: 0, stdout: state.changed }
     if (line.startsWith('git diff --no-renames')) return { exitCode: 0, stdout: 'diff --git a/src/a.ts b/src/a.ts\n+x' }
     if (line.startsWith('git worktree add') && argv.includes('-b')) link(argv[3] ?? '')
@@ -65,6 +74,15 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
       for (const name of Object.keys(io.files).filter(name => name.startsWith(`${argv[4]}/`))) delete io.files[name]
     }
     if (line.startsWith('npm')) return { exitCode: state.npm, stdout: state.npm === 0 ? 'all good' : 'FAILED 2 tests' }
+    if (line === 'id -u' || line === 'id -g') return { exitCode: 0, stdout: '501\n' }
+    // Docker, when the machine has it: no container runs yet, each one is made, a command inside ends as `npm` does.
+    if (argv[0] === 'docker' && state.hasDocker) {
+      if (line.startsWith('docker inspect')) return { exitCode: 1, stdout: '', stderr: 'No such object' }
+      if (line.startsWith('docker ps')) return { exitCode: 0, stdout: state.containers }
+      if (line.startsWith('docker exec')) return { exitCode: state.npm, stdout: state.npm === 0 ? 'all good' : 'FAILED 2 tests' }
+
+      return ok
+    }
     if (line.startsWith('df ')) return { exitCode: 0, stdout: 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/x 900000000 1 500000000 1% /\n' }
 
     return argv[0] === 'git' || argv[0] === 'gh' ? ok : undefined
@@ -74,10 +92,10 @@ function lineWorld(opts: { queue?: string[]; jobs?: Job[]; settings?: object } =
     io.files[`${DIR}/worktrees/${job.id}/README.md`] = 'x'
     link(`${DIR}/worktrees/${job.id}`)
   }
-  const started: { role: Role; description: string; agentId: string }[] = []
+  const started: { role: Role; description: string; agentId: string; shell?: string }[] = []
   const spawn: Spawn = async a => {
     const agentId = `a${started.length + 1}`
-    started.push({ role: a.role, description: a.description, agentId })
+    started.push(a.shell === 'container' ? { role: a.role, description: a.description, agentId, shell: a.shell } : { role: a.role, description: a.description, agentId })
     io.agentList.push({ id: agentId, status: 'running', type: `factory:${a.role}`, description: a.description })
 
     return { agentId }
@@ -105,6 +123,7 @@ async function ends(w: World, role: Role, line: string, focus = '', file: string
 }
 const jobsOf = async (w: World) => (await readJobs(w.io, '/r')).jobs
 const jobOf = async (w: World, item: string) => (await jobsOf(w)).find(job => job.itemId === item)
+const IN_TREE = (id: string) => `git --git-dir=/r/.git/worktrees/${id} --work-tree=${DIR}/worktrees/${id} -c core.fsmonitor=false -c core.hooksPath=/dev/null`
 const lines = (w: World) => w.io.ran.filter(line => /^(git|gh|npm) /.test(line))
 const inOrder = (all: string[], wanted: string[]) => {
   let at = -1
@@ -136,8 +155,9 @@ test('one item goes from the queue to a ready pull request', async () => {
   expect([(await jobOf(w, '12'))?.stage, (await jobOf(w, '12'))?.reviewers]).toEqual(['spec', ['code']])
   await ends(w, 'spec', 'DONE')
   expect((await jobOf(w, '12'))?.stage).toBe('build')
+  w.state.isDirty = true
   await ends(w, 'builder', 'DONE')
-  // The plugin pushed, opened the draft, ran the fast gate, and started the reviewer.
+  // The plugin committed what the builder left, pushed, opened the draft, ran the fast gate, and started the reviewer.
   expect([(await jobOf(w, '12'))?.stage, (await jobOf(w, '12'))?.pr]).toEqual(['review', { number: 7, url: 'https://github.com/a/b/pull/7' }])
   expect(w.io.files[`${DIR}/jobs/${id}/files/round-1/diff.patch`]).toContain('+x')
   await ends(w, 'reviewer', 'OK', 'code')
@@ -157,6 +177,11 @@ test('one item goes from the queue to a ready pull request', async () => {
       `git worktree add ${DIR}/worktrees/${id} -b factory/${id} refs/remotes/origin/main`,
       'gh issue edit 12 --add-label factory:in-progress',
       'gh issue comment 12',
+      // The builder has no git: the plugin commits what it left, under a fixed message.
+      `${IN_TREE(id)} status --porcelain`,
+      `${IN_TREE(id)} add -A`,
+      `${IN_TREE(id)} diff --cached --raw`,
+      `${IN_TREE(id)} commit --no-verify --no-gpg-sign -m Factory: item 12, round 1`,
       // The fast gate judges the commit first; only then is it pushed and the draft opened.
       `git worktree add --detach ${DIR}/gate/${id} ${SHA1}`,
       'npm test',
@@ -164,7 +189,7 @@ test('one item goes from the queue to a ready pull request', async () => {
       `gh pr create --draft --head factory/${id} --base main --title 12: Item 12`,
       'gh issue comment 12',
       // The base is merged in, the full gate judges that commit, and that commit is pushed and marked ready.
-      `git --git-dir=/r/.git/worktrees/${id} --work-tree=${DIR}/worktrees/${id} -c core.fsmonitor=false -c core.hooksPath=/dev/null merge --no-edit ${BASE}`,
+      `${IN_TREE(id)} merge --no-edit ${BASE}`,
       `git worktree add --detach ${DIR}/gate/${id} ${SHA2}`,
       'npm run build',
       `git push origin ${SHA2}:refs/heads/factory/${id}`,
@@ -421,6 +446,23 @@ test('a push that is refused stops the job after two tries, with the reason', as
   expect(lines(w).some(line => line.startsWith('gh pr create'))).toBe(false)
 })
 
+test("work that cannot be committed stops the job in Build after two tries, and the gate does not run", async () => {
+  const w = lineWorld({ jobs: [at('12', ['spec', 'build'])] })
+  w.state.isDirty = true
+  w.state.fail = [`${IN_TREE('12-item-12')} commit`]
+  await begin(w)
+  await advance(w.io, w.spawn)
+  await ends(w, 'builder', 'DONE')
+  expect((await jobOf(w, '12'))?.stage).toBe('build')
+  await advance(w.io, w.spawn)
+  const job = await jobOf(w, '12')
+  expect([job?.stage, job?.question, job?.asker, job?.stoppedIn]).toEqual(['needs-human', 'The line could not go on: the work could not be committed (git: it broke)', 'station', 'build'])
+  expect(lines(w).filter(line => line.includes(' commit --no-verify')).length).toBe(2)
+  expect(lines(w).some(line => line.startsWith('git worktree add --detach') || line.startsWith('git push'))).toBe(false)
+  // No second builder was started for it.
+  expect(w.started.filter(one => one.role === 'builder').length).toBe(1)
+})
+
 test('a branch that changed a protected path is never pushed', async () => {
   const w = lineWorld({ jobs: [at('12', ['spec', 'build'])] })
   w.state.changed = 'src/a.ts\0.claude/factory.json\0'
@@ -557,6 +599,21 @@ test('/factory run: what it needs before it starts', async () => {
   expect(await startRun(noGate.io, noGate.spawn, null, READY)).toBe('No gate, no factory: gate commands are not approved. Approve them with /factory approve.')
   const empty = lineWorld({ settings: { gate: { fast: [], full: [] } } })
   expect(await startRun(empty.io, empty.spawn, null, READY)).toBe('No gate, no factory: no gate. Put the fast checks in gate.fast of the settings file on the base branch.')
+  // No container, no factory (design 8.3): the settings say where commands run, the person approved it, and docker is there.
+  const unset = lineWorld({ settings: { factory: { container: undefined } } })
+  expect(await startRun(unset.io, unset.spawn, null, READY)).toBe('No container, no factory: set factory.container in the settings file on the base branch (an image, or false to run on this machine).')
+  const quiet = lineWorld()
+  quiet.io.store.set(storeKey('/r/.git'), GATE_LINES)
+  expect(await startRun(quiet.io, quiet.spawn, null, READY)).toBe('No container, no factory: the container settings are not approved. Approve them with /factory approve.')
+  const noDocker = lineWorld({ settings: { factory: { container: BOX } } })
+  expect(await startRun(noDocker.io, noDocker.spawn, null, READY)).toBe('No container, no factory: docker is not on this machine.')
+  const noImage = lineWorld({ settings: { factory: { container: BOX } } })
+  noImage.state.hasDocker = true
+  noImage.state.fail = ['docker image inspect']
+  noImage.state.failText = 'Error response from daemon: No such image: node:22'
+  expect(await startRun(noImage.io, noImage.spawn, null, READY)).toBe('No container, no factory: the image node:22 is not on this machine. Run: docker pull node:22.')
+  for (const w of [unset, quiet, noDocker, noImage]) expect([w.started, await readRun(w.io, '/r'), (await lockInfo(w.io, '/r', NOW)).state]).toEqual([[], null, 'free'])
+  expect([unset, quiet, noDocker].some(w => w.io.ran.some(line => line.startsWith('docker run') || line.startsWith('docker ps')))).toBe(false)
   const noTypes = lineWorld()
   expect(await startRun(noTypes.io, noTypes.spawn, null, { hasAgentTypes: false })).toBe('The agent types of the line are not registered. Start a new session.')
   const taken = lineWorld()
@@ -725,4 +782,146 @@ test('a plan is not held up by jobs of the line that wait in their slots', async
   w.state.list = JSON.stringify([{ number: 4, title: 'Item 4', state: 'OPEN', labels: [{ name: 'factory' }] }])
   await startPlan(w.io, w.spawn, READY)
   expect([w.started.map(one => one.description), await planRows(w)]).toEqual([['factory intake 4-item-4'], [['4', 'running', null, '']]])
+})
+
+const boxOf = (kind: 'job' | 'gate', id: string) => `factory-${kind}-${id}.${LABEL}`
+const dockerOf = (w: World) => w.io.ran.filter(line => line.startsWith('docker '))
+
+test('in a container: the job says so, its builder has no shell of this machine, and the gate runs in a container of its own', async () => {
+  const w = lineWorld({ settings: { factory: { container: BOX } } })
+  w.state.hasDocker = true
+  // The person's own checkout names another image: the base branch's is the one that counts.
+  w.io.files['/r/.claude/factory.json'] = JSON.stringify({ ...SETTINGS, factory: { container: { image: 'evil:1' } } })
+  // A container that a run before this one left behind, and one that is not the factory's.
+  w.state.containers = `${boxOf('job', '9-old')}\nsomeone-elses\n`
+
+  expect(await startRun(w.io, w.spawn, '12', READY)).toBe('The line runs: 1 item in the queue, 0 jobs go on. /factory stop stops it.')
+  const id = (await jobOf(w, '12'))?.id ?? ''
+  const tree = `${DIR}/worktrees/${id}`
+  expect((await jobOf(w, '12'))?.shell).toBe('container')
+  expect(
+    inOrder(dockerOf(w), [
+      'docker image inspect --format {{.Id}} node:22',
+      `docker ps -a --filter label=factory.state=${LABEL}`,
+      `docker rm -f ${boxOf('job', '9-old')}`,
+    ]),
+  ).toBe('ok')
+  expect(dockerOf(w).some(line => line.includes('someone-elses') || line.includes('evil'))).toBe(false)
+
+  await ends(w, 'intake', 'ACCEPT risk=low surfaces=none')
+  await ends(w, 'spec', 'DONE')
+  // The builder that is started is the one with no shell of this machine.
+  expect(w.started.at(-1)).toEqual({ role: 'builder', description: `factory builder ${id}`, agentId: 'a3', shell: 'container' })
+  w.state.isDirty = true
+  await ends(w, 'builder', 'DONE')
+  expect((await jobOf(w, '12'))?.stage).toBe('review')
+  const gate = `${DIR}/gate/${id}`
+  expect(
+    inOrder(w.io.ran.filter(line => /^(git|gh|npm|docker) /.test(line)), [
+      // Nothing of the builder runs when the plugin reads its folder: a container that is left goes first.
+      `docker rm -f ${boxOf('job', id)}`,
+      `${IN_TREE(id)} status --porcelain`,
+      `${IN_TREE(id)} commit --no-verify --no-gpg-sign -m Factory: item 12, round 1`,
+      `git worktree add --detach ${gate} ${SHA1}`,
+      `docker run --pull never -d --name ${boxOf('gate', id)} `,
+      `docker exec -w ${gate} ${boxOf('gate', id)} npm test`,
+      `docker rm -f ${boxOf('gate', id)}`,
+      `git worktree remove --force ${gate}`,
+      `git push origin ${SHA1}:refs/heads/factory/${id}`,
+    ]),
+  ).toBe('ok')
+  // The gate's container holds the clean copy, not the builder's folder.
+  expect(dockerOf(w).find(line => line.startsWith(`docker run --pull never -d --name ${boxOf('gate', id)} `))?.includes(tree)).toBe(false)
+  // No command of the gate ran on this machine.
+  expect(w.io.ran.some(line => line.startsWith('npm '))).toBe(false)
+})
+
+test('a job that ends has no container', async () => {
+  const w = lineWorld({ jobs: [{ ...at('12', ['spec', 'build', 'gate', 'review', 'approve', 'ready'], { pr: { number: 7, url: 'https://github.com/a/b/pull/7' } }), shell: 'container' }], settings: { factory: { container: BOX } } })
+  w.state.hasDocker = true
+  await begin(w)
+  await watch(w.io)
+  w.state.isMerged = true
+  w.io.time += 301_000
+  await watch(w.io)
+  expect((await jobOf(w, '12'))?.stage).toBe('done')
+  expect(dockerOf(w)).toEqual([`docker rm -f ${boxOf('job', '12-item-12')}`, `docker rm -f ${boxOf('gate', '12-item-12')}`])
+  // The containers go first: nothing runs in a folder when git removes it.
+  expect(inOrder(w.io.ran, [`docker rm -f ${boxOf('job', '12-item-12')}`, `docker rm -f ${boxOf('gate', '12-item-12')}`, `git worktree remove --force ${DIR}/worktrees/12-item-12`])).toBe('ok')
+  // Docker does not confirm: the folders stay, and the person is told.
+  const stuck = lineWorld({ jobs: [{ ...at('14', ['spec', 'build', 'gate', 'review', 'approve', 'ready'], { pr: { number: 7, url: 'https://github.com/a/b/pull/7' } }), shell: 'container' }], settings: { factory: { container: BOX } } })
+  stuck.state.hasDocker = true
+  stuck.state.fail = ['docker rm']
+  await begin(stuck)
+  stuck.state.isMerged = true
+  stuck.io.time += 301_000
+  await watch(stuck.io)
+  expect((await jobOf(stuck, '14'))?.stage).toBe('done')
+  expect(lines(stuck).some(line => line.startsWith('git worktree remove'))).toBe(false)
+  expect(stuck.io.toasts).toContain(`Factory: a container of 14 could not be stopped. Its folders stay in ${DIR}. Start Docker, then remove them.`)
+  // A job that ran on this machine asks docker nothing.
+  const host = lineWorld({ jobs: [at('13', ['spec', 'build', 'gate', 'review', 'approve', 'ready'], { pr: { number: 7, url: 'https://github.com/a/b/pull/7' } })] })
+  host.state.hasDocker = true
+  await begin(host)
+  host.state.isMerged = true
+  host.io.time += 301_000
+  await watch(host.io)
+  expect([(await jobOf(host, '13'))?.stage, dockerOf(host)]).toEqual(['done', []])
+})
+
+test('an item whose container settings cannot be read is not started', async () => {
+  const w = lineWorld({ queue: ['12'], settings: { factory: { container: BOX } } })
+  w.io.store.set(storeKey('/r/.git'), GATE_LINES)
+  await begin(w)
+  const out = await advance(w.io, w.spawn)
+  expect([await jobOf(w, '12'), w.started, out.note]).toEqual([undefined, [], '12: no container (the container settings are not approved)'])
+  expect(lines(w).some(line => line.startsWith('git worktree add'))).toBe(false)
+})
+
+test("a builder's container that cannot be stopped keeps its work from being committed: after two tries the job asks", async () => {
+  const w = lineWorld({ jobs: [{ ...at('12', ['spec', 'build']), shell: 'container' }], settings: { factory: { container: BOX } } })
+  w.state.hasDocker = true
+  w.state.isDirty = true
+  w.state.fail = ['docker rm']
+  w.state.failText = 'Cannot connect to the Docker daemon'
+  await begin(w)
+  await advance(w.io, w.spawn)
+  await ends(w, 'builder', 'DONE')
+  await advance(w.io, w.spawn)
+  const job = await jobOf(w, '12')
+  expect([job?.stage, job?.question, job?.stoppedIn]).toEqual(['needs-human', "The line could not go on: the builder's container could not be stopped (start Docker)", 'build'])
+  expect(lines(w).some(line => line.includes(' add -A') || line.includes(' commit '))).toBe(false)
+})
+
+test("a reject of a job that builds in a container stops its containers before a folder is removed", async () => {
+  const job = { ...startWork(at('12', ['spec', 'build']), { agentId: 'x1', role: 'builder' as const, focus: '', startedAt: NOW }, NOW), shell: 'container' as const }
+  const w = lineWorld({ jobs: [job], settings: { factory: { container: BOX } } })
+  w.state.hasDocker = true
+  w.io.files[`${DIR}/gate/${job.id}/README.md`] = 'x'
+  expect(await rejectJob(w.io, '12', 'Not now.')).toBe('12 is rejected. The reason is on the item.')
+  expect(inOrder(w.io.ran, [`docker rm -f ${boxOf('job', job.id)}`, `docker rm -f ${boxOf('gate', job.id)}`, `git worktree remove --force ${DIR}/worktrees/${job.id}`, `git worktree remove --force ${DIR}/gate/${job.id}`])).toBe('ok')
+
+  // Docker does not confirm: the job is rejected, and its folders are left.
+  const other = { ...startWork(at('13', ['spec', 'build']), { agentId: 'x2', role: 'builder' as const, focus: '', startedAt: NOW }, NOW), shell: 'container' as const }
+  const stuck = lineWorld({ jobs: [other], settings: { factory: { container: BOX } } })
+  stuck.state.hasDocker = true
+  stuck.state.fail = ['docker rm']
+  stuck.io.files[`${DIR}/gate/${other.id}/README.md`] = 'x'
+  expect(await rejectJob(stuck.io, '13', 'Not now.')).toBe('13 is rejected. The reason is on the item. Not cleaned up: stop the containers (docker did not confirm that they are gone: start Docker; a later /factory run cleans up); remove the worktree (a container may still run in it); remove the gate\'s copy (a container may still run in it).')
+  expect(lines(stuck).some(line => line.startsWith('git worktree remove'))).toBe(false)
+  // The job stays (rejected), so that a later run tidies it.
+  expect((await jobOf(stuck, '13'))?.stage).toBe('rejected')
+})
+
+test('/factory run a second time in the session that runs the line removes no container', async () => {
+  const w = lineWorld({ settings: { factory: { container: BOX } } })
+  w.state.hasDocker = true
+  w.state.list = ISSUES
+  await startRun(w.io, w.spawn, null, READY)
+  expect(dockerOf(w).filter(line => line.startsWith('docker ps')).length).toBe(1)
+  // A builder's command or a gate may run now: a sweep would stop it.
+  w.state.containers = `${boxOf('job', '4-fonts')}\n`
+  await startRun(w.io, w.spawn, null, READY)
+  expect(dockerOf(w).filter(line => line.startsWith('docker ps')).length).toBe(1)
+  expect(dockerOf(w).some(line => line.startsWith('docker rm'))).toBe(false)
 })

@@ -3,6 +3,7 @@
 // and `move` is the only way a job changes its stage.
 import { parseAnswer } from './answer'
 import type { Answer } from './answer'
+import type { Shell } from './agents'
 import { RISKS, ROLES } from './factory-settings'
 import type { Risk, Role } from './factory-settings'
 import { isObject } from './rules'
@@ -76,6 +77,7 @@ export type Job = {
   tries: number // how often the station that runs now failed
   plan: PlanRow | null // set for a job of a dry run
   sha: string | null // the commit the fast gate judged and the reviewers read
+  shell: Shell // where the builder's commands run; set when the job is made, never changed
   history: { at: number; from: Stage | null; to: Stage; reason: string }[]
 }
 
@@ -149,7 +151,7 @@ export function jobIdOf(itemId: string, title: string): string {
   return id === '' ? 'job' : id
 }
 
-export function newJob(item: { id: string; title: string }, now: number): Job {
+export function newJob(item: { id: string; title: string }, now: number, shell: Shell = 'host'): Job {
   return {
     version: 1,
     id: jobIdOf(item.id, item.title),
@@ -182,6 +184,7 @@ export function newJob(item: { id: string; title: string }, now: number): Job {
     tries: 0,
     plan: null,
     sha: null,
+    shell,
     history: [{ at: now, from: null, to: 'intake', reason: 'started' }],
   }
 }
@@ -451,6 +454,9 @@ export function parseJob(text: string, folder: string): Job | null {
     inFlight.push({ agentId: entry.agentId, role: entry.role as Role, focus: entry.focus, startedAt: entry.startedAt })
   }
   if (!refused.every(text => typeof text === 'string')) return null
+  // A file from before the container has no shell: its builder ran on this machine.
+  const { shell = 'host' } = raw
+  if (shell !== 'container' && shell !== 'host') return null
   const { sha = null } = raw
   if (sha !== null && (typeof sha !== 'string' || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(sha))) return null
   const { plan = null } = raw
@@ -507,6 +513,7 @@ export function parseJob(text: string, folder: string): Job | null {
     results: answers,
     plan: planRow,
     sha: sha as string | null,
+    shell,
     refused: (refused as string[]).slice(-MAX_REFUSED).map(text => cut(text, MAX_COMMAND)),
     tries,
     history,
