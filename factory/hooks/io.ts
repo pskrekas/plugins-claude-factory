@@ -4,6 +4,7 @@
 // functions inside its `session.start` hook, and everything else takes an Io.
 import type { AgentInfo } from 'claude-code'
 
+import type { McpResult } from '../core/mcp-tracker'
 import type { PanelModel } from '../core/model'
 import type { RunResult } from '../core/run'
 
@@ -38,6 +39,9 @@ export type Io = {
     argv: string[],
     init?: { cwd?: string; timeoutMs?: number; stdin?: string; env?: Record<string, string> },
   ) => Promise<RunResult>
+  // Calls a tool of a connected MCP server, with a time limit. Never rejects:
+  // a call the engine refused, or one past its time, is a `failed` result.
+  mcp: (server: string, tool: string, args: Record<string, unknown>, timeoutMs: number) => Promise<McpResult>
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<void>
   getModel: () => Promise<PanelModel>

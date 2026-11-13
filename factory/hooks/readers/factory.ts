@@ -1,5 +1,5 @@
 // The factory line for the pane: the jobs on disk and the size of the queue.
-// It runs `gh` or `az` and reads the state folder: no command from the settings file.
+// It runs `gh` or `az` (or calls the tracker's approved MCP tools) and reads the state folder: no command from the settings file.
 // A place that the settings file names is asked only when approved (`adaptersOf`).
 import type { FactorySettings } from '../../core/factory-settings'
 import { isActive, isWaiting } from '../../core/job'
@@ -123,8 +123,9 @@ export const factoryReader: Reader = {
         const listed = await chosen.scan()
         queue = listed.items === null ? null : listed.items.length
         claimed = listed.claimed.map(item => item.id)
-        // A tool that is missing or not logged in is said here.
+        // A tool that is missing or not logged in, or an MCP server that did not answer, is said here.
         if (listed.items === null && chosen.kind === 'azure-boards') note ??= toolNote(listed.result, 'az')
+        if (listed.items === null && chosen.kind === 'mcp') note ??= listed.note ?? null
       }
     }
     const lock = await lockInfo(io, ctx.root, ctx.now)

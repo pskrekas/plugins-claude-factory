@@ -3,6 +3,7 @@ import type { CommandRunInput, On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { mock } from 'claude-code/testing'
 
+import type { McpResult } from '../core/mcp-tracker'
 import { emptyModel } from '../core/model'
 import { stateFolderOf } from '../core/state-path'
 import type { FactoryView, JobView, PanelModel } from '../core/model'
@@ -76,6 +77,11 @@ export function engine(
     path?: string
     // Last change of a file, for the newest-first order.
     mtimes?: Record<string, number>
+    // What the store holds at the start.
+    store?: Record<string, unknown>
+    // What an MCP tool answers (a result, or a promise of one). Undefined, or no
+    // `mcp` at all, rejects as the engine does for a tool that is not connected.
+    mcp?: (server: string, tool: string, args: Record<string, unknown>) => unknown
   },
 ) {
   const seen = {
@@ -111,8 +117,18 @@ export function engine(
     tools: [] as { name: string; inputSchema?: unknown }[],
     spawned: [] as { type: string; description: string; cwd?: string }[],
     clock: mock.clock(on, { now: world.now ?? 0 }),
+    // Every $.mcp.call: the server, the tool and the arguments.
+    mcpCalls: [] as [string, string, Record<string, unknown>][],
   }
-  mock.store(on)
+  mock.store(on, world.store)
+  on('mcp.call', async (_, e) => {
+    seen.mcpCalls.push([e.server, e.tool, e.args])
+    const answer = await world.mcp?.(e.server, e.tool, e.args)
+    // A hook that throws is skipped: a refusal is how the call rejects here.
+    if (answer === undefined) return { deny: `no connected MCP tool "${e.tool}" on a server named "${e.server}"` }
+
+    return { value: answer as never }
+  })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.version', () => ({ value: { version: '2.1.322', base: '2.1.322' } as never }))
   on('command.register', () => ({ value: { command: 'factory' } }))
@@ -489,6 +505,15 @@ export function fakeIo(
     sounds: 0,
     sound: () => {
       io.sounds += 1
+    },
+    // Every MCP call (server, tool, arguments), and what a tool answers: by
+    // default, as for a server that is not connected.
+    mcpCalls: [] as [string, string, Record<string, unknown>][],
+    mcpAnswer: null as ((server: string, tool: string, args: Record<string, unknown>) => McpResult | undefined) | null,
+    mcp: async (server: string, tool: string, args: Record<string, unknown>, _timeoutMs: number): Promise<McpResult> => {
+      io.mcpCalls.push([server, tool, args])
+
+      return io.mcpAnswer?.(server, tool, args) ?? { failed: 'no-server', why: 'no such tool on a connected server' }
     },
     // The session's agents, as the engine lists them.
     agentList: [] as { id: string; status: string; type: string; description: string }[],

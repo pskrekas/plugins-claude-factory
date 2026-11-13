@@ -123,6 +123,8 @@ async function begin(io: Io, spawn: Spawn, only: string | null, ctx: Ctx, hasDoc
   // A tracker that cannot be read (its tool is missing or not logged in) stops the start, with the reason.
   const scan = only !== null ? null : await ctx.tracker.scan()
   if (scan !== null && scan.items === null) {
+    // An MCP tracker runs no command: its own note says why.
+    if (ctx.tracker.kind === 'mcp') throw new Error(`the tracker could not be read: ${scan.note ?? 'no reason given'}`)
     const tool = ctx.tracker.kind === 'github' ? 'gh' : 'az'
     throw new Error(`the tracker could not be read: ${toolNote(scan.result, tool) ?? (scan.result === null ? 'not a mark' : failureText(tool, scan.result))}`)
   }

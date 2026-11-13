@@ -5,10 +5,12 @@ import type { Put } from '../adapters/azure-boards'
 import { azureRepos } from '../adapters/azure-repos'
 import { githubIssues, inRepo } from '../adapters/github-issues'
 import { githubPrs } from '../adapters/github-pr'
+import { mcpTracker } from '../adapters/mcp-tracker'
 import type { PrHost } from '../adapters/pr-host'
 import type { Run, Tracker } from '../adapters/tracker'
 import { azPlaceOf, boardsPlaceOf } from '../core/azure'
 import { approvedOf, storeKey } from '../core/consent'
+import { mcpLines } from '../core/mcp-tracker'
 import { clean } from '../core/rows'
 import { trackerLine } from '../core/settings'
 import type { Settings } from '../core/settings'
@@ -19,6 +21,7 @@ import { consentKeyOf } from './readers/repo'
 
 const AZ_ENV = { AZURE_EXTENSION_USE_DYNAMIC_INSTALL: 'no' }
 export const NO_AZ_PLACE = 'The remote origin names no Azure DevOps project. Set tracker.project to <organization>/<project>, or use a dev.azure.com remote.'
+export const MCP_NOT_APPROVED = "The MCP tracker's calls are not approved. Read them in the pane, then /factory approve."
 
 export type Adapters = {
   // Runs one host command in the repository; a `gh` call names the repository of `origin`.
@@ -82,6 +85,16 @@ export async function adaptersOf(io: Io, root: string, settings: Settings, timeo
     const place = boardsPlaceOf(remote, wanted.project)
     if (place === null) why = NO_AZ_PLACE
     else if (await isAllowed(codePlace === null)) tracker = azureBoards(plain, put, place, wanted.mark, settings.factory.forbiddenCommentWords)
+  }
+  // A tracker behind an MCP server: every call the settings name, and the mark,
+  // must be approved line by line before any of them is made. `$.mcp.call`
+  // asks no permission, and uses the person's own sign-in.
+  if (wanted?.kind === 'mcp' && wanted.mcp !== null) {
+    const spec = wanted.mcp
+    const approved = new Set(approvedOf(await io.storeGet(storeKey(await consentKeyOf(io, root)))))
+    if (mcpLines(spec, wanted.mark).every(line => approved.has(line))) {
+      tracker = mcpTracker((tool, args) => io.mcp(spec.server, tool, args, timeoutMs), spec, wanted.mark, settings.factory.forbiddenCommentWords)
+    } else why = MCP_NOT_APPROVED
   }
 
   return { run: codeRepo === null ? plain : inRepo(plain, codeRepo), tracker, host, why }

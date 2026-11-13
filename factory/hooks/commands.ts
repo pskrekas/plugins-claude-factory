@@ -1,5 +1,6 @@
 // The person's commands on the line and on a job: stop, answer, reject.
 // Each takes the lock first, so two sessions never change one job.
+import type { Tracker } from '../adapters/tracker'
 import { failureText } from '../core/comment'
 import type { FactorySettings } from '../core/factory-settings'
 import { grant, isFinished, move, reject, resume } from '../core/job'
@@ -145,13 +146,20 @@ async function firstFailure(steps: Step[]): Promise<string | null> {
 // The command an adapter of this kind runs, for a failure's text.
 const toolOf = (kind: 'github' | 'azure-boards' | 'azure-repos'): string => (kind === 'github' ? 'gh' : 'az')
 
+// Why a scan could not read the queue: an MCP tracker says it itself; the others are told by their command's result.
+const scanFailure = (kind: Tracker['kind'], listed: Awaited<ReturnType<Tracker['scan']>>): string => {
+  if (kind === 'mcp') return listed.note ?? 'the tracker could not be read'
+
+  return listed.result === null ? 'not a label' : failureText(toolOf(kind), listed.result)
+}
+
 // An item the tracker says is in progress, with no job here (a lost state
 // folder): the person drops it on the tracker. There is nothing here to change.
 async function rejectClaimed(ctx: Ctx, itemId: string, said: string): Promise<string> {
   if (ctx.tracker === null || ctx.mark === null || !ITEM_ID.test(itemId)) return none(itemId)
   const listed = await ctx.tracker.scan()
   if (listed.items === null) {
-    const reason = listed.result === null ? 'not a label' : failureText(toolOf(ctx.tracker.kind), listed.result)
+    const reason = scanFailure(ctx.tracker.kind, listed)
 
     return `${itemId} was not rejected: read the tracker failed (${clean(reason).slice(0, 200)}). Run the command again.`
   }

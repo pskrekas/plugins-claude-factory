@@ -1,11 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
+import { rejectedOf, resultOf } from '../adapters/mcp-tracker'
 import { AGENT_TYPES, SHELL_TOOL, agentSpecs } from '../core/agents'
 import { briefOf } from '../core/brief'
 import { safePath } from '../core/checks'
 import { rowsOf } from '../core/layout'
 import type { Tone } from '../core/layout'
+import type { McpResult } from '../core/mcp-tracker'
 import { emptyModel } from '../core/model'
 import { displayWidth } from '../core/rows'
 import { failureOf } from '../core/run'
@@ -178,6 +180,26 @@ export const register: Register = (on, options) => {
           }))
           .catch(failureOf)
       },
+      // The engine's call raced with a timer of our own. Only what the plugin
+      // reads of the result is copied (adapters/mcp-tracker.ts).
+      mcp: (server, tool, args, timeoutMs) =>
+        new Promise<McpResult>(resolve => {
+          let timer: { cancel: () => void } | null = null
+          const done = (result: McpResult) => {
+            timer?.cancel()
+            resolve(result)
+          }
+          try {
+            timer = $.clock.after(timeoutMs, () => resolve({ failed: 'timeout', why: 'no answer in time' }))
+          } catch {
+            // No timer: the call still answers, or the engine refuses it.
+          }
+          try {
+            $.mcp.call(server, tool, args).then(result => done(resultOf(result)), error => done(rejectedOf(error)))
+          } catch (error) {
+            done(rejectedOf(error))
+          }
+        }),
       storeGet: key => $.store.get(key).catch(() => undefined),
       storeSet: (key, value) => $.store.set(key, value),
       getModel: () => read($, panel),
