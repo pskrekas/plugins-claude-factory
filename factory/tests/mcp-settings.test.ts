@@ -214,3 +214,16 @@ test('a character that hides in a line is shown as an escape', async () => {
 test('a server that is close to the plugin itself is refused, a different one is not', async () => {
   for (const server of ['tasks', 'factory-tasks']) expect('ok' in parseMcpTracker(with_({ server }))).toBe(true)
 })
+
+test('the three comment keys of read go together', async () => {
+  for (const drop of [['commentAuthor'], ['commentText'], ['comments'], ['commentAuthor', 'commentText'], ['comments', 'commentText']]) {
+    const read = { ...GOOD.read }
+    for (const k of drop) delete read[k]
+    const why = reason(with_({ read }))
+    expect(why).toContain('read')
+    expect(why).toContain('together')
+  }
+  const none = { ...GOOD.read }
+  for (const k of ['comments', 'commentAuthor', 'commentText']) delete none[k]
+  expect('ok' in parseMcpTracker(with_({ read: none }))).toBe(true)
+})

@@ -230,6 +230,8 @@ function readOf(v: unknown): Parsed<ReadSpec> {
     if (isErr(f)) return f
     spec[key] = f.ok
   }
+  const trio = [spec.comments, spec.commentAuthor, spec.commentText].filter(x => x !== null).length
+  if (trio !== 0 && trio !== 3) return no('read', 'comments, commentAuthor and commentText go together: all three or none')
 
   return { ok: { ...call.ok, ...spec } as ReadSpec }
 }
@@ -506,14 +508,21 @@ export function fill(args: { [key: string]: Json }, values: Fill): { [key: strin
 
 const cut = (text: string, max: number): string => (text.length > max ? text.slice(0, max) : text)
 
+// The first text block; a `content` that is not a list has none.
+function textBlock(result: { content?: unknown }): { type: string; text?: unknown } | undefined {
+  if (!Array.isArray(result.content)) return undefined
+
+  return result.content.find((c): c is { type: string; text?: unknown } => isObject(c) && c.type === 'text')
+}
+
 // Why the call failed, as one clean line of at most 200 characters; null when it did not.
 export function errorOf(tool: string, result: McpResult): string | null {
   let reason: string
   if ('failed' in result) reason = clean(String(result.why)).trim()
   else if (!result.isError) return null
   else {
-    const block = result.content?.find(c => c?.type === 'text')
-    const lines = typeof block?.text === 'string' ? block.text.split(/\r\n|\r|\n/) : []
+    const block = textBlock(result)
+    const lines = typeof block?.text === 'string' ? block.text.slice(0, 2000).split(/\r\n|\r|\n/) : []
     reason = ''
     for (const line of lines) {
       const c = clean(line).trim()
@@ -525,7 +534,11 @@ export function errorOf(tool: string, result: McpResult): string | null {
   }
   if (reason === '') reason = 'failed'
 
-  return cut(`${tool}: ${reason}`, MAX_ERROR)
+  let line = cut(`${tool}: ${reason}`, MAX_ERROR)
+  // Never half of a surrogate pair at the end.
+  if (/[\ud800-\udbff]$/.test(line)) line = line.slice(0, -1)
+
+  return line
 }
 
 const isPlain = (v: unknown): v is Record<string, unknown> => {
@@ -539,7 +552,7 @@ const isPlain = (v: unknown): v is Record<string, unknown> => {
 export function dataOf(result: McpResult): unknown {
   if ('failed' in result || result.isError) return undefined
   if (isPlain(result.structuredContent)) return result.structuredContent
-  const block = result.content?.find(c => c?.type === 'text')
+  const block = textBlock(result)
   if (typeof block?.text !== 'string' || block.text.length > MAX_ANSWER) return undefined
   try {
     const data: unknown = JSON.parse(block.text)
@@ -552,7 +565,7 @@ export function dataOf(result: McpResult): unknown {
 
 // A dotted name, own properties of plain objects only; undefined = not there.
 export function at(data: unknown, path: string): unknown {
-  if (path === '') return undefined
+  if (!FIELD.test(path) || path.split('.').some(p => UNSAFE_PART.includes(p))) return undefined
   let cur: unknown = data
   for (const part of path.split('.')) {
     if (UNSAFE_PART.includes(part) || !isPlain(cur) || !Object.hasOwn(cur, part)) return undefined
@@ -637,7 +650,8 @@ export function itemOf(
   const title = textAt(data, spec.title)
   if (title === undefined || title === '') return null
   let comments: TrackerItem['comments'] = []
-  if (spec.comments !== null && spec.commentAuthor !== null && spec.commentText !== null) {
+  if (spec.comments !== null) {
+    if (spec.commentAuthor === null || spec.commentText === null) return null
     const c = commentsOf(data, spec.comments, spec.commentAuthor, spec.commentText)
     if (c === null) return null
     comments = c

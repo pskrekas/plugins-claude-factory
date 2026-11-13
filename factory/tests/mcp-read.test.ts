@@ -164,7 +164,7 @@ test('an item: limits and what is missing', () => {
   expect(itemOf(data({ description: undefined }), READ, 'A-1', null)?.item.text).toBe('')
   expect(itemOf(data({ comments: 'no' }), READ, 'A-1', null)).toBe(null)
   expect(itemOf(data({ comments: undefined }), READ, 'A-1', null)).toBe(null)
-  expect(itemOf(data(), { ...READ, commentText: null }, 'A-1', null)?.item.comments).toEqual([])
+  expect(itemOf(data(), { ...READ, comments: null, commentAuthor: null, commentText: null }, 'A-1', null)?.item.comments).toEqual([])
   expect(itemOf('no', READ, 'A-1', null)).toBe(null)
 })
 
@@ -181,4 +181,36 @@ test('labelsAfter: the four state labels go, the new one comes, the rest stays',
     labelsAfter(['factory', 'f-doing'], 'factory', 'rejected', { 'in-progress': 'f-doing', 'needs-human': 'f-ask', done: 'f-done', rejected: 'f-no' }),
   ).toEqual(['factory', 'f-no'])
   expect(labelsAfter(['FACTORY:DONE', 'x'], 'factory', 'done', null)).toEqual(['x', 'factory:done'])
+})
+
+test('an item with a half-set comment trio is not read', () => {
+  expect(itemOf(data(), { ...READ, commentAuthor: null }, 'A-1', null)).toBe(null)
+  expect(itemOf(data(), { ...READ, commentText: null }, 'A-1', null)).toBe(null)
+  expect(itemOf(data(), { ...READ, comments: null, commentAuthor: null, commentText: null }, 'A-1', null)?.item.comments).toEqual([])
+})
+
+test('at checks its own path', () => {
+  const x = { a: { b: 1 }, 'a-b': 1, '': 1 }
+  for (const p of ['a-b', 'a..b', '', 'a.b.c.d.e.f.g', 'a.__proto__']) expect(at(x, p)).toBe(undefined)
+  expect(at(x, 'a.b')).toBe(1)
+})
+
+test('an answer whose shape is wrong is no answer, not a crash', () => {
+  for (const content of ['x', [null, 5, { type: 'text' }]]) {
+    const r = { content, isError: true } as never
+    expect(errorOf('t', r)).toBe('t: failed')
+    expect(dataOf({ content, isError: false } as never)).toBe(undefined)
+  }
+})
+
+test('an error text is cut early and never in half of an emoji', () => {
+  const t0 = Date.now()
+  expect(errorOf('t', text('e'.repeat(2_000_000), true))?.length).toBe(200)
+  expect(Date.now() - t0).toBeLessThan(500)
+  expect(errorOf('x', text('a'.repeat(196) + '😀tail', true))).toBe('x: ' + 'a'.repeat(196))
+})
+
+test('fill: text and url never stand inside a longer text', () => {
+  expect(fill({ k: 'x {text}' }, { mark: 'm', text: 't' })).toBe(null)
+  expect(fill({ k: 'see {url}' }, { mark: 'm', url: 'https://a.example/1' })).toBe(null)
 })
