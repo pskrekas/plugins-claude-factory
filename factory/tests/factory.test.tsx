@@ -149,6 +149,7 @@ const claimedWorld = (on: Parameters<typeof engine>[0], files: Record<string, st
   engine(on, {
     files: { '/r/.claude/factory.json': '{"tracker": {"kind": "github"}}', ...files },
     run: argv => (argv[0] === 'gh' && argv[1] === 'issue' && argv[2] === 'list' ? { exitCode: 0, stdout: CLAIMED } : undefined),
+    remote: 'git@github.com:a/b.git',
     now: NOON,
   })
 
@@ -201,6 +202,7 @@ test('the queue is counted from the tracker', async ($, on) => {
   const world = engine(on, {
     files: { '/r/.claude/factory.json': '{"tracker": {"kind": "github"}}' },
     run: argv => (argv[0] === 'gh' && argv[1] === 'issue' && argv[2] === 'list' ? { exitCode: 0, stdout: ISSUES } : undefined),
+    remote: 'git@github.com:a/b.git',
     now: NOON,
   })
   await $.session.start(START)
@@ -208,6 +210,8 @@ test('the queue is counted from the tracker', async ($, on) => {
 
   await $.command.run(cmd(''))
   expect(await paneText($, 80)).toContain('QUEUE  2 items with the mark')
+  // The list names the repository of `origin`, as the line's does: in a fork gh would pick the upstream.
+  expect(world.ran.find(line => line.startsWith('gh issue list'))?.endsWith('-R a/b')).toBe(true)
 })
 
 test('a bad job file is counted, and the good one shows', async ($, on) => {

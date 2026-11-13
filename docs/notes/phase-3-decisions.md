@@ -1,7 +1,7 @@
 # Phase 3 (Azure DevOps: Boards and Repos): decisions
 
 Plan: `docs/superpowers/plans/2026-11-12-phase-3-azure-devops.md`. Built on branch
-`phase-3-azure-devops` (on top of `phase-2c-container`), 2026-11-12. 495 tests. An
+`phase-3-azure-devops` (on top of `phase-2c-container`), 2026-11-12. 496 tests. An
 automated security review read every commit; a fresh reviewer read the whole branch
 at the end, with the installed `az` code beside it.
 
@@ -38,6 +38,9 @@ JSON the adapters read is from the documentation. So:
    file arrives with a clone. It shows as a line `[tracker] …` in the pane, and
    `/factory approve` allows it, like a gate command. With an Azure DevOps remote the
    organization is always the remote's: the settings cannot name another one.
+   The pane's queue uses the same adapter as the line (`adaptersOf`), so it also asks
+   no place that is not approved (found by the security review after the push: the
+   pane's GitHub read had its own path, with no approval).
 4. **The mark and the four states are tags.** `<mark>:in-progress`, `needs-human`,
    `done`, `rejected`. An item with a state tag is not in the queue. A work item's own
    workflow state is never changed: process templates differ.

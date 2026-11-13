@@ -13,6 +13,7 @@ import { dropFact } from '../hooks/inbox'
 import { answerJob, rejectJob } from '../hooks/commands'
 import { isStopped, lockInfo, readJobs, setStop, takeLock } from '../hooks/jobs'
 import { advance, watch } from '../hooks/line'
+import { refresh } from '../hooks/refresh'
 import { readRun, writeRun } from '../hooks/run'
 import { startPlan, startRun } from '../hooks/start'
 import { fakeIo } from './kit'
@@ -1008,6 +1009,26 @@ test('on Azure DevOps a reject abandons the pull request and tags the item', asy
   expect(await rejectJob(w.io, '12', 'Not now.')).toBe('12 is rejected. The reason is on the item.')
   expect(inOrder(azOf(w), ['az boards work-item update --id 12 --discussion=@', `az repos pr show --id 7 ${AZ_TAIL}`, `az repos pr update --id 7 --status abandoned ${AZ_TAIL}`, `az boards work-item update --id 12 --fields=System.Tags=bug; factory; factory:rejected ${AZ_TAIL}`])).toBe('ok')
   expect(w.state.azSent).toContain('The factory dropped this: Not now.')
+})
+
+test('the panel asks a GitHub repository that the settings name only when it is approved', async () => {
+  const settings = { tracker: { kind: 'github', project: 'a/b' } }
+  // Not approved: the panel runs no gh for the place a cloned settings file names.
+  const quiet = lineWorld({ remote: AZ.remote, settings })
+  quiet.io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE])
+  quiet.state.list = ISSUES
+  expect((await refresh(quiet.io)).factory?.queue ?? null).toBe(null)
+  expect(quiet.io.ran.some(line => line.startsWith('gh issue list'))).toBe(false)
+  // Approved: the queue is that repository's.
+  const allowed = lineWorld({ remote: AZ.remote, settings })
+  allowed.state.list = ISSUES
+  expect((await refresh(allowed.io)).factory?.queue).toBe(2)
+  expect(allowed.io.ran.find(line => line.startsWith('gh issue list'))?.endsWith('-R a/b')).toBe(true)
+  // A GitHub remote: its own repository, with nothing to approve.
+  const own = lineWorld()
+  own.io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE])
+  own.state.list = ISSUES
+  expect((await refresh(own.io)).factory?.queue).toBe(2)
 })
 
 test('/factory run on Azure DevOps: what it needs', async () => {

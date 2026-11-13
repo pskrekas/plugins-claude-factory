@@ -1,15 +1,13 @@
 // The factory line for the pane: the jobs on disk and the size of the queue.
-// It runs `gh` or `az` and reads the state folder: no command from the settings file,
-// so it needs no approval.
-import { inRepo, listIssues } from '../../adapters/github-issues'
-import type { Run } from '../../adapters/tracker'
+// It runs `gh` or `az` and reads the state folder: no command from the settings file.
+// A place that the settings file names is asked only when approved (`adaptersOf`).
 import type { FactorySettings } from '../../core/factory-settings'
 import { isActive, isWaiting } from '../../core/job'
 import type { Job } from '../../core/job'
 import { todayOf } from '../../core/limits'
 import { countsFor } from '../../core/line'
 import type { FactoryView, JobView } from '../../core/model'
-import { githubRepoOf, toolNote } from '../../core/task'
+import { toolNote } from '../../core/task'
 import { adaptersOf } from '../adapters'
 import { isStopped, lockInfo, readJobs } from '../jobs'
 import type { Reader } from '../refresh'
@@ -117,22 +115,16 @@ export const factoryReader: Reader = {
     let claimed: string[] = []
     // The quick read at session start asks no tracker.
     const tracker = ctx.settings.tracker
-    if (!ctx.isLight && tracker?.kind === 'github') {
-      // The list is of the repository `origin` names, as the writes are.
-      const plain: Run = argv => io.run(argv, { cwd: ctx.root, timeoutMs: GH_TIMEOUT_MS })
-      const repo = githubRepoOf(await io.remote(), tracker.project)
-      const listed = await listIssues(repo === null ? plain : inRepo(plain, repo), tracker.mark)
-      queue = listed.items === null ? null : listed.items.length
-      claimed = listed.claimed.map(item => item.id)
-    } else if (!ctx.isLight && tracker !== null) {
-      // Any other tracker: the same adapter as the line's.
-      const { tracker: other } = await adaptersOf(io, ctx.root, ctx.settings, GH_TIMEOUT_MS)
-      if (other !== null) {
-        const listed = await other.scan()
+    if (!ctx.isLight && tracker !== null) {
+      // The same adapter as the line's, so the same rule: a place that the
+      // settings file names is asked only when the person approved it.
+      const { tracker: chosen } = await adaptersOf(io, ctx.root, ctx.settings, GH_TIMEOUT_MS)
+      if (chosen !== null) {
+        const listed = await chosen.scan()
         queue = listed.items === null ? null : listed.items.length
         claimed = listed.claimed.map(item => item.id)
         // A tool that is missing or not logged in is said here.
-        if (listed.items === null) note ??= toolNote(listed.result, 'az')
+        if (listed.items === null && chosen.kind === 'azure-boards') note ??= toolNote(listed.result, 'az')
       }
     }
     const lock = await lockInfo(io, ctx.root, ctx.now)
