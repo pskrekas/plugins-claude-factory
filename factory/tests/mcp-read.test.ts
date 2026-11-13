@@ -233,6 +233,15 @@ test('an error text is cut early and never in half of an emoji', () => {
   expect(errorOf('x', text('a'.repeat(196) + '😀tail', true))).toBe('x: ' + 'a'.repeat(196))
 })
 
+// An address is printable ASCII only: no control character and no character that only hides (a bidi mark, a zero-width space).
+test('an address with a character that is not printable ASCII is no address', () => {
+  for (const url of ['https://x.example.com/\u202e1', 'https://x.example.com/\u200b1', 'https://x.example.com/\u00a01', 'https://x.example.com/\u00e9']) {
+    expect(fill({ k: '{url}' }, { mark: 'm', url })).toBe(null)
+    expect(itemOf(data({ web_url: url }), { ...READ, url: 'web_url' }, 'A-1', URL_T)?.item.url).toBe('https://tracker.example.com/tasks/A-1')
+  }
+  expect(itemOf(data({ web_url: 'https://x.example.com/~a?b=1#c' }), { ...READ, url: 'web_url' }, 'A-1', URL_T)?.item.url).toBe('https://x.example.com/~a?b=1#c')
+})
+
 test('fill: text and url never stand inside a longer text', () => {
   expect(fill({ k: 'x {text}' }, { mark: 'm', text: 't' })).toBe(null)
   expect(fill({ k: 'see {url}' }, { mark: 'm', url: 'https://a.example/1' })).toBe(null)

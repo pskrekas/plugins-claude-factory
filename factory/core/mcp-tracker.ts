@@ -426,7 +426,8 @@ export type Fill = { mark: string; id?: string; text?: string; url?: string; lab
 
 // 40 characters at most: the line keeps 40 characters of an id (core/job.ts), so a longer one is no item.
 const ITEM_ID = /^[A-Za-z0-9][A-Za-z0-9_.#-]{0,39}$/
-const HTTPS = /^https:\/\/\S+$/
+// Printable ASCII only, as the `url` key: no control character and none that only hides.
+const HTTPS = /^https:\/\/[\x21-\x7e]+$/
 const MAX_ANSWER = 1_048_576
 const MAX_URL_VALUE = 2000
 const MAX_ROWS = 200

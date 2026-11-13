@@ -102,6 +102,7 @@ A settings file that says `"kind": "jira"` or `"kind": "asana"` is refused with 
 - **A field name** is dotted (`fields.summary`): one to six parts of letters, digits and `_`, at most 200 characters in all. No index and no wildcard. A part may not be `__proto__`, `constructor` or `prototype`. A part that meets a list, or a missing part, gives "not there".
 - **Rows.** `rows` must end at a list (`<tool>: the answer holds no list of rows`). Without `rows`, the answer itself must be the list.
 - **An id** is a text, or a whole number that JSON holds exactly (it is read as its digits).
+- **An address** (`read.url`, and the pull request's `{url}`) starts with `https://` and is printable ASCII only, with no space, at most 2,000 characters. An item whose address breaks this takes the `url` key's; a `{url}` that breaks it is not sent.
 - **An item.** A row with no id, or with no title, is no item. A value that is not text where text is expected is "not there".
 - **Labels** are a list of texts, or a list of objects with a `name` text. One entry that is neither (a number, an object with no `name`) makes the labels unknown: the labels form then sets no state (`<tool>: the item could not be read`), because its write would replace the labels it could not read, and the item does not carry the mark.
 - **Comments.** A comment with no author or no text is skipped. Authors are compared with no regard to case.
