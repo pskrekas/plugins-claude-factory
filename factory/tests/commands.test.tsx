@@ -476,7 +476,7 @@ test('/factory tracker says why an item or me was not read', async () => {
 })
 
 test('the registered command names every sub-command, tracker among them', async ($, on) => {
-  const w = engine(on, { now: 1_000_000 })
+  const w = engine(on, { files: {}, now: 1_000_000 })
   await $.session.start(START)
   expect(w.commands.map(c => c.description)).toEqual(['Open the Factory work panel (close | init | approve | where | plan | run | stop | answer | reject | tracker)'])
 })
