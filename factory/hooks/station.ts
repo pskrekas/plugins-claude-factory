@@ -33,9 +33,11 @@ export async function writeItem(io: Io, root: string, job: Job, item: TrackerIte
   const trusted = [item.author, person].filter((name): name is string => typeof name === 'string' && name !== '')
   const comments = item.comments.filter(comment => trusted.includes(comment.author))
   const left = item.comments.length - comments.length
-  const lines = [HEAD, '', `# Item ${oneLine(job.itemId)}`, `Author: ${oneLine(item.author).slice(0, 100)}`, '', '## Title', `> ${oneLine(item.title).slice(0, 300)}`, '', '## Text', ...quoted(item.text)]
+  // An author is other people's text too (through an MCP tracker, a free display name): quoted as the title is.
+  const author = (name: string) => quoted(oneLine(name).slice(0, 100))[0] ?? '>'
+  const lines = [HEAD, '', `# Item ${oneLine(job.itemId)}`, '', '## Author', author(item.author), '', '## Title', `> ${oneLine(item.title).slice(0, 300)}`, '', '## Text', ...quoted(item.text)]
   comments.slice(0, MAX_COMMENTS).forEach((comment, i) => {
-    lines.push('', `## Comment ${i + 1}`, `Author: ${oneLine(comment.author).slice(0, 100)}`, ...quoted(comment.text))
+    lines.push('', `## Comment ${i + 1}`, '### Author', author(comment.author), '### Text', ...quoted(comment.text))
   })
   if (left > 0) lines.push('', `${left} comment${left === 1 ? ' by another person is' : 's by other people are'} not in this file.`)
   let text = lines.join('\n')
