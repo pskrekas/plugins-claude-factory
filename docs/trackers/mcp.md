@@ -155,7 +155,7 @@ In the labels form, your `list` call must leave out the items that carry a state
 
 The JSON in a line is compact, with its keys sorted. A character of an argument that is not plain ASCII shows as `\uXXXX`, so nothing can hide in a line. The pane wraps a long line and never cuts it: scroll to the last line before you approve.
 
-**Any change needs a new approval.** A new server, tool, argument, field name, `optional`, `url` or mark is a new line. No call of the tracker runs while one of its lines is not approved: not a write, not a read, not the panel's queue. The pane and `/factory run` then say `The MCP tracker's calls are not approved. Read them in the pane, then /factory approve.` A state, `linkPr` or `me` that you remove from approved settings shows no new line: the lines that are left are all approved, and the plugin stops making that call.
+**Any change needs a new approval.** A new server, tool, argument, field name, `optional`, `url` or mark is a new line. No call of the tracker runs while one of its lines is not approved: not a write, not a read, not the panel's queue. The pane then shows `SETTINGS NOT APPROVED` and the lines, and `/factory run`, `/factory plan` and `/factory tracker` say `The MCP tracker's calls are not approved. Read them in the pane, then /factory approve.` A state, `linkPr` or `me` that you remove from approved settings shows no new line: the lines that are left are all approved, and the plugin stops making that call.
 
 **Why.** A call through an MCP server asks you nothing, and it acts with your own sign-in. A settings file arrives with a clone. `/factory approve` is the only thing between that file and your sign-in. Read each line as a call that the plugin will make in your name.
 
@@ -163,7 +163,7 @@ The JSON in a line is compact, with its keys sorted. A character of an argument 
 
 `/factory tracker` reads the tracker and says what the plugin understood. It never writes. It reads the queue, `me`, and the first item of the queue whose id passes the id rule, with its comments, then whether it carries the mark. `/factory tracker PROJ-12` reads that item instead. With an empty queue, or a queue that could not be read, a plain `/factory tracker` reads no item. Use it after each change of the settings.
 
-Its answer goes to the chat, so it holds no text of the tracker: no title, no author, no state, no address. It prints counts, ids, and for each field `found` or `not there`:
+Its answer goes to the chat, so it holds no text of an item: no title, no author, no state, no address. It prints counts, ids, for each field `found` or `not there`, and the reason of a failed call (a tool's own first line, cut, or fixed words):
 
 ```text
 Tracker: mcp
