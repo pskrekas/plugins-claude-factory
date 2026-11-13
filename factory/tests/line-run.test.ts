@@ -1071,6 +1071,13 @@ test('the job rows ask the tracker once for a new set of jobs, and never in a lo
   expect(asked(w)).toBe(2)
 })
 
+test('the panel knows the model of each station, from the settings', async () => {
+  const w = lineWorld({ jobs: [at('12', ['spec'])] })
+  expect((await refresh(w.io)).factory?.models).toEqual({ intake: 'opus', spec: 'sonnet', builder: 'sonnet', reviewer: 'sonnet', approver: 'sonnet' })
+  const other = lineWorld({ jobs: [at('12', ['spec'])], settings: { factory: { models: { intake: 'strong', builder: 'fast' } } } })
+  expect((await refresh(other.io)).factory?.models).toEqual({ intake: 'sonnet', spec: 'sonnet', builder: 'haiku', reviewer: 'sonnet', approver: 'sonnet' })
+})
+
 test('with the pane not on screen the job rows are not read', async () => {
   const w = lineWorld({ jobs: [at('12', ['spec'])] })
   w.io.isPaneDrawn = async () => false

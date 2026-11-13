@@ -161,6 +161,7 @@ The **FACTORY** section of the pane shows:
 
 ```
  Queue -> Intake -> Spec -> Build -> Gate -> Review -> Approve -> You
+          opus      sonnet  sonnet   code    sonnet    sonnet
    4        0        0        1       0        1          0        2
                               ^       │        │
                               ├─fail──┘        │
@@ -168,6 +169,8 @@ The **FACTORY** section of the pane shows:
 ```
 
 - the stations, with the number of jobs at each one, and the two loops back to Build (lit while a job is on them);
+- under each station's name, the model of its agent (`factory.models` in the settings chooses a tier for each role: `strongest` is `opus`, `strong` is `sonnet`, `fast` is `haiku`). The gate has no model: it is the plugin's own code. In a narrow pane this is one row, `opus I · sonnet S B R A`;
+- the job rows follow a job as it moves: they are read again from the job files after every end of a turn and every 15 seconds, without a call to the tracker. The rest of the pane is read once a minute;
 - one row per running job: a cell for each station (`done`, `now`, `fail`, `changes`), then what runs now (`builder runs · 4 m`), its round, who sent it back, its time and its cost;
 - **NEEDS YOU**: the jobs that wait for a person (a question, or a pull request to merge), and the items the tracker says are in progress that have no job on this machine (a lost state folder, or another machine runs them);
 - **PLAN**: after `/factory plan`, what Intake said of each item, and how many would run;

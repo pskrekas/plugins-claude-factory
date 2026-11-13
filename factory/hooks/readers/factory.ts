@@ -1,6 +1,7 @@
 // The factory line for the pane: the jobs on disk and the size of the queue.
 // It runs `gh` or `az` (or calls the tracker's approved MCP tools) and reads the state folder: no command from the settings file.
 // A place that the settings file names is asked only when approved (`adaptersOf`).
+import { MODEL_OF } from '../../core/agents'
 import type { FactorySettings } from '../../core/factory-settings'
 import { isActive, isWaiting } from '../../core/job'
 import type { Job } from '../../core/job'
@@ -104,6 +105,7 @@ export function viewOf(
     isStopped: line.isStopped,
     claimed,
     plan,
+    models: { intake: MODEL_OF[f.models.intake], spec: MODEL_OF[f.models.spec], builder: MODEL_OF[f.models.builder], reviewer: MODEL_OF[f.models.reviewer], approver: MODEL_OF[f.models.approver] },
   }
 }
 

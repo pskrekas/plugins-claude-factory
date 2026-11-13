@@ -574,6 +574,7 @@ export const VIEW: FactoryView = {
   isStopped: false,
   claimed: [],
   plan: [],
+  models: { intake: 'opus', spec: 'sonnet', builder: 'sonnet', reviewer: 'haiku', approver: 'sonnet' },
 }
 
 // Where the factory keeps the state of the repo at /r: under the person's home
