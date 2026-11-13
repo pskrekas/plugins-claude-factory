@@ -10,7 +10,7 @@ import type { Job, Stage } from '../core/job'
 import { stateFolderOf } from '../core/state-path'
 import type { Spawn } from '../hooks/agent-events'
 import { dropFact } from '../hooks/inbox'
-import { answerJob, rejectJob } from '../hooks/commands'
+import { answerJob, rejectJob, trackerCheck } from '../hooks/commands'
 import { isStopped, lockInfo, readJobs, setStop, takeLock } from '../hooks/jobs'
 import { advance, watch } from '../hooks/line'
 import { refresh } from '../hooks/refresh'
@@ -1050,7 +1050,11 @@ test('/factory run on Azure DevOps: what it needs', async () => {
   for (const settings of [{ tracker: { kind: 'azure-boards', project: 'acme/Shop' } }, { tracker: { kind: 'github', project: 'a/b' } }]) {
     const quiet = lineWorld({ remote: settings.tracker.kind === 'github' ? AZ.remote : undefined, settings })
     quiet.io.store.set(storeKey('/r/.git'), [...GATE_LINES, HOST_LINE])
-    expect(await startRun(quiet.io, quiet.spawn, null, READY)).toBe(`The tracker's place (${settings.tracker.project}) is named by the settings file, not by the remote. Approve it with /factory approve.`)
+    // A fixed sentence: the answer reaches the model, and the settings file is not approved yet.
+    const place = "The tracker's place is named by the settings file, not by the remote. Read its [tracker] line in the pane, then /factory approve."
+    expect(await startRun(quiet.io, quiet.spawn, null, READY)).toBe(place)
+    expect(await startPlan(quiet.io, quiet.spawn, READY)).toBe(place)
+    expect(await trackerCheck(quiet.io, null)).toBe(place)
     expect(quiet.io.ran.some(line => line.startsWith('az ') || line.startsWith('gh '))).toBe(false)
   }
   // Azure Boards with a remote that names no organization, and no project in the settings that does.

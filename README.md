@@ -385,7 +385,7 @@ Before a `git` call on a job's folder it runs `find <folder> -mindepth 1 -iname 
 
 **`az could not start`, `az is not logged in`, or `az has no azure-devops extension`.** Install the Azure CLI; run `az login`; run `az extension add --name azure-devops`. The plugin tells `az` not to install a missing extension by itself, and stops each call after 30 seconds.
 
-**`The tracker's place (…) is named by the settings file, not by the remote. …`** Read the `[tracker]` line in the pane, then `/factory approve`.
+**`The tracker's place is named by the settings file, not by the remote. …`** Read its `[tracker]` line in the pane, then `/factory approve`. The sentence names no place: the answer goes to the chat, and the settings file is not approved yet.
 
 **`The remote origin names no Azure DevOps project. …`** The settings say `azure-boards`, and the remote is not on `dev.azure.com`. Set `tracker.project` to `<organization>/<project>`.
 
