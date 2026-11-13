@@ -360,8 +360,17 @@ function trackerWorld(opts: { tasks?: unknown[]; approved?: boolean; tracker?: u
 test('/factory tracker says what it understood and holds no text of the tracker', async () => {
   const io = trackerWorld()
   const answer = await trackerCheck(io, null)
-  expect(answer).toBe('Tracker: mcp\nQueue: 4 items (PROJ-12, PROJ-14, PROJ-15). Claimed: 1.\nMe: read.')
+  expect(answer).toBe(
+    [
+      'Tracker: mcp',
+      'Queue: 4 items (PROJ-12, PROJ-14, PROJ-15). Claimed: 1.',
+      'Me: read.',
+      'PROJ-12: title found (15 characters) · text found (18 characters) · author found · state found · address found',
+      'PROJ-12: carries the mark: yes · 4 comments (2 of the author or the runner)',
+    ].join('\n'),
+  )
   const one = await trackerCheck(io, 'PROJ-12')
+  expect(one).toBe(answer)
   expect(one.split('\n').slice(3)).toEqual([
     'PROJ-12: title found (15 characters) · text found (18 characters) · author found · state found · address found',
     'PROJ-12: carries the mark: yes · 4 comments (2 of the author or the runner)',
@@ -379,13 +388,23 @@ test('/factory tracker on a GitHub world says kind github', async () => {
     const line = argv.join(' ')
     if (line.startsWith('gh issue list')) return { exitCode: 0, stdout: JSON.stringify([{ number: 7, title: 'Zebrafish title', state: 'OPEN', labels: [] }]) }
     if (line.startsWith('gh api user')) return { exitCode: 0, stdout: 'runner\n' }
+    if (line.startsWith('gh issue view') && line.includes('--json labels')) return { exitCode: 0, stdout: JSON.stringify({ labels: [{ name: 'factory' }] }) }
+    if (line.startsWith('gh issue view')) {
+      const comments = [{ author: { login: 'Wombat' }, body: 'Narwhal one' }, { author: { login: 'x' }, body: 'Narwhal two' }]
+
+      return { exitCode: 0, stdout: JSON.stringify({ number: 7, title: 'Zebrafish title', state: 'OPEN', body: 'Quokka body', author: { login: 'Wombat' }, comments, url: 'https://github.com/a/b/issues/7' }) }
+    }
 
     return { exitCode: 0, stdout: '[]' }
   }
   const answer = await trackerCheck(io, null)
   expect(answer.split('\n')[0]).toBe('Tracker: github')
-  expect(answer.includes('Zebrafish')).toBe(false)
   expect(answer.includes('Queue: ')).toBe(true)
+  const given = await trackerCheck(io, '7')
+  for (const text of [answer, given]) {
+    expect(text.split('\n').slice(3).map(line => line.slice(0, 36))).toEqual(['7: title found (15 characters) · tex', '7: carries the mark: yes · 2 comment'])
+    for (const word of ['Zebrafish', 'Quokka', 'Wombat', 'Narwhal']) expect([word, text.includes(word)]).toEqual([word, false])
+  }
 })
 
 test('/factory tracker refusals and failures', async () => {
@@ -408,6 +427,13 @@ test('/factory tracker refusals and failures', async () => {
   const failed = (await trackerCheck(down, null)).split('\n')
   expect(failed[1]?.startsWith('Queue: not read (')).toBe(true)
   expect(failed[2]).toBe('Me: not known.')
+  // A failed scan whose text is long, with newlines and a control character: one line, cut, no tail.
+  const long = trackerWorld()
+  const bad = `${'a\n'.repeat(125)}\u0007${'b'.repeat(10)} Tailword ${'c'.repeat(240)}`
+  long.mcpAnswer = (_, tool) => (tool === 'find_tasks' ? { content: [{ type: 'text', text: bad }], isError: true } : undefined)
+  const line = ((await trackerCheck(long, null)).split('\n')[1]) ?? ''
+  expect([line.startsWith('Queue: not read ('), line.includes('Tailword'), line.length <= 'Queue: not read ()'.length + 200]).toEqual([true, false, true])
+  expect(line.includes('\u0007')).toBe(false)
   // An item that cannot be read.
   expect((await trackerCheck(trackerWorld(), 'PROJ-404')).split('\n').at(-1)).toBe('PROJ-404: not read.')
   // A queue id that fails the id rule is counted, not shown.

@@ -280,16 +280,19 @@ export async function trackerCheck(io: Io, id: string | null): Promise<string> {
   if (id !== null && !isItemId(id)) return 'Not an id.'
   const lines: string[] = [`Tracker: ${tracker.kind}`]
   const listed = await attempt(() => tracker.scan())
+  let target = id
   if (listed === null) lines.push('Queue: not read (the tracker could not be read).')
   else if (listed.items === null) lines.push(`Queue: not read (${clean(scanFailure(tracker.kind, listed)).slice(0, 200)})`)
   else if (listed.items.length === 0 && id === null) lines.push('Queue: 0 items. Nothing to read. Is the mark right?')
   else {
     const shown = listed.items.slice(0, 3).map(item => item.id).filter(isItemId)
+    target ??= listed.items.map(item => item.id).find(isItemId) ?? null
     lines.push(`Queue: ${listed.items.length} item${listed.items.length === 1 ? '' : 's'}${shown.length > 0 ? ` (${shown.join(', ')})` : ''}. Claimed: ${listed.claimed.length}.`)
   }
   const me = await attempt(() => tracker.me())
   lines.push(me === null || me === '' ? 'Me: not known.' : 'Me: read.')
-  if (id !== null) {
+  if (target !== null) {
+    const id = target
     const item = await attempt(() => tracker.read(id, true))
     if (item === null) lines.push(`${id}: not read.`)
     else {
