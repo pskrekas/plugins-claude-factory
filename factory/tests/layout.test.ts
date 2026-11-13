@@ -72,6 +72,16 @@ test('a settings error is one line', async () => {
   expect(text).toContain('settings: not valid JSON')
 })
 
+// The person learns from this row why the settings were refused: it is wrapped, never cut.
+test('a long settings error is wrapped, every character of it', async () => {
+  const error = 'tracker: comments: needs a field name of 1 to 6 parts of letters, digits and _, joined by dots ' + 'z'.repeat(40) + ' END'
+  for (const columns of [40, 80]) {
+    const rows = rowsOf({ ...FULL, progress: [], settingsError: error }, columns, 0).filter(r => r.tone === 'bad').map(r => r.left)
+    expect(rows.join('')).toBe(`settings: ${error}`)
+    expect(rows.every(row => !row.includes('…') && row.length <= columns)).toBe(true)
+  }
+})
+
 test('no row is wider than the pane, at 24 to 120 columns', async () => {
   for (let columns = 24; columns <= 120; columns++) {
     for (const r of rowsOf(FULL, columns, 5000)) {

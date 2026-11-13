@@ -33,7 +33,10 @@ export function rowsOf(model: PanelModel, columns: number, now: number): Row[] {
     }
     add('Run /factory approve to allow these commands.')
   }
-  if (model.settingsError) add(`settings: ${model.settingsError}`, '', 'bad')
+  // Why the settings were refused: wrapped, never cut, as the commands above.
+  if (model.settingsError) {
+    for (const piece of wrap(clean(`settings: ${model.settingsError}`), columns)) add(piece, '', 'bad')
+  }
 
   const task = model.task
   if (task) {

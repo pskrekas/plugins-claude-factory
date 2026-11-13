@@ -52,9 +52,9 @@ test('/factory run and /factory plan are a person\'s own, and need a tracker', a
   await $.session.start(START)
   expect((await $.command.run(cmd('run', 'sdk'))).text).toBe('Only a person can do this. Type the command at the prompt.')
   expect((await $.command.run(cmd('run 12', 'plugin'))).text).toBe('Only a person can do this. Type the command at the prompt.')
-  expect((await $.command.run(cmd('run'))).text).toBe('/factory run needs a tracker in the settings (github or azure-boards).')
+  expect((await $.command.run(cmd('run'))).text).toBe('/factory run needs a tracker in the settings (github, azure-boards or mcp).')
   expect((await $.command.run(cmd('plan', 'sdk'))).text).toBe('Only a person can do this. Type the command at the prompt.')
-  expect((await $.command.run(cmd('plan'))).text).toBe('/factory plan needs a tracker in the settings (github or azure-boards).')
+  expect((await $.command.run(cmd('plan'))).text).toBe('/factory plan needs a tracker in the settings (github, azure-boards or mcp).')
 })
 
 test('stop sets the flag; only a person can', async ($, on) => {
@@ -411,6 +411,9 @@ test('/factory tracker refusals and failures', async () => {
   // No tracker.
   const none = fakeIo({ files: { '/r/.git/HEAD': 'x', '/r/.claude/factory.json': '{}' }, remote: 'git@github.com:a/b.git', now: 1_000_000 })
   expect(await trackerCheck(none, null)).toBe('No tracker in the settings.')
+  // A tracker the settings name and the parser refused: a fixed sentence, no text of the file.
+  const refused = fakeIo({ files: { '/r/.git/HEAD': 'x', '/r/.claude/factory.json': JSON.stringify({ tracker: { kind: 'mcp', server: 'Zebrafish', list: { tool: 'Quokka' } } }) }, remote: 'git@github.com:a/b.git', now: 1_000_000 })
+  expect(await trackerCheck(refused, null)).toBe("The tracker in the settings file was refused. The pane's settings line says why.")
   // Not approved: the note says so, nothing is called.
   const quiet = trackerWorld({ approved: false })
   expect(await trackerCheck(quiet, null)).toBe("The MCP tracker's calls are not approved. Read them in the pane, then /factory approve.")

@@ -227,3 +227,15 @@ test('the three comment keys of read go together', async () => {
   for (const k of ['comments', 'commentAuthor', 'commentText']) delete none[k]
   expect('ok' in parseMcpTracker(with_({ read: none }))).toBe(true)
 })
+
+// A key of the settings file echoed in a reason is cut and cleaned: the reason is shown in the pane.
+test('a key named in a reason is cut to 40 characters and holds no control character', async () => {
+  const key = '\u001b[2J' + 'k'.repeat(100)
+  for (const v of [{ ...GOOD, [key]: 1 }, with_({ list: { ...GOOD.list, [key]: 1 } }), with_({ states: { [key]: [step('x')] } })]) {
+    const no = reason(v)
+    expect(no.includes('k'.repeat(41))).toBe(false)
+    expect(no.includes('k'.repeat(37))).toBe(true)
+    expect(CONTROL_CHAR.test(no)).toBe(false)
+    expect(no.includes('\u001b')).toBe(false)
+  }
+})

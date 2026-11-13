@@ -184,6 +184,7 @@ PROJ-12: carries the mark: yes · 4 comments (2 of the author or the runner)
 - `The MCP server <name> did not answer in time.` Each call has a time limit.
 - `<tool>: <reason>`: the server refused the call. The reason is the server's own first line.
 - `<tool>: not sent (a value broke a rule)`: an id or an address did not pass its rule, so nothing was sent.
+- `The tracker in the settings file was refused. The pane's settings line says why.` The settings break a rule of this page. `/factory run`, `/factory plan` and `/factory tracker` say only this; the pane's `settings:` line names the key and the rule.
 - **At the start of a session** the servers are not connected yet, and the plugin cannot call one. The panel's queue appears at its first refresh after that (the pane reads again once a minute, and `/factory` reads at once).
 
 ## What it cannot do

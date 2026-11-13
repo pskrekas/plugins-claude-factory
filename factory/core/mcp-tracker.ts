@@ -78,6 +78,9 @@ const STEP_KEYS = ['tool', 'args', 'optional']
 const LABELS_KEYS = ['tool', 'args', 'names']
 
 const no = (path: string, why: string): { no: string } => ({ no: `${path}: ${why}` })
+// A key of the settings file, as a reason names it: cleaned and cut, for the pane shows the reason.
+const MAX_KEY = 40
+const keyText = (key: string): string => clean(key).slice(0, MAX_KEY)
 const isErr = <T>(r: Parsed<T>): r is { no: string } => 'no' in r
 
 // Why `name` is no server, or null.
@@ -118,7 +121,7 @@ function reqField(obj: Record<string, unknown>, key: string, path: string): Pars
 
 function unknownKey(obj: Record<string, unknown>, allowed: readonly string[], path: string): { no: string } | null {
   for (const key of Object.keys(obj)) {
-    if (!allowed.includes(key)) return no(path === '' ? key : `${path}.${key}`, 'is not a key here')
+    if (!allowed.includes(key)) return no(path === '' ? keyText(key) : `${path}.${keyText(key)}`, 'is not a key here')
   }
 
   return null
@@ -293,7 +296,7 @@ function statesOf(v: unknown, hasLabels: boolean): Parsed<StatesSpec> {
   }
   const steps: Partial<Record<TrackerState, Step[]>> = {}
   for (const [state, raw] of Object.entries(v)) {
-    if (!STATES.includes(state as TrackerState)) return no(`states.${state}`, 'is not one of the four states')
+    if (!STATES.includes(state as TrackerState)) return no(`states.${keyText(state)}`, 'is not one of the four states')
     const list = stepsOf(state, raw)
     if (isErr(list)) return list
     steps[state as TrackerState] = list.ok

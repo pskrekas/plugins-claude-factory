@@ -276,6 +276,12 @@ The mark has its own line, `[tracker] mcp tasks · mark: factory`, because the m
   choice of shape.)
 - A tool that answers an error: the first line of its text, as a reason
   (`<tool>: <reason>`), where a `gh` failure text goes today.
+- Settings that the parser refused: the pane's `settings:` line gives the reason,
+  wrapped and never cut; a key of the file that a reason names is cleaned and cut
+  to 40 characters. When the reason is the tracker's, `/factory run`,
+  `/factory plan` and `/factory tracker` answer only the fixed sentence `The
+  tracker in the settings file was refused. The pane's settings line says why.`:
+  the reason is text of a settings file, and a command's answer reaches the model.
 
 ## 7. The parts
 

@@ -8,6 +8,9 @@ import { adaptersOf } from './adapters'
 import { loadSettings } from './readers/settings'
 
 const GH_TIMEOUT_MS = 30_000
+// A tracker that the settings name and the parser refused. A fixed sentence: the
+// answer of a command reaches the model, and the reason is text of the settings file.
+export const TRACKER_REFUSED = "The tracker in the settings file was refused. The pane's settings line says why."
 
 export type Ctx = {
   root: string
@@ -28,7 +31,7 @@ export type Ctx = {
 }
 
 export async function context(io: Io): Promise<Ctx> {
-  const { settings, root } = await loadSettings(io)
+  const { settings, root, error } = await loadSettings(io)
   const { run, tracker, host, why } = await adaptersOf(io, root, settings, GH_TIMEOUT_MS)
 
   return {
@@ -41,6 +44,6 @@ export async function context(io: Io): Promise<Ctx> {
     tracker,
     host,
     mark: tracker !== null && settings.tracker ? settings.tracker.mark : null,
-    trackerNote: why,
+    trackerNote: why ?? (tracker === null && error !== null && error.startsWith('tracker:') ? TRACKER_REFUSED : null),
   }
 }

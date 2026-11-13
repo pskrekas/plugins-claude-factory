@@ -44,7 +44,7 @@ async function clearPlan(io: Io, root: string, now: number): Promise<void> {
 // Intake said of each item.
 export async function startPlan(io: Io, spawn: Spawn, ready: { hasAgentTypes: boolean }): Promise<string> {
   const ctx = await context(io)
-  if (ctx.tracker === null || ctx.mark === null) return ctx.trackerNote ?? '/factory plan needs a tracker in the settings (github or azure-boards).'
+  if (ctx.tracker === null || ctx.mark === null) return ctx.trackerNote ?? '/factory plan needs a tracker in the settings (github, azure-boards or mcp).'
   if (!ready.hasAgentTypes) return 'The agent types of the line are not registered. Start a new session.'
   // A run that is going is left alone. A run file with no live lock is a run that died.
   const lock = await lockInfo(io, ctx.root, ctx.now)
@@ -67,7 +67,7 @@ export async function startPlan(io: Io, spawn: Spawn, ready: { hasAgentTypes: bo
 export async function startRun(io: Io, spawn: Spawn, only: string | null, ready: { hasAgentTypes: boolean }): Promise<string> {
   if (only !== null && !ITEM_ID.test(only)) return 'Not an item id: /factory run [id]'
   const ctx = await context(io)
-  if (ctx.tracker === null || ctx.mark === null) return ctx.trackerNote ?? '/factory run needs a tracker in the settings (github or azure-boards).'
+  if (ctx.tracker === null || ctx.mark === null) return ctx.trackerNote ?? '/factory run needs a tracker in the settings (github, azure-boards or mcp).'
   // A job ends as a pull request: the remote must be one the plugin can open one on.
   if (ctx.host === null) return '/factory run needs a pull request host: a github.com or a dev.azure.com remote.'
   if (!ready.hasAgentTypes) return 'The agent types of the line are not registered. Start a new session.'

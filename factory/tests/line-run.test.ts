@@ -619,7 +619,7 @@ const READY = { hasAgentTypes: true }
 
 test('/factory run: what it needs before it starts', async () => {
   const noTracker = lineWorld({ settings: { tracker: undefined } })
-  expect(await startRun(noTracker.io, noTracker.spawn, null, READY)).toBe('/factory run needs a tracker in the settings (github or azure-boards).')
+  expect(await startRun(noTracker.io, noTracker.spawn, null, READY)).toBe('/factory run needs a tracker in the settings (github, azure-boards or mcp).')
   const noGate = lineWorld()
   noGate.io.store.set(storeKey('/r/.git'), [])
   expect(await startRun(noGate.io, noGate.spawn, null, READY)).toBe('No gate, no factory: gate commands are not approved. Approve them with /factory approve.')
@@ -798,7 +798,7 @@ test('a risk above the limit is told in the plan; a second plan replaces the fir
 
 test('/factory plan needs a tracker and the agent types', async () => {
   const noTracker = lineWorld({ settings: { tracker: undefined } })
-  expect(await startPlan(noTracker.io, noTracker.spawn, READY)).toBe('/factory plan needs a tracker in the settings (github or azure-boards).')
+  expect(await startPlan(noTracker.io, noTracker.spawn, READY)).toBe('/factory plan needs a tracker in the settings (github, azure-boards or mcp).')
   const noTypes = lineWorld()
   expect(await startPlan(noTypes.io, noTypes.spawn, { hasAgentTypes: false })).toBe('The agent types of the line are not registered. Start a new session.')
 })
@@ -1163,6 +1163,15 @@ test('with an MCP tracker one item goes from the queue to a ready pull request',
   await watch(w.io)
   expect((await jobOf(w, 'PROJ-12'))?.stage).toBe('done')
   expect(mcpOf(w).at(-1)).toBe('tasks move_task {"task_id":"PROJ-12","to":"closed"}')
+})
+
+test('a tracker that the settings name and the parser refused: run and plan say so, with no text of the file', async () => {
+  const refused = "The tracker in the settings file was refused. The pane's settings line says why."
+  const w = lineWorld({ settings: { tracker: { kind: 'mcp', server: 'Zebrafish', list: { tool: 'Quokka' } } } })
+  expect(await startRun(w.io, w.spawn, null, READY)).toBe(refused)
+  expect(await startPlan(w.io, w.spawn, READY)).toBe(refused)
+  expect(await trackerCheck(w.io, 'PROJ-12')).toBe(refused)
+  expect([w.started, await readRun(w.io, '/r'), w.io.mcpCalls]).toEqual([[], null, []])
 })
 
 test('an id of 40 characters goes through the whole line, the same in every call', async () => {
