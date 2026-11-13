@@ -31,7 +31,7 @@ export function rowsOf(model: PanelModel, columns: number, now: number): Row[] {
     for (const command of model.pendingCommands) {
       for (const piece of wrap(clean(command), columns)) add(piece, '', 'dim')
     }
-    add('Run /factory approve to allow these commands.')
+    for (const piece of wrap('Run /factory approve to allow these commands.', columns)) add(piece)
   }
   // Why the settings were refused: wrapped, never cut, as the commands above.
   if (model.settingsError) {
