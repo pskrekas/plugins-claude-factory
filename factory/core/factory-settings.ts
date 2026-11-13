@@ -22,7 +22,8 @@ export type FactorySettings = {
   protectedPaths: string[]
   forbiddenCommands: string[][]
   forbiddenCommentWords: string[]
-  models: Record<Role, Tier>
+  // For each role: a tier (`strongest`, `strong`, `fast`), or the model itself (an alias, a full id, `inherit`).
+  models: Record<Role, string>
   // The price table for the cost estimate, by model id. Empty: cost unknown.
   prices: Record<string, Price>
   // How long one agent may work at a station before the station counts as failed.
@@ -53,6 +54,11 @@ export const FACTORY_DEFAULTS: FactorySettings = {
 export const RISKS: readonly Risk[] = ['low', 'medium', 'high']
 export const ROLES: readonly Role[] = ['intake', 'spec', 'builder', 'reviewer', 'approver']
 const TIERS: readonly string[] = ['strongest', 'strong', 'fast']
+// A role's model by name: an alias the engine knows, `inherit` (the session's
+// own model), or a full model id. Anything else is a mistyped tier, and is refused.
+const MODEL_ALIASES: readonly string[] = ['opus', 'sonnet', 'haiku', 'inherit']
+const MODEL_ID = /^claude-[a-z0-9][a-z0-9.-]{0,47}$/
+const isModelChoice = (v: string): boolean => TIERS.includes(v) || MODEL_ALIASES.includes(v) || MODEL_ID.test(v)
 const REVIEWERS: readonly string[] = ['code', 'ux', 'ui', 'security']
 const ROUTES = ['low', 'medium', 'high', 'ui', 'security'] as const
 const MAX_LIST = 50
@@ -213,8 +219,8 @@ export function parseFactory(v: unknown): { ok: FactorySettings } | Refused {
     for (const role of ROLES) {
       const tier = v.models[role]
       if (tier === undefined) continue
-      if (!isText(tier) || !TIERS.includes(tier)) return no(WRONG)
-      f.models[role] = tier as Tier
+      if (!isText(tier) || !isModelChoice(tier)) return no(WRONG)
+      f.models[role] = tier
     }
   }
   if (v.reviewers !== undefined) {

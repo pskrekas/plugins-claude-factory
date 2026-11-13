@@ -40,6 +40,10 @@ test('given keys replace their defaults, the rest stay', async () => {
   expect(settings.factory.costLimitUsd).toEqual({ job: 5, day: 50 })
   expect(settings.factory.models.reviewer).toBe('fast')
   expect(settings.factory.models.intake).toBe('strongest')
+  // A role takes a tier, a model alias, a full model id, or `inherit` (the session's model).
+  const named = parseSettings('{"factory": {"models": {"intake": "claude-example-1-2", "builder": "opus", "spec": "inherit", "approver": "fast"}}}')
+  expect(named.error).toBe(null)
+  expect(named.settings.factory.models).toEqual({ intake: 'claude-example-1-2', spec: 'inherit', builder: 'opus', reviewer: 'strong', approver: 'fast' })
   expect(settings.factory.maxRounds).toBe(3)
 })
 
@@ -54,6 +58,11 @@ test('a value out of range refuses the whole factory key', async () => {
     { timeLimitMin: { day: -3 } },
     { minFreeDiskGb: -1 },
     { models: { builder: 'best' } },
+    { models: { builder: 'Opus' } },
+    { models: { builder: 'claude-' } },
+    { models: { builder: 'claude-x y' } },
+    { models: { builder: 'claude-' + 'a'.repeat(60) } },
+    { models: { builder: 7 } },
     5,
     [],
   ]

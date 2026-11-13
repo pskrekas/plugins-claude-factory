@@ -105,6 +105,9 @@ export type FactoryView = {
   // Items the tracker says are in progress that have no job here; at most 10.
   // They count in `waiting` and at the last station.
   claimed: string[]
+  // The model of each station's agent (`opus`, `sonnet`, `haiku`). The gate has none: it is the plugin's code.
+  // Not there in a view that an older version stored.
+  models?: { intake: string; spec: string; builder: string; reviewer: string; approver: string }
   // The rows of the last dry run (`/factory plan`): what Intake said of each item; at most 10.
   plan: {
     itemId: string

@@ -61,6 +61,7 @@ The status line shows the task id, the first progress percent, the checks and a 
 | `/factory init` | looks at the repo and writes a first `.claude/factory.json`; it never overwrites one |
 | `/factory where` | says where the factory keeps its state for this repository |
 | `/factory tracker [id]` | reads the tracker and says what the plugin understood: the size of the queue and, for the first item of the queue (or the item you name), which fields were found. It writes nothing, and its answer holds no text of an item (a failed call's own first line, cut, is shown) |
+| `/factory files [id]` | says where the files of a job are, one path on a line: the item, Intake's note, the spec, and each round's build note, checks, reviews, decision and change. It prints paths, never a file's text. With no id it names the jobs on this machine |
 | `/factory approve` | opens the pane and allows the commands it shows (see below). Only your own Enter at the prompt counts |
 | `/factory plan` | the dry run: Intake judges each item of the queue (ten at most). It builds nothing, opens no pull request and writes nothing to the tracker. The pane shows what Intake said |
 | `/factory run [id]` | runs the line: one pass over the queue as it is now (or over one item that carries the mark), and the jobs that are already there. It ends when every job is ready, waits for you, or is refused, or when a limit of the day or a full disk holds it |
@@ -161,6 +162,7 @@ The **FACTORY** section of the pane shows:
 
 ```
  Queue -> Intake -> Spec -> Build -> Gate -> Review -> Approve -> You
+          opus      sonnet  sonnet   code    sonnet    sonnet
    4        0        0        1       0        1          0        2
                               ^       │        │
                               ├─fail──┘        │
@@ -168,12 +170,16 @@ The **FACTORY** section of the pane shows:
 ```
 
 - the stations, with the number of jobs at each one, and the two loops back to Build (lit while a job is on them);
+- under each station's name, the model of its agent (see "The models"). The gate has no model: it is the plugin's own code. In a narrow pane this is one row, `opus I · sonnet S B R A`;
+- the job rows follow a job as it moves: they are read again from the job files after every end of a turn and every 15 seconds, without a call to the tracker. The rest of the pane is read once a minute;
 - one row per running job: a cell for each station (`done`, `now`, `fail`, `changes`), then what runs now (`builder runs · 4 m`), its round, who sent it back, its time and its cost;
 - **NEEDS YOU**: the jobs that wait for a person (a question, or a pull request to merge), and the items the tracker says are in progress that have no job on this machine (a lost state folder, or another machine runs them);
 - **PLAN**: after `/factory plan`, what Intake said of each item, and how many would run;
 - the size of the queue (open GitHub issues that carry the mark) and the totals of the day.
 
 The first row says who runs the line: `2 of 2 slots busy` (this session), `another session runs the line`, or `no session runs the line`; and `stopped` after `/factory stop`.
+
+**To read what an agent wrote**, run `/factory files <id>` and open a path it prints. `files/item.md` is the item as the agents see it, `files/intake.md` is Intake's decision, `files/spec.md` is the spec, and each `files/round-<n>/` folder holds that round's `build.md`, `checks.md`, `review-<kind>.md`, `decision.md`, `merge-checks.md` and `diff.patch`. The command prints paths only, because a command's answer goes to the model of your session, and these files are text that an agent wrote from the item.
 
 A job is a file, `job.json`, in a folder of its own. The plugin keeps these under your home folder, never in the repo: `~/.local/state/claude-factory/<repo>/jobs/` (or under `$XDG_STATE_HOME`). `/factory where` prints the folder for the repo you are in. The folder is named after the path of the repository, so a repo that you move to another place starts with no jobs. A `.factory/` folder that a repo brings along is never read, so a repo cannot show you jobs of its own.
 
@@ -185,6 +191,25 @@ To see the section with no run, copy the three sample jobs into the state folder
 mkdir -p "<the folder /factory where printed>/jobs"
 cp -R docs/examples/factory-jobs/* "<the folder /factory where printed>/jobs/"
 ```
+
+### The models
+
+Each station's agent has a model. The defaults: Intake has the strongest one, because it decides whether an item is safe to take; Spec, Build, Review and Approve have the strong one.
+
+| Role | Default | Model |
+| --- | --- | --- |
+| `intake` | `strongest` | `opus` |
+| `spec`, `builder`, `reviewer`, `approver` | `strong` | `sonnet` |
+
+`factory.models` in the settings file changes a role. Give a tier (`strongest` is `opus`, `strong` is `sonnet`, `fast` is `haiku`), or name the model: `opus`, `sonnet`, `haiku`, a full model id that starts with `claude-`, or `inherit` (the model of your session). A role you leave out keeps its default.
+
+```json
+"factory": { "models": { "builder": "opus", "reviewer": "fast" } }
+```
+
+- The agents get their models when a session starts. After a change, start a new session. The pane shows the models that this session's agents use.
+- A model that Claude Code does not know cannot be registered: `/factory run` then says that the agent types are not registered.
+- A stronger model costs more. Put its price in `factory.prices` under its model id, or the pane says `cost unknown`.
 
 ### The gate
 
@@ -219,7 +244,7 @@ Only for a repo whose settings say `"tracker": { "kind": "azure-boards" }`, or w
 - **Pull requests.** It opens a draft pull request from the job's branch `factory/<job>`, links it to the work item (Azure DevOps may then offer to close the work item when you complete the pull request), marks it ready (`--draft false`), comments on it, or abandons it for a rejected item. **It never completes one**: no `az` call of the plugin holds `--status completed`, `--auto-complete` or `--bypass-policy`. A pull request that you complete reads as merged, and the job is done.
 - **What an agent reads.** A work item's description and comments are HTML; an agent gets them as plain text (no markup, no script), with a bug's steps to reproduce and a story's acceptance criteria, and only the comments of the item's author and yours (the newest fifty are read). An item whose comments cannot be read is not started.
 - **Mixes.** GitHub Issues with the code on Azure Repos: `"tracker": { "kind": "github", "project": "<owner>/<name>" }`. Azure Boards with the code on GitHub: `"tracker": { "kind": "azure-boards", "project": "<organization>/<project>" }`; the pull request is then a comment on the work item, not a link. Such a place comes from the settings file, not from the remote, and a settings file arrives with a clone: the pane shows it as a line `[tracker] azure-boards <organization>/<project>`, and it is used only after `/factory approve`. With an Azure DevOps remote the organization is always the remote's.
-- **Not checked on a real organization yet.** The `az` calls are built from the tool's help and its code (`docs/notes/az-check.md`). The hand check is in `docs/notes/r1-check.md`.
+- **Run for real once, in part.** On 2026-11-13 the line ran on a real Azure DevOps repository: the push of a job's branch, the draft pull request, marking it ready, and the pane's read of a branch's pull request all worked (`docs/notes/r1-check.md`, "The first real runs of the line"). Azure Boards as a tracker (the tags, the discussion), a pull request thread and the abandon of a rejected item were not run: for those the `az` calls are still built from the tool's help and its code (`docs/notes/az-check.md`).
 
 ### Other trackers (through an MCP server)
 
@@ -264,7 +289,7 @@ One file per repo, `.claude/factory.json`. Every key is optional. With no file t
 | `checks` | `run` with `want`: ok when the output equals `want`. `run` alone: ok on exit 0. `minFreeGb`: ok when the disk has that much free. At most 20. |
 | `ports` | a name and a port on this machine. At most 20. |
 | `owed` | a markdown file; its open checkboxes are counted. |
-| `factory` | how the line runs: `slots` (2), `maxRounds` (3), `maxRisk` (`low`), `costLimitUsd` and `timeLimitMin` (`{ job, day }`), `minFreeDiskGb` (15), `stationTimeoutMin` (30), `prices`, `protectedPaths`, `forbiddenCommands`, `forbiddenCommentWords`, `models` (a tier for each role: `strongest`, `strong`, `fast`), `reviewers`. One refused value refuses the whole `factory` key. |
+| `factory` | how the line runs: `slots` (2), `maxRounds` (3), `maxRisk` (`low`), `costLimitUsd` and `timeLimitMin` (`{ job, day }`), `minFreeDiskGb` (15), `stationTimeoutMin` (30), `prices`, `protectedPaths`, `forbiddenCommands`, `forbiddenCommentWords`, `models` (for each role `intake`, `spec`, `builder`, `reviewer`, `approver`: a tier, `strongest`, `strong` or `fast`, or the model itself, `opus`, `sonnet`, `haiku`, a full model id that starts with `claude-`, or `inherit` for the session's own model; see "The models"), `reviewers`. One refused value refuses the whole `factory` key. |
 | `factory.container` | where the builder's and the gate's commands run: `{ "image", "network": "on" or "none", "memory": "4g", "cpus": 2 }`, or `false` for this machine. Read from the base branch. See "The container". The factory will not run without it. |
 
 ## What it can reach

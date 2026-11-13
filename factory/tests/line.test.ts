@@ -40,34 +40,48 @@ test('the wide line: stations, counts under them, the loops', async () => {
   const rows = lineRows(VIEW, 80)
   expect(rows.map(textOf)).toEqual([
     ' Queue -> Intake -> Spec -> Build -> Gate -> Review -> Approve -> You',
+    '          opus      sonnet  sonnet   code    haiku     sonnet',
     '   4        0        0        1       0        1          0        2',
     '                              ^       │        │',
     '                              ├─fail──┘        │',
     '                              └─── changes ────┘',
   ])
   expect(rows[0]?.tone).toBe('head')
-  expect(rows[1]?.cells?.at(-1)).toEqual({ text: '       2', tone: 'bad' })
+  // The model of each station, under its name: the gate is the plugin's code, no model.
+  expect(rows[1]?.tone).toBe('dim')
+  expect(rows[2]?.cells?.at(-1)).toEqual({ text: '       2', tone: 'bad' })
   // PROJ-13 is back at Build from the gate: the gate's loop is lit, the reviewers' is not.
-  expect(rows.slice(2).map(row => row.tone)).toEqual(['warn', 'warn', 'dim'])
+  expect(rows.slice(3).map(row => row.tone)).toEqual(['warn', 'warn', 'dim'])
+  // A full model id is shown without its `claude-` start, cut so that it stays under its station.
+  const long = { ...VIEW, models: { ...VIEW.models!, intake: 'claude-example-1-2', reviewer: 'inherit' } }
+  expect(textOf(lineRows(long, 80)[1]!)).toBe('          example-  sonnet  sonnet   code    inherit   sonnet')
+  expect(textOf(lineRows(long, 40)[1]!)).toBe('example-1-2 I · sonnet S B A · inherit R')
+  // A view from before this row existed (no `models`) draws the line without it.
+  const { models: _, ...old } = VIEW
+  expect(lineRows(old as typeof VIEW, 80).length).toBe(5)
 })
 
 test('the loops light up only while a job is on them', async () => {
   const calm = { ...VIEW, jobs: VIEW.jobs.map(job => ({ ...job, sentBack: null })) }
   const none = { ...EMPTY, queue: 0, counts: [0, 0, 0, 0, 0, 0, 0, 0] }
-  expect(lineRows(calm, 80).slice(2).map(row => row.tone)).toEqual(['dim', 'dim', 'dim'])
+  expect(lineRows(calm, 80).slice(3).map(row => row.tone)).toEqual(['dim', 'dim', 'dim'])
   const review = {
     ...VIEW,
     jobs: VIEW.jobs.map(job => (job.sentBack ? { ...job, sentBack: { by: 'review' as const, why: 'x' } } : job)),
   }
-  expect(lineRows(review, 80).slice(2).map(row => row.tone)).toEqual(['warn', 'warn', 'warn'])
+  expect(lineRows(review, 80).slice(3).map(row => row.tone)).toEqual(['warn', 'warn', 'warn'])
+  // `none` is a view with no models (an older stored view): its counts are the second row.
   expect(lineRows(none, 80)[1]?.cells?.at(-1)?.tone).toBe('dim')
 })
 
 test('the short line', async () => {
-  expect(lineRows(VIEW, 40).map(textOf)).toEqual(['Q4 I0 S0 B1 G0 R1 A0 You2', '↺ gate'])
-  expect(lineRows(VIEW, 40)[1]?.tone).toBe('warn')
+  // The models, in the short form: each model with the first letters of its stations.
+  expect(lineRows(VIEW, 40).map(textOf)).toEqual(['Q4 I0 S0 B1 G0 R1 A0 You2', 'opus I · sonnet S B A · haiku R', '↺ gate'])
+  expect(lineRows(VIEW, 40)[1]?.tone).toBe('dim')
+  expect(lineRows(VIEW, 40)[2]?.tone).toBe('warn')
   expect(lineRows({ ...VIEW, jobs: [], counts: [4, 0, 0, 0, 0, 0, 0, 0] }, 40).map(textOf)).toEqual([
     'Q4 I0 S0 B0 G0 R0 A0 You0',
+    'opus I · sonnet S B A · haiku R',
   ])
   expect(lineRows(VIEW, 24).map(textOf)[0]).toBe('Q4 I0 S0 B1 G0 R1 A0 Y2')
   // Too narrow for every station: the empty ones go first, then the ones at
@@ -216,7 +230,7 @@ test('with more jobs than the view holds, the counts are of all jobs', async () 
   const text = factoryRows(many, 80).map(row => (row.cells ? textOf(row) : row.left + '|' + row.right))
   expect(text[0]).toBe('FACTORY|8 of 2 slots busy')
   expect(text).toContain('NEEDS YOU (22)|')
-  expect(lineRows(many, 80)[1]?.cells?.at(-1)?.text.trim()).toBe('22')
+  expect(lineRows(many, 80)[2]?.cells?.at(-1)?.text.trim()).toBe('22')
   // Each "more" line sits under the list it cuts.
   expect(text.indexOf('+ 6 more running|')).toBe(text.indexOf('NEEDS YOU (22)|') - 1)
   expect(text.indexOf('+ 20 more wait|')).toBe(text.indexOf('PROJ-10  PR 51 is ready. You merge.|') + 1)
@@ -249,7 +263,7 @@ test('an item the tracker says is claimed, with no job here, is a row under NEED
     '31  claimed in the tracker, no job here. /factory reject 31 <reason>, or run it again.',
     '32[2J  claimed in the tracker, no job here. /factory reject 32[2J <reason>, or run it again.',
   ])
-  expect(lineRows(view, 80)[1]?.cells?.at(-1)?.text.trim()).toBe('4')
+  expect(lineRows(view, 80)[2]?.cells?.at(-1)?.text.trim()).toBe('4')
   // Only claimed items: the section still shows.
   const only = factoryRows({ ...EMPTY, claimed: ['31'], waiting: 1, counts: [0, 0, 0, 0, 0, 0, 0, 1] }, 120).map(row => row.left)
   expect(only[0]).toBe('FACTORY')

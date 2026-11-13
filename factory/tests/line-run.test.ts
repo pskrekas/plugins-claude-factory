@@ -11,9 +11,10 @@ import { stateFolderOf } from '../core/state-path'
 import type { Spawn } from '../hooks/agent-events'
 import { dropFact } from '../hooks/inbox'
 import { answerJob, rejectJob, trackerCheck } from '../hooks/commands'
-import { isStopped, lockInfo, readJobs, setStop, takeLock } from '../hooks/jobs'
+import { isStopped, lockInfo, readJobs, setStop, takeLock, writeJob } from '../hooks/jobs'
 import { advance, watch } from '../hooks/line'
-import { refresh } from '../hooks/refresh'
+import { sessionModels } from '../hooks/readers/factory'
+import { refresh, refreshJobs } from '../hooks/refresh'
 import { readRun, writeRun } from '../hooks/run'
 import { startPlan, startRun } from '../hooks/start'
 import { NO_SERVER } from '../adapters/mcp-tracker'
@@ -994,6 +995,8 @@ test('on Azure DevOps one work item goes from the queue to a ready pull request,
   // az is told not to install anything by itself: with no extension it says so at once.
   const azAt = w.io.ran.map((line, i) => (line.startsWith('az ') ? i : -1)).filter(i => i >= 0)
   expect(azAt.every(i => w.io.envs[i]?.AZURE_EXTENSION_USE_DYNAMIC_INSTALL === 'no')).toBe(true)
+  // az is told to send no usage data: on some machines az never ends while it sends it.
+  expect(azAt.every(i => w.io.envs[i]?.AZURE_CORE_COLLECT_TELEMETRY === 'no')).toBe(true)
   expect(w.io.envs[w.io.ran.findIndex(line => line.startsWith('git fetch'))]?.AZURE_EXTENSION_USE_DYNAMIC_INSTALL).toBe(undefined)
   // No file of the plugin's is left, no gh ran, and nothing completes the pull request.
   expect(Object.keys(w.io.files).filter(name => name.startsWith(`${DIR}/tmp/`))).toEqual([])
@@ -1013,6 +1016,80 @@ test('on Azure DevOps a reject abandons the pull request and tags the item', asy
   expect(await rejectJob(w.io, '12', 'Not now.')).toBe('12 is rejected. The reason is on the item.')
   expect(inOrder(azOf(w), ['az boards work-item update --id 12 --discussion=@', `az repos pr show --id 7 ${AZ_TAIL}`, `az repos pr update --id 7 --status abandoned ${AZ_TAIL}`, `az boards work-item update --id 12 --fields=System.Tags=bug; factory; factory:rejected ${AZ_TAIL}`])).toBe('ok')
   expect(w.state.azSent).toContain('The factory dropped this: Not now.')
+})
+
+test('the job rows follow the job files between two full reads, and ask no tracker', async () => {
+  const w = lineWorld({ jobs: [at('12', ['spec'])] })
+  w.state.list = ISSUES
+  // The first call makes a full read: the set of jobs is new to it.
+  await refreshJobs(w.io)
+  const asked = () => w.io.ran.filter(line => line.startsWith('gh issue list')).length
+  expect(asked()).toBe(1)
+  expect(w.io.model.factory?.jobs.map(job => job.stage)).toEqual(['spec'])
+  expect(w.io.model.factory?.queue).toBe(2)
+  // The job moves to the next station: the rows show it at once, and the tracker is not asked.
+  await writeJob(w.io, '/r', at('12', ['spec', 'build']))
+  w.io.time += 5_000
+  await refreshJobs(w.io)
+  expect(w.io.model.factory?.jobs.map(job => job.stage)).toEqual(['build'])
+  expect(w.io.model.factory?.counts[3]).toBe(1)
+  expect(w.io.model.factory?.queue).toBe(2)
+  expect(asked()).toBe(1)
+  // A job that starts (or ends) changes the queue too: that makes a full read.
+  await writeJob(w.io, '/r', at('13', ['spec']))
+  await refreshJobs(w.io)
+  expect(w.io.model.factory?.jobs.length).toBe(2)
+  expect(asked()).toBe(2)
+})
+
+test('the job rows ask the tracker once for a new set of jobs, and never in a loop', async () => {
+  const asked = (w: World) => w.io.ran.filter(line => line.startsWith('gh issue list')).length
+  // No job at all: nothing moves, so after the pane's own read nothing more is asked.
+  const empty = lineWorld()
+  await refresh(empty.io)
+  expect(asked(empty)).toBe(1)
+  await refreshJobs(empty.io)
+  await refreshJobs(empty.io)
+  expect(asked(empty)).toBe(1)
+  // A full read saw the jobs: the next look at the same set asks nothing.
+  const w = lineWorld({ jobs: [at('12', ['spec']), at('13', ['spec'])] })
+  await refresh(w.io)
+  expect(asked(w)).toBe(1)
+  await refreshJobs(w.io)
+  expect(asked(w)).toBe(1)
+  // A section that stays empty (a reader that fails) does not make a full read on every tick.
+  w.io.model = { ...w.io.model, factory: null }
+  await refreshJobs(w.io)
+  await refreshJobs(w.io)
+  expect(asked(w)).toBe(1)
+  expect(w.io.model.factory).toBe(null)
+  // A job that is gone is a new set: one full read, then none.
+  delete w.io.files[`${DIR}/jobs/${at('13', []).id}/job.json`]
+  await refreshJobs(w.io)
+  expect(asked(w)).toBe(2)
+  expect(w.io.model.factory?.jobs.map(job => job.itemId)).toEqual(['12'])
+  await refreshJobs(w.io)
+  expect(asked(w)).toBe(2)
+})
+
+test('the panel knows the model of each station, from the settings', async () => {
+  const w = lineWorld({ jobs: [at('12', ['spec'])] })
+  expect((await refresh(w.io)).factory?.models).toEqual({ intake: 'opus', spec: 'sonnet', builder: 'sonnet', reviewer: 'sonnet', approver: 'sonnet' })
+  const other = lineWorld({ jobs: [at('12', ['spec'])], settings: { factory: { models: { intake: 'strong', builder: 'fast', reviewer: 'claude-example-1-2' } } } })
+  expect((await refresh(other.io)).factory?.models).toEqual({ intake: 'sonnet', spec: 'sonnet', builder: 'haiku', reviewer: 'claude-example-1-2', approver: 'sonnet' })
+  // The agent types take their models when the session starts. The pane shows those, not what the file says since.
+  sessionModels.set(other.io, { intake: 'opus', spec: 'sonnet', builder: 'sonnet', reviewer: 'sonnet', approver: 'sonnet' })
+  expect((await refresh(other.io)).factory?.models?.builder).toBe('sonnet')
+})
+
+test('with the pane not on screen the job rows are not read', async () => {
+  const w = lineWorld({ jobs: [at('12', ['spec'])] })
+  w.io.isPaneDrawn = async () => false
+  const before = w.io.reads.length
+  await refreshJobs(w.io)
+  expect(w.io.model.factory).toBe(null)
+  expect(w.io.reads.length).toBe(before)
+  expect(w.io.ran.some(line => line.startsWith('gh '))).toBe(false)
 })
 
 test('the panel asks a GitHub repository that the settings name only when it is approved', async () => {

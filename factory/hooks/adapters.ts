@@ -18,7 +18,9 @@ import type { Io } from './io'
 import { stateDirOf } from './jobs'
 import { consentKeyOf } from './readers/repo'
 
-const AZ_ENV = { AZURE_EXTENSION_USE_DYNAMIC_INSTALL: 'no' }
+// `az` is told to send no usage data: on some machines it never ends while it sends it,
+// and then every call runs into its time limit.
+const AZ_ENV = { AZURE_EXTENSION_USE_DYNAMIC_INSTALL: 'no', AZURE_CORE_COLLECT_TELEMETRY: 'no' }
 export const NO_AZ_PLACE = 'The remote origin names no Azure DevOps project. Set tracker.project to <organization>/<project>, or use a dev.azure.com remote.'
 // No text of the settings file: the answer reaches the model, and the file is not approved yet.
 export const PLACE_NOT_APPROVED = "The tracker's place is named by the settings file, not by the remote. Read its [tracker] line in the pane, then /factory approve."

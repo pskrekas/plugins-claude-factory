@@ -12,6 +12,15 @@ import type { FactorySettings, Role, Tier } from './factory-settings'
 
 // The one place where a tier becomes a model.
 export const MODEL_OF: Record<Tier, string> = { strongest: 'opus', strong: 'sonnet', fast: 'haiku' }
+// The model of a role's choice in the settings: a tier's model, or the model the choice names.
+export const modelOf = (choice: string): string => (Object.hasOwn(MODEL_OF, choice) ? MODEL_OF[choice as Tier] : choice)
+export const modelsOf = (f: FactorySettings): Record<Role, string> => ({
+  intake: modelOf(f.models.intake),
+  spec: modelOf(f.models.spec),
+  builder: modelOf(f.models.builder),
+  reviewer: modelOf(f.models.reviewer),
+  approver: modelOf(f.models.approver),
+})
 
 // Where a job's builder runs its commands.
 export type Shell = 'container' | 'host'
@@ -54,7 +63,7 @@ export function agentSpecs(f: FactorySettings): AgentSpecOf[] {
     description: DESCRIPTIONS[role] + (role === 'builder' && shell === 'host' ? ' (commands run on this machine)' : ''),
     prompt: role === 'builder' && shell === 'host' ? HOST_BUILDER : PROMPTS[role],
     tools: [...toolsOf(role, shell)],
-    model: MODEL_OF[f.models[role]],
+    model: modelOf(f.models[role]),
     // A repo's own instruction file is text of the repo: an agent of the line
     // does not take it as instructions.
     omitClaudeMd: true,
