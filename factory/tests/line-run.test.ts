@@ -1041,6 +1041,36 @@ test('the job rows follow the job files between two full reads, and ask no track
   expect(asked()).toBe(2)
 })
 
+test('the job rows ask the tracker once for a new set of jobs, and never in a loop', async () => {
+  const asked = (w: World) => w.io.ran.filter(line => line.startsWith('gh issue list')).length
+  // No job at all: nothing moves, so after the pane's own read nothing more is asked.
+  const empty = lineWorld()
+  await refresh(empty.io)
+  expect(asked(empty)).toBe(1)
+  await refreshJobs(empty.io)
+  await refreshJobs(empty.io)
+  expect(asked(empty)).toBe(1)
+  // A full read saw the jobs: the next look at the same set asks nothing.
+  const w = lineWorld({ jobs: [at('12', ['spec']), at('13', ['spec'])] })
+  await refresh(w.io)
+  expect(asked(w)).toBe(1)
+  await refreshJobs(w.io)
+  expect(asked(w)).toBe(1)
+  // A section that stays empty (a reader that fails) does not make a full read on every tick.
+  w.io.model = { ...w.io.model, factory: null }
+  await refreshJobs(w.io)
+  await refreshJobs(w.io)
+  expect(asked(w)).toBe(1)
+  expect(w.io.model.factory).toBe(null)
+  // A job that is gone is a new set: one full read, then none.
+  delete w.io.files[`${DIR}/jobs/${at('13', []).id}/job.json`]
+  await refreshJobs(w.io)
+  expect(asked(w)).toBe(2)
+  expect(w.io.model.factory?.jobs.map(job => job.itemId)).toEqual(['12'])
+  await refreshJobs(w.io)
+  expect(asked(w)).toBe(2)
+})
+
 test('with the pane not on screen the job rows are not read', async () => {
   const w = lineWorld({ jobs: [at('12', ['spec'])] })
   w.io.isPaneDrawn = async () => false

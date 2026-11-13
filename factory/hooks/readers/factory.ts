@@ -130,20 +130,21 @@ export const factoryReader: Reader = {
         if (listed.items === null && chosen.kind === 'mcp') note ??= listed.note ?? null
       }
     }
-    return { factory: viewOf(jobs, ctx.settings.factory, queue, note, ctx.now, await lineOf(io, ctx.root, ctx.now, claimed)) }
+    return { factory: viewOf(jobs, ctx.settings.factory, queue, note, ctx.now, { ...(await lineOf(io, ctx.root, ctx.now)), claimed }) }
   },
 }
 
 // Who runs the line and whether it is stopped, from the files of this machine.
-async function lineOf(io: Io, root: string, now: number, claimed: string[]): Promise<LineInfo> {
+export async function lineOf(io: Io, root: string, now: number): Promise<Omit<LineInfo, 'claimed'>> {
   const lock = await lockInfo(io, root, now)
 
-  return { lock: lock.state, holder: lock.holder, isStopped: await isStopped(io, root), claimed }
+  return { lock: lock.state, holder: lock.holder, isStopped: await isStopped(io, root) }
 }
 
 // The FACTORY section from the job files alone: no tracker is asked. The
 // queue, the claimed items and a tracker's note stay as the last full read
-// left them (`last`).
-export async function jobsView(io: Io, root: string, f: FactorySettings, read: Jobs, last: FactoryView, now: number): Promise<FactoryView | null> {
-  return viewOf(read.jobs, f, last.queue, read.note ?? last.note, now, await lineOf(io, root, now, last.claimed))
+// left them (`last`). Pure, so that it can be applied to the model as it is
+// at the moment of the write.
+export function jobsView(read: Jobs, f: FactorySettings, last: FactoryView, line: Omit<LineInfo, 'claimed'>, now: number): FactoryView | null {
+  return viewOf(read.jobs, f, last.queue, read.note ?? last.note, now, { ...line, claimed: last.claimed })
 }
