@@ -87,27 +87,42 @@ test that was deleted and never committed. It used no live session and called no
 So it proves the parser and the adapter against the real answers, and it proves nothing
 about a live session or the approval.
 
-## Still owed by a person
+## The live run, by a person (2026-11-13)
 
-The live run of `/factory tracker` on the real tracker is open. An approval is a person's
-own act at the prompt, so a headless run cannot give it, and nobody may write the approval
-store for the person. To do:
+The owner ran it in a real session, in a scratch repository outside this one, with the
+owner's settings in `.claude/factory.json` and the plugin loaded with
+`claude --plugin-dir <this repo>/factory`. An approval is a person's own act at the
+prompt, so only a person could do this part.
 
-1. Open a scratch repository outside this one, with the owner's settings in
-   `.claude/factory.json`, and load the plugin from this branch:
-   `claude --plugin-dir <this repo>/factory`.
-2. `/factory`. Read each line of the pane, to the last one.
-3. `/factory approve`.
-4. `/factory tracker`, then `/factory tracker <id of a test item>`. The calls only read.
-5. Write the answer's lines here, with every id replaced by `PROJ-n`, and say what
-   differed from what the adapter expected. Fix what differed, with a test.
+1. `/factory`: the pane opened with `SETTINGS NOT APPROVED · 11 commands`. Each line was
+   wrapped, not cut. The pane was 10 rows high, so it showed the first 5 lines; the other
+   6 were below its edge.
+2. `/factory approve`: `Approved 11 commands.` on the first run.
+3. `/factory tracker PROJ-1` (the id of a test item; the calls only read):
 
-Answer of `/factory tracker`: (not recorded yet)
+```text
+Tracker: mcp
+Queue: 0 items. Claimed: 0.
+Me: not known.
+PROJ-1: title found (56 characters) · text found (295 characters) · author found · state found · address found
+PROJ-1: carries the mark: no · 1 comment (1 of the author or the runner)
+```
 
-Answer of `/factory tracker <id>`: (not recorded yet)
+Nothing differed from what the adapter expected:
+
+- The queue is empty because the tracker has no label with the mark's name yet.
+- "Me" is not known because these settings have no `me` (the tracker has no tool for it).
+- The test item does not carry the mark: it has another label.
+- The title, the text, the author, the state, the address and the comment were read.
+
+Not done in this run: a plain `/factory tracker` (with an empty queue it reads no item),
+and no write (`/factory run`, a comment, a state, a link).
 
 ## Not checked
 
+- Whether a person can scroll the pane to the last line of a long list of lines to
+  approve. In the live run the pane showed 5 of 11 lines, and the run did not record a
+  scroll. An approval counts the lines the pane drew, not the lines a person scrolled to.
 - A call on a claude.ai connector (no other server was called), so the two spellings of
   its name are from the types only.
 - A real tool name on a server that needs a sign-in (whether the call would start one).

@@ -254,9 +254,10 @@ repository outside this one, with a small npm project and its gate and container
 settings as in the GitHub check, and a tracker with an MCP server in which you can make
 a test item.
 
-The first part of it (`/factory`, `/factory approve`, `/factory tracker` with no
-item and with a test item's id) is the open part of the phase's proof; see "Still owed
-by a person" in `docs/notes/r3-check.md`.
+The first part of it (`/factory`, `/factory approve`, `/factory tracker` with a test
+item's id) was done by the owner on 2026-11-13; see "The live run, by a person" in
+`docs/notes/r3-check.md`. The rest (scroll the pane to the last line, a plain
+`/factory tracker`, and the writes) is open.
 
 Before:
 

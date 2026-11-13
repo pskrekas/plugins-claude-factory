@@ -24,12 +24,13 @@ where the answer's fields are. Jira and Asana are example pages (`docs/trackers/
 - On 2026-11-13 the owner's real settings were parsed by the plugin's parser, and the
   adapter was run against the recorded answers of the real tracker. It read them and
   sent the expected calls. No live session was used.
-- **The live `/factory tracker` run is owed.** An approval is a person's own act, so a
-  headless run cannot give it. Goal G4 of the design (proven on a real engine and a real
-  MCP tracker) is partly met: the engine check, the five actions by hand and the
-  recorded answers are done, and the live run is open. The steps are in `docs/notes/r3-check.md`
-  ("Still owed by a person") and `docs/notes/r1-check.md` ("An MCP tracker, by hand").
-  Until it is done, phase 4 is not proven.
+- **The live run was done by the owner on 2026-11-13**, after the merge: `/factory`,
+  `/factory approve` and `/factory tracker <id of a test item>` in a real session on the
+  real tracker (`docs/notes/r3-check.md`, "The live run, by a person"). Nothing differed
+  from what the adapter expected. Goal G4 of the design (proven on a real engine and a
+  real MCP tracker) is met for reading. No write was made in a live session: a full run
+  of the line on a real MCP tracker is still a hand check (`docs/notes/r1-check.md`,
+  "An MCP tracker, by hand").
 
 ## Decisions made while building
 
@@ -173,8 +174,8 @@ Found by the reviews and left for later. Each was true at the last review of its
 
 ## Not checked
 
-- The live `/factory tracker` run on the real tracker: the pane's lines, the approval and
-  the answer. This is the open part of G4.
+- Whether a person can scroll the pane to the last line of a long list of lines to
+  approve. In the live run the pane showed 5 of 11 lines.
 - The writes in a live session: `/factory run`, a comment, the states, the pull request
   link and `/factory reject` have been run by hand and against recorded answers only.
 - A call on a claude.ai connector (the two spellings of its name are from the types only).
